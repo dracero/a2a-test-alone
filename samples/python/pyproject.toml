@@ -38,6 +38,7 @@ members = [
     "agents/ag2",
     "extensions/timestamp",
     "extensions/traceability",
+    "agents/medical_Images",
 ]
 
 [tool.hatch.metadata]
