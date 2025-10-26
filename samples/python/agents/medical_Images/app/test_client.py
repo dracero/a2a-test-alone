@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import logging
 from pathlib import Path
@@ -8,7 +9,8 @@ import httpx
 from a2a.client import A2ACardResolver, A2AClient
 from a2a.types import (AgentCard, MessageSendParams, SendMessageRequest,
                        SendStreamingMessageRequest)
-from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
+from a2a.utils.constants import (AGENT_CARD_WELL_KNOWN_PATH,
+                                 EXTENDED_AGENT_CARD_PATH)
 
 
 def encode_image_file(image_path: str) -> tuple[str, str]:
@@ -54,22 +56,75 @@ async def main() -> None:
         )
         
         # Obtener tarjeta del agente
+        final_agent_card_to_use: AgentCard | None = None
+        
         try:
-            logger.info(f'Obteniendo tarjeta del agente desde: {base_url}{AGENT_CARD_WELL_KNOWN_PATH}')
-            agent_card = await resolver.get_agent_card()
+            logger.info(
+                f'Obteniendo tarjeta del agente desde: {base_url}{AGENT_CARD_WELL_KNOWN_PATH}'
+            )
+            _public_card = await resolver.get_agent_card()
             logger.info('✅ Tarjeta del agente obtenida exitosamente')
-            logger.info(f'Agente: {agent_card.name}')
-            logger.info(f'Descripción: {agent_card.description}')
+            logger.info(
+                _public_card.model_dump_json(indent=2, exclude_none=True)
+            )
+            final_agent_card_to_use = _public_card
+            logger.info(
+                '\n✅ Usando tarjeta pública del agente.'
+            )
+            
+            if _public_card.supports_authenticated_extended_card:
+                try:
+                    logger.info(
+                        '\nLa tarjeta pública soporta tarjeta extendida autenticada. '
+                        'Intentando obtener desde: '
+                        f'{base_url}{EXTENDED_AGENT_CARD_PATH}'
+                    )
+                    auth_headers_dict = {
+                        'Authorization': 'Bearer dummy-token-for-extended-card'
+                    }
+                    _extended_card = await resolver.get_agent_card(
+                        relative_card_path=EXTENDED_AGENT_CARD_PATH,
+                        http_kwargs={'headers': auth_headers_dict},
+                    )
+                    logger.info(
+                        'Tarjeta extendida autenticada obtenida exitosamente:'
+                    )
+                    logger.info(
+                        _extended_card.model_dump_json(
+                            indent=2, exclude_none=True
+                        )
+                    )
+                    final_agent_card_to_use = _extended_card
+                    logger.info(
+                        '\n✅ Usando tarjeta EXTENDIDA autenticada.'
+                    )
+                except Exception as e_extended:
+                    logger.warning(
+                        f'No se pudo obtener tarjeta extendida: {e_extended}. '
+                        'Usando tarjeta pública.',
+                        exc_info=True,
+                    )
+            elif _public_card:
+                logger.info(
+                    '\nLa tarjeta pública no indica soporte para tarjeta extendida. '
+                    'Usando tarjeta pública.'
+                )
+        
         except Exception as e:
-            logger.error(f'❌ Error obteniendo tarjeta del agente: {e}')
-            raise
+            logger.error(
+                f'❌ Error crítico obteniendo tarjeta pública: {e}', 
+                exc_info=True
+            )
+            raise RuntimeError(
+                'No se pudo obtener la tarjeta pública del agente. No se puede continuar.'
+            ) from e
         
         # Inicializar cliente
         client = A2AClient(
             httpx_client=httpx_client, 
-            agent_card=agent_card
+            agent_card=final_agent_card_to_use
         )
-        logger.info('✅ Cliente A2A inicializado')
+        logger.info('✅ Cliente A2A inicializado.')
         
         # --- EJEMPLO 1: Consulta solo con texto ---
         logger.info('\n' + '='*80)
@@ -79,70 +134,110 @@ async def main() -> None:
         text_only_payload: dict[str, Any] = {
             'message': {
                 'role': 'user',
-                'parts':[
+                'parts': [
                     {
-                        'type': 'text',
-                        'text': '¿Cuáles son los síntomas comunes de la gripe?'
+                        'kind': 'text',
+                        'text': '¿Cuáles son los síntomas comunes de la neumonía y cómo se diferencia de un resfriado común?'
                     }
-                ]
-            }
+                ],
+                'message_id': uuid4().hex,
+            },
         }
         
+        request = SendMessageRequest(
+            id=str(uuid4()), 
+            params=MessageSendParams(**text_only_payload)
+        )
+        
         try:
-            response = await client.send_message(text_only_payload)
-            logger.info('📩 Respuesta recibida:')
-            for part in response.message.parts:
-                if part.get('type') == 'text':
-                    logger.info(f'{part.get("text")}')
+            response = await client.send_message(request)
+            logger.info('📩 Respuesta recibida (texto):')
+            print(response.model_dump(mode='json', exclude_none=True))
         except Exception as e:
-            logger.error(f'❌ Error en consulta de texto: {e}')
+            logger.error(f'❌ Error en consulta de texto: {e}', exc_info=True)
         
         # --- EJEMPLO 2: Consulta con imagen ---
         logger.info('\n' + '='*80)
         logger.info('EJEMPLO 2: Consulta médica con imagen')
         logger.info('='*80)
         
-        # Ruta a tu imagen de ejemplo
-        image_path = 'ejemplo_sintoma.jpg'  # Cambiar por tu archivo
+        # Ruta a tu imagen de ejemplo (ajusta según tu archivo)
+        image_path = '/media/dracero/08c67654-6ed7-4725-b74e-50f29ea60cb2/pythonAI-Others/a2a-samples/samples/python/agents/medical_Images/app/imagen.png'
+        
+        if Path(image_path).exists():
+            try:
+                image_data, mime_type = encode_image_file(image_path)
+                
+                image_payload: dict[str, Any] = {
+                    'message': {
+                        'role': 'user',
+                        'parts': [
+                            {
+                                'kind': 'text',
+                                'text': 'Analiza esta imagen médica y proporciona tus hallazgos principales.'
+                            },
+                            {
+                                'kind': 'image',
+                                'data': image_data,
+                                'mime_type': mime_type
+                            }
+                        ],
+                        'message_id': uuid4().hex,
+                    },
+                }
+                
+                request = SendMessageRequest(
+                    id=str(uuid4()), 
+                    params=MessageSendParams(**image_payload)
+                )
+                
+                response = await client.send_message(request)
+                logger.info('📩 Respuesta con imagen recibida:')
+                print(response.model_dump(mode='json', exclude_none=True))
+                        
+            except Exception as e:
+                logger.error(f'❌ Error en consulta con imagen: {e}', exc_info=True)
+        else:
+            logger.warning(f'⚠️ Archivo de imagen no encontrado: {image_path}')
+            logger.info('💡 Coloca una imagen médica en el directorio con ese nombre para probar esta funcionalidad.')
+        
+        # --- EJEMPLO 3: Consulta con streaming ---
+        logger.info('\n' + '='*80)
+        logger.info('EJEMPLO 3: Consulta con streaming')
+        logger.info('='*80)
+        
+        streaming_payload: dict[str, Any] = {
+            'message': {
+                'role': 'user',
+                'parts': [
+                    {
+                        'kind': 'text',
+                        'text': '¿Cuáles son las indicaciones para solicitar una tomografía de tórax?'
+                    }
+                ],
+                'message_id': uuid4().hex,
+            },
+        }
+        
+        streaming_request = SendStreamingMessageRequest(
+            id=str(uuid4()), 
+            params=MessageSendParams(**streaming_payload)
+        )
         
         try:
-            image_data, mime_type = encode_image_file(image_path)
+            logger.info('📡 Iniciando streaming...')
+            stream_response = client.send_message_streaming(streaming_request)
             
-            image_payload: dict[str, Any] = {
-                'message': {
-                    'role': 'user',
-                    'parts': [
-                        {
-                            'type': 'text',
-                            'text': '¿Qué puedes decirme sobre esta imagen médica?'
-                        },
-                        {
-                            'type': 'image',
-                            'image': {
-                                'format': mime_type,
-                                'data': image_data
-                            }
-                        }
-                    ]
-                }
-            }
-            
-            response = await client.send_message(image_payload)
-            logger.info('📩 Respuesta con imagen recibida:')
-            for part in response.message.parts:
-                if part.get('type') == 'text':
-                    logger.info(f'{part.get("text")}')
-                    
-        except FileNotFoundError:
-            logger.warning(f'⚠️ Archivo de imagen no encontrado: {image_path}')
+            async for chunk in stream_response:
+                logger.info(f'📦 Chunk recibido:')
+                print(chunk.model_dump(mode='json', exclude_none=True))
         except Exception as e:
-            logger.error(f'❌ Error en consulta con imagen: {e}')
+            logger.error(f'❌ Error en streaming: {e}', exc_info=True)
         
         logger.info('\n' + '='*80)
-        logger.info('✅ Pruebas completadas')
+        logger.info('✅ Todas las pruebas completadas')
         logger.info('='*80)
 
 
 if __name__ == '__main__':
-    import asyncio
     asyncio.run(main())

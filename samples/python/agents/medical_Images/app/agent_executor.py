@@ -4,8 +4,8 @@ from typing import Any
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.types import (ImagePart, InternalError, InvalidParamsError, Part,
-                       TaskState, TextPart, UnsupportedOperationError)
+from a2a.types import (InternalError, InvalidParamsError, Part, TaskState,
+                       TextPart, UnsupportedOperationError)
 from a2a.utils import new_agent_text_message, new_task
 from a2a.utils.errors import ServerError
 from app.agent import MedicalAgent
@@ -35,10 +35,22 @@ class MedicalAgentExecutor(AgentExecutor):
         for part in context.message.parts:
             part_root = part.root
             
-            # Verificar si es una imagen
-            if hasattr(part_root, '__class__') and part_root.__class__.__name__ == 'ImagePart':
+            # Verificar el tipo de parte usando isinstance o el atributo kind
+            # En A2A SDK, las imágenes tienen kind='image'
+            if hasattr(part_root, 'kind') and part_root.kind == 'image':
                 try:
-                    # Extraer datos de la imagen
+                    # ImagePart tiene 'data' y 'mime_type' como atributos
+                    if hasattr(part_root, 'data') and hasattr(part_root, 'mime_type'):
+                        images.append({
+                            'data': part_root.data,
+                            'mime_type': part_root.mime_type
+                        })
+                        logger.info(f"Imagen detectada: {part_root.mime_type}")
+                except Exception as e:
+                    logger.warning(f"Error extrayendo imagen: {e}")
+            # Alternativa: verificar por el tipo de clase directamente
+            elif part_root.__class__.__name__ == 'ImagePart':
+                try:
                     if hasattr(part_root, 'data') and hasattr(part_root, 'mime_type'):
                         images.append({
                             'data': part_root.data,
@@ -48,6 +60,7 @@ class MedicalAgentExecutor(AgentExecutor):
                 except Exception as e:
                     logger.warning(f"Error extrayendo imagen: {e}")
         
+        logger.info(f"Total de imágenes extraídas: {len(images)}")
         return images
     
     def _extract_text_from_message(self, context: RequestContext) -> str:
@@ -65,12 +78,17 @@ class MedicalAgentExecutor(AgentExecutor):
         for part in context.message.parts:
             part_root = part.root
             
-            # Verificar si es texto
-            if hasattr(part_root, '__class__') and part_root.__class__.__name__ == 'TextPart':
+            # Verificar si es texto usando kind o el tipo de clase
+            if hasattr(part_root, 'kind') and part_root.kind == 'text':
+                if hasattr(part_root, 'text'):
+                    text_parts.append(part_root.text)
+            elif part_root.__class__.__name__ == 'TextPart':
                 if hasattr(part_root, 'text'):
                     text_parts.append(part_root.text)
         
-        return " ".join(text_parts).strip()
+        combined_text = " ".join(text_parts).strip()
+        logger.info(f"Texto extraído: {combined_text[:100]}...")
+        return combined_text
     
     def _validate_request(self, context: RequestContext) -> bool:
         """

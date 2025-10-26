@@ -3043,7 +3043,37 @@ wheels = [
 [[package]]
 name = "medical-images"
 version = "0.1.0"
-source = { virtual = "agents/medical_Images" }
+source = { editable = "agents/medical_Images" }
+dependencies = [
+    { name = "a2a-sdk" },
+    { name = "click" },
+    { name = "httpx" },
+    { name = "langchain" },
+    { name = "langchain-community" },
+    { name = "langchain-google-genai" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "sse-starlette" },
+    { name = "starlette" },
+    { name = "tavily-python" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "a2a-sdk", specifier = ">=0.3.2" },
+    { name = "click", specifier = ">=8.2.1" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "langchain", specifier = ">=0.3.27" },
+    { name = "langchain-community", specifier = ">=0.3.27" },
+    { name = "langchain-google-genai", specifier = ">=2.1.9" },
+    { name = "pydantic", specifier = ">=2.11.7" },
+    { name = "python-dotenv", specifier = ">=1.1.1" },
+    { name = "sse-starlette", specifier = ">=3.0.2" },
+    { name = "starlette", specifier = ">=0.47.2" },
+    { name = "tavily-python", specifier = ">=0.7.12" },
+    { name = "uvicorn", specifier = ">=0.35.0" },
+]
 
 [[package]]
 name = "mem0ai"
@@ -4866,6 +4896,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ec/fe/802052aecb21e3797b8f7902564ab6ea0d60ff8ca23952079064155d1ae1/tabulate-0.9.0.tar.gz", hash = "sha256:0095b12bf5966de529c0feb1fa08671671b3368eec77d7ef7ab114be2c068b3c", size = 81090, upload-time = "2022-10-06T17:21:48.54Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/40/44/4a5f08c96eb108af5cb50b41f76142f0afa346dfa99d5296fe7202a11854/tabulate-0.9.0-py3-none-any.whl", hash = "sha256:024ca478df22e9340661486f85298cff5f6dcdba14f3813e8830015b9ed1948f", size = 35252, upload-time = "2022-10-06T17:21:44.262Z" },
+]
+
+[[package]]
+name = "tavily-python"
+version = "0.7.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "requests" },
+    { name = "tiktoken" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3e/42/ce2329635b844dda548110a5dfa0ab5631cdc1085e15c2d68b1850a2d112/tavily_python-0.7.12.tar.gz", hash = "sha256:661945bbc9284cdfbe70fb50de3951fd656bfd72e38e352481d333a36ae91f5a", size = 17282, upload-time = "2025-09-10T17:02:01.281Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9a/e2/dbc246d9fb24433f77b17d9ee4e750a1e2718432ebde2756589c9154cbad/tavily_python-0.7.12-py3-none-any.whl", hash = "sha256:00d09b9de3ca02ef9a994cf4e7ae43d4ec9d199f0566ba6e52cbfcbd07349bd1", size = 15473, upload-time = "2025-09-10T17:01:59.859Z" },
 ]
 
 [[package]]
