@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
-medical-images = "app.__main__:main"
+medical_Images = "app.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

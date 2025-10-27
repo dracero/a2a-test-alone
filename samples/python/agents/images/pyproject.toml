@@ -1,0 +1,24 @@
+[project]
+name = "images"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "a2a-sdk>=0.3.2",
+    "crewai[tools]>=0.165.1",
+    "google-genai>=1.31.0",
+    "langsmith>=0.3.45",
+    "python-dotenv>=1.1.1",
+]
+
+
+[project.scripts]
+images = "app.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
