@@ -12,7 +12,7 @@ from io import BytesIO
 from typing import Any
 from uuid import uuid4
 
-#from in_memory_cache import InMemoryCache
+from app.in_memory_cache import InMemoryCache
 # Import LangSmith configuration
 from app.langsmith_config import (LANGSMITH_ENABLED, get_langsmith_status,
                                   langsmith_client, traceable)
