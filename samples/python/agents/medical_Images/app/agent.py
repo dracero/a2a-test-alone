@@ -90,6 +90,10 @@ class MedicalAgent:
         """Codifica imagen en base64."""
         return base64.b64encode(image_data).decode('utf-8')
     
+    def decode_base64_image(self, base64_string: str) -> bytes:
+        """Decodifica una imagen desde base64."""
+        return base64.b64decode(base64_string)
+    
     def get_mime_type(self, content_type: str) -> str:
         """Mapea content_type a MIME type para Gemini."""
         mapping = {
@@ -105,7 +109,9 @@ class MedicalAgent:
         Analiza imágenes médicas con Gemini Vision.
         
         Args:
-            images: Lista de diccionarios con 'data' (bytes) y 'mime_type' (str)
+            images: Lista de diccionarios con:
+                - 'data' (bytes o str base64)
+                - 'mime_type' (str)
         
         Returns:
             Hallazgos visuales como string
@@ -133,21 +139,52 @@ Sé específico y objetivo. Evita diagnósticos definitivos."""
         }]
         
         # Agregar imágenes
-        for img in images:
-            image_data = self.encode_image(img['data'])
-            mime_type = self.get_mime_type(img['mime_type'])
-            content.append({
-                "type": "image_url",
-                "image_url": f"data:{mime_type};base64,{image_data}"
-            })
+        for idx, img in enumerate(images):
+            try:
+                # Manejar tanto bytes como base64 string
+                image_data_raw = img.get('data') or img.get('bytes')
+                
+                if isinstance(image_data_raw, bytes):
+                    # Ya son bytes, codificar directamente
+                    image_data_b64 = self.encode_image(image_data_raw)
+                elif isinstance(image_data_raw, str):
+                    # Ya es base64, usar directamente
+                    image_data_b64 = image_data_raw
+                else:
+                    print(f"⚠️ Tipo de dato no soportado para imagen {idx}: {type(image_data_raw)}")
+                    continue
+                
+                mime_type = self.get_mime_type(img.get('mime_type', 'image/png'))
+                
+                # Agregar imagen al contenido
+                content.append({
+                    "type": "image_url",
+                    "image_url": f"data:{mime_type};base64,{image_data_b64}"
+                })
+                
+                print(f"✅ Imagen {idx} agregada: {mime_type}, tamaño base64: {len(image_data_b64)}")
+                
+            except Exception as e:
+                print(f"❌ Error procesando imagen {idx}: {e}")
+                continue
+        
+        # Verificar que se agregaron imágenes
+        image_count = len([c for c in content if c.get('type') == 'image_url'])
+        if image_count == 0:
+            return "Error: No se pudieron procesar las imágenes proporcionadas."
+        
+        print(f"📤 Enviando {image_count} imagen(es) a Gemini para análisis...")
         
         message = HumanMessage(content=content)
         
         try:
             response = self.llm.invoke([message])
+            print(f"✅ Análisis de imágenes completado")
             return response.content
         except Exception as e:
-            return f"Error en análisis de imágenes: {str(e)}"
+            error_msg = f"Error en análisis de imágenes: {str(e)}"
+            print(f"❌ {error_msg}")
+            return error_msg
     
     async def classify_query(self, query: str, context: str, visual_findings: str) -> str:
         """Clasifica la consulta médica."""
@@ -289,17 +326,26 @@ Proporciona un análisis médico completo y profesional."""
         Args:
             query: Consulta del usuario
             context_id: ID del contexto de conversación
-            images: Lista opcional de imágenes [{'data': bytes, 'mime_type': str}]
+            images: Lista opcional de imágenes [{'data': bytes o str, 'mime_type': str}]
         
         Yields:
             Diccionarios con información de progreso y respuestas
         """
+        print(f"\n{'='*80}")
+        print(f"🏥 Procesando consulta médica")
+        print(f"Context ID: {context_id}")
+        print(f"Query: {query[:100]}...")
+        print(f"Imágenes recibidas: {len(images) if images else 0}")
+        print(f"{'='*80}\n")
+        
         # Obtener contexto de memoria
         memory_context = self._get_memory_context(context_id)
         
         # PASO 1: Analizar imágenes si existen
         visual_findings = ""
         if images and len(images) > 0:
+            print(f"📸 Analizando {len(images)} imagen(es)...")
+            
             yield {
                 'is_task_complete': False,
                 'require_user_input': False,
@@ -309,6 +355,9 @@ Proporciona un análisis médico completo y profesional."""
             
             visual_findings = await self.analyze_images(images)
             self.visual_findings[context_id] = visual_findings
+            
+            print(f"✅ Análisis visual completado")
+            print(f"Hallazgos: {visual_findings[:200]}...")
             
             yield {
                 'is_task_complete': False,
@@ -322,8 +371,10 @@ Proporciona un análisis médico completo y profesional."""
                 context_id, 
                 "No se proporcionaron imágenes para análisis."
             )
+            print(f"ℹ️ No hay imágenes nuevas, usando hallazgos previos")
         
         # PASO 2: Clasificar consulta
+        print(f"🔍 Clasificando consulta...")
         yield {
             'is_task_complete': False,
             'require_user_input': False,
@@ -332,8 +383,10 @@ Proporciona un análisis médico completo y profesional."""
         }
         
         classification = await self.classify_query(query, memory_context, visual_findings)
+        print(f"✅ Clasificación completada")
         
         # PASO 3: Generar consultas de búsqueda
+        print(f"🔎 Generando consultas de búsqueda...")
         yield {
             'is_task_complete': False,
             'require_user_input': False,
@@ -344,11 +397,15 @@ Proporciona un análisis médico completo y profesional."""
         search_query = await self.generate_search_queries(
             classification, visual_findings, query
         )
+        print(f"✅ Query de búsqueda: {search_query[:100]}...")
         
         # PASO 4: Buscar información
+        print(f"🌐 Buscando información médica...")
         search_info = await self.search_medical_info(search_query)
+        print(f"✅ Búsqueda completada")
         
         # PASO 5: Generar respuesta final
+        print(f"📝 Generando respuesta médica final...")
         yield {
             'is_task_complete': False,
             'require_user_input': False,
@@ -360,8 +417,12 @@ Proporciona un análisis médico completo y profesional."""
             query, memory_context, classification, visual_findings, search_info
         )
         
+        print(f"✅ Respuesta generada: {len(final_response)} caracteres")
+        
         # Guardar en memoria
         self._save_to_memory(context_id, query, final_response)
+        
+        print(f"✅ Consulta médica completada\n")
         
         # Retornar respuesta final
         yield {
