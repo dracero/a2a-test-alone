@@ -35,10 +35,10 @@ def setup_langsmith_environment():
     try:
         # Install langsmith if needed
         logger.info("📦 Checking LangSmith dependencies...")
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "langsmith", "--quiet"]
-        )
-        
+        #subprocess.check_call(
+        #    [sys.executable, "-m", "pip", "install", "langsmith", "--quiet"]
+        #)
+
         # Import after environment setup
         from langsmith import Client, traceable
 

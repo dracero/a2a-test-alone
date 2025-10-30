@@ -1,0 +1,178 @@
+{
+  "error": {
+    "code": -32600,
+    "data": [
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "JSONRPCError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of JSONRPCError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "JSONRPCError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "JSONParseError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of JSONParseError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "JSONParseError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "InvalidRequestError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of InvalidRequestError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "InvalidRequestError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "MethodNotFoundError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of MethodNotFoundError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "MethodNotFoundError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "InvalidParamsError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of InvalidParamsError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "InvalidParamsError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "InternalError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of InternalError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "InternalError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "TaskNotFoundError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of TaskNotFoundError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "TaskNotFoundError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "TaskNotCancelableError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of TaskNotCancelableError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "TaskNotCancelableError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "PushNotificationNotSupportedError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of PushNotificationNotSupportedError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "PushNotificationNotSupportedError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "UnsupportedOperationError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of UnsupportedOperationError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "UnsupportedOperationError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "ContentTypeNotSupportedError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of ContentTypeNotSupportedError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "ContentTypeNotSupportedError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "InvalidAgentResponseError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of InvalidAgentResponseError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "InvalidAgentResponseError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      },
+      {
+        "type": "model_type",
+        "loc": [
+          "error",
+          "AuthenticatedExtendedCardNotConfiguredError"
+        ],
+        "msg": "Input should be a valid dictionary or instance of AuthenticatedExtendedCardNotConfiguredError",
+        "input": "Error invoking agent: 'str' object has no attribute 'raw'",
+        "ctx": {
+          "class_name": "AuthenticatedExtendedCardNotConfiguredError"
+        },
+        "url": "https://errors.pydantic.dev/2.11/v/model_type"
+      }
+    ],
+    "message": "Request payload validation error"
+  },
+  "jsonrpc": "2.0"
+}
