@@ -108,12 +108,12 @@ async def main() -> None:
         )
         logger.info('✅ Cliente A2A inicializado\n')
         
-        # --- TEST 1: Generar un mono astronauta ---
+        # --- TEST 1: Generar estudiante UBA millonario ---
         logger.info('='*80)
-        logger.info('TEST 1: Generar imagen de mono astronauta')
+        logger.info('TEST 1: Genera una imagen de un estudiante de la UBA que se hizo millonario')
         logger.info('='*80)
         
-        prompt = "Generate a photorealistic image of a monkey astronaut floating in space, wearing a detailed NASA spacesuit, with Earth visible in the background. The monkey should look curious and intelligent."
+        prompt = "Generate a photorealistic image of a successful young Argentine university student who became a millionaire entrepreneur. The student should be wearing casual business attire, standing in front of the iconic UBA (Universidad de Buenos Aires) building with its neoclassical columns. The person should look confident and ambitious, holding a laptop or smartphone. Background shows the historic faculty building in Buenos Aires. Professional lighting, modern and aspirational atmosphere."
         
         text_part = TextPart(
             kind='text',
@@ -162,7 +162,7 @@ async def main() -> None:
                                         mime_type = file_data.get('mime_type', 'image/png')
                                         
                                         # Guardar imagen
-                                        output_path = f'monkey_astronaut_{idx}_{part_idx}'
+                                        output_path = f'estudiante_uba_millonario_{idx}_{part_idx}'
                                         saved_path = save_base64_image(
                                             base64_data, 
                                             output_path, 
@@ -194,16 +194,12 @@ async def main() -> None:
         except Exception as e:
             logger.error(f'❌ Error: {e}', exc_info=True)
         
-        # --- TEST 2: Editar la imagen anterior (si se generó) ---
+        # --- TEST 2: Editar la imagen anterior ---
         logger.info('\n' + '='*80)
-        logger.info('TEST 2: Editar imagen - agregar planeta Marte')
+        logger.info('TEST 2: Editar imagen - agregar elementos de éxito empresarial')
         logger.info('='*80)
         
-        # Para editar, necesitamos el artifact_file_id de la imagen anterior
-        # Esto requeriría mantener el context_id y enviar una nueva solicitud
-        # con referencia a la imagen previa
-        
-        edit_prompt = "Add planet Mars in the background, make it look more realistic"
+        edit_prompt = "Add a luxury sports car in the background and make the lighting more dramatic and cinematic, emphasizing success and achievement"
         
         text_part_edit = TextPart(
             kind='text',
@@ -248,7 +244,7 @@ async def main() -> None:
                                         base64_data = file_data['bytes']
                                         mime_type = file_data.get('mime_type', 'image/png')
                                         
-                                        output_path = f'monkey_astronaut_edited_{idx}_{part_idx}'
+                                        output_path = f'estudiante_uba_millonario_edited_{idx}_{part_idx}'
                                         saved_path = save_base64_image(
                                             base64_data, 
                                             output_path, 
@@ -275,6 +271,8 @@ if __name__ == '__main__':
 ║                                                                ║
 ║  Este cliente prueba la generación de imágenes y las          ║
 ║  guarda en archivos para visualización.                       ║
+║                                                                ║
+║  Test: Estudiante de la UBA que se hizo millonario 💰🎓      ║
 ╚════════════════════════════════════════════════════════════════╝
     """)
     
