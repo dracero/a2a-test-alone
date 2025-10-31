@@ -24,6 +24,12 @@ packages = ["common", "hosts"]
 members = [
    "agents/medical_Images",
     "agents/images",
+    "hosts/cli",
+    "hosts/extended_agent_card_cli",
+    "hosts/multiagent",
+    "hosts/a2a_multiagent_host",
+    "extensions/timestamp",
+    "extensions/traceability",
 ]
 
 [tool.hatch.metadata]

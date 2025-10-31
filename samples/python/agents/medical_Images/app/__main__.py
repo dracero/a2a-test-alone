@@ -27,7 +27,7 @@ class MissingAPIKeyError(Exception):
 
 @click.command()
 @click.option('--host', 'host', default='localhost', help='Host del servidor')
-@click.option('--port', 'port', default=10001, help='Puerto del servidor')
+@click.option('--port', 'port', default=10002, help='Puerto del servidor')
 def main(host, port):
     """Inicia el servidor del Asistente Médico."""
     try:
