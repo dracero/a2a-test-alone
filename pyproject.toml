@@ -18,6 +18,10 @@ dependencies = [
 members = [
     "samples/python/agents/images",
     "samples/python/agents/medical_Images",
+    "samples/python/hosts/cli",
+    "samples/python/hosts/extended_agent_card_cli",
+    "samples/python/hosts/multiagent",
+    "demo/ui",
 ]
 
 
