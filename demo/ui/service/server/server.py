@@ -1,32 +1,44 @@
 import asyncio
 import base64
 import os
-import threading
+import threading  # <-- Ya no usaremos esto para _send_message, pero lo dejamos por si el manager lo usa
 import uuid
-
 from typing import cast
 
 import httpx
-
 from a2a.types import FilePart, FileWithUri, Message, Part
-from fastapi import FastAPI, Request, Response
-
-from service.types import (
-    CreateConversationResponse,
-    GetEventResponse,
-    ListAgentResponse,
-    ListConversationResponse,
-    ListMessageResponse,
-    ListTaskResponse,
-    MessageInfo,
-    PendingMessageResponse,
-    RegisterAgentResponse,
-    SendMessageResponse,
-)
+# Importamos BackgroundTasks
+from fastapi import BackgroundTasks, FastAPI, Request, Response
+from pydantic import BaseModel
+from service.types import (CreateConversationResponse, GetEventResponse,
+                           ListAgentResponse, ListConversationResponse,
+                           ListMessageResponse, ListTaskResponse, MessageInfo,
+                           PendingMessageResponse, RegisterAgentResponse,
+                           SendMessageResponse)
 
 from .adk_host_manager import ADKHostManager, get_message_id
 from .application_manager import ApplicationManager
 from .in_memory_manager import InMemoryFakeAgentManager
+
+# --- MODELOS PYDANTIC PARA LOS BODIES ---
+
+# Modelo para /message/send
+class SendMessageBody(BaseModel):
+    params: Message
+
+# Modelo para /message/list
+class ListMessagesBody(BaseModel):
+    params: str  # Espera el conversation_id como un string
+
+# Modelo para /agent/register
+class RegisterAgentBody(BaseModel):
+    params: str  # Espera la URL del agente como un string
+
+# Modelo para /api_key/update
+class UpdateApiKeyBody(BaseModel):
+    api_key: str
+
+# --- FIN DE MODELOS ---
 
 
 class ConversationServer:
@@ -92,24 +104,22 @@ class ConversationServer:
         c = await self.manager.create_conversation()
         return CreateConversationResponse(result=c)
 
-    async def _send_message(self, request: Request):
-        message_data = await request.json()
-        message = Message(**message_data['params'])
+    # --- MODIFICACIÓN CLAVE ---
+    # Usamos BackgroundTasks en lugar de threading manual
+    async def _send_message(
+        self, body: SendMessageBody, background_tasks: BackgroundTasks
+    ):
+        message = body.params
         message = self.manager.sanitize_message(message)
-        loop = asyncio.get_event_loop()
-        if isinstance(self.manager, ADKHostManager):
-            t = threading.Thread(
-                target=lambda: cast(
-                    'ADKHostManager', self.manager
-                ).process_message_threadsafe(message, loop)
-            )
-        else:
-            t = threading.Thread(
-                target=lambda: asyncio.run(
-                    self.manager.process_message(message)
-                )
-            )
-        t.start()
+
+        # Añadimos la tarea pesada (procesar el mensaje) al fondo.
+        # FastAPI se encargará de ejecutarla después de enviar la respuesta.
+        # Esto funciona para AMBOS managers (ADK y Fake) porque ambos
+        # tienen un método "async def process_message"
+        background_tasks.add_task(self.manager.process_message, message)
+
+        # La API responde INMEDIATAMENTE con el ID del mensaje.
+        # Ya no hay hilos, ni bucles de eventos manuales, ni bloqueos.
         return SendMessageResponse(
             result=MessageInfo(
                 message_id=message.message_id,
@@ -117,9 +127,9 @@ class ConversationServer:
             )
         )
 
-    async def _list_messages(self, request: Request):
-        message_data = await request.json()
-        conversation_id = message_data['params']
+    # Modificado para usar Pydantic Body
+    async def _list_messages(self, body: ListMessagesBody):
+        conversation_id = body.params
         conversation = self.manager.get_conversation(conversation_id)
         if conversation:
             return ListMessageResponse(
@@ -177,16 +187,17 @@ class ConversationServer:
     def _list_tasks(self):
         return ListTaskResponse(result=self.manager.tasks)
 
-    async def _register_agent(self, request: Request):
-        message_data = await request.json()
-        url = message_data['params']
+    # Modificado para usar Pydantic Body
+    async def _register_agent(self, body: RegisterAgentBody):
+        url = body.params
         self.manager.register_agent(url)
         return RegisterAgentResponse()
 
     async def _list_agents(self):
         return ListAgentResponse(result=self.manager.agents)
 
-    def _files(self, file_id):
+    # Modificado para añadir type hint para Swagger
+    def _files(self, file_id: str):
         if file_id not in self._file_cache:
             raise Exception('file not found')
         part = self._file_cache[file_id]
@@ -197,12 +208,11 @@ class ConversationServer:
             )
         return Response(content=part.file.bytes, media_type=part.file.mime_type)
 
-    async def _update_api_key(self, request: Request):
+    # Modificado para usar Pydantic Body
+    async def _update_api_key(self, body: UpdateApiKeyBody):
         """Update the API key"""
         try:
-            data = await request.json()
-            api_key = data.get('api_key', '')
-
+            api_key = body.api_key
             if api_key:
                 # Update in the manager
                 self.update_api_key(api_key)

@@ -4,12 +4,10 @@ run:
 """
 
 import os
-
 from contextlib import asynccontextmanager
 
 import httpx
 import mesop as me
-
 from components.api_key_dialog import api_key_dialog
 from components.page_scaffold import page_scaffold
 from dotenv import load_dotenv
@@ -24,7 +22,6 @@ from pages.task_list import task_list_page
 from service.server.server import ConversationServer
 from state import host_agent_service
 from state.state import AppState
-
 
 load_dotenv()
 
@@ -61,6 +58,36 @@ security_policy = me.SecurityPolicy(
     ]
 )
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    httpx_client_wrapper.start()
+    
+    # ============ AGREGAR CORS AQUÍ ============
+    from fastapi.middleware.cors import CORSMiddleware
+    
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    # ============================================
+    
+    ConversationServer(app, httpx_client_wrapper())
+    app.openapi_schema = None
+    app.mount(
+        '/',
+        WSGIMiddleware(
+            me.create_wsgi_app(
+                debug_mode=os.environ.get('DEBUG_MODE', '') == 'true'
+            )
+        ),
+    )
+    app.setup()
+    yield
+    await httpx_client_wrapper.stop()
 
 @me.page(
     path='/',
@@ -183,9 +210,20 @@ async def lifespan(app: FastAPI):
 
 if __name__ == '__main__':
     import uvicorn
-
+    from fastapi.middleware.cors import CORSMiddleware  # ✅ Descomentar
+    
     app = FastAPI(lifespan=lifespan)
-
+    
+    # ====== AGREGAR CORS AQUÍ (DESCOMENTADO) ======
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    # ================================================
+    
     # Setup the connection details, these should be set in the environment
     host = os.environ.get('A2A_UI_HOST', '0.0.0.0')
     port = int(os.environ.get('A2A_UI_PORT', '12000'))
