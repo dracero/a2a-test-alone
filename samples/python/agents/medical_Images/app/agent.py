@@ -36,7 +36,7 @@ class MedicalAgent:
         """Inicializar el agente médico."""
         # Modelo principal
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+            model="gemini-2.0-flash-exp",
             temperature=0.3,
             max_output_tokens=4096,
         )
@@ -145,10 +145,8 @@ Sé específico y objetivo. Evita diagnósticos definitivos."""
                 image_data_raw = img.get('data') or img.get('bytes')
                 
                 if isinstance(image_data_raw, bytes):
-                    # Ya son bytes, codificar directamente
                     image_data_b64 = self.encode_image(image_data_raw)
                 elif isinstance(image_data_raw, str):
-                    # Ya es base64, usar directamente
                     image_data_b64 = image_data_raw
                 else:
                     print(f"⚠️ Tipo de dato no soportado para imagen {idx}: {type(image_data_raw)}")
@@ -156,24 +154,16 @@ Sé específico y objetivo. Evita diagnósticos definitivos."""
                 
                 mime_type = self.get_mime_type(img.get('mime_type', 'image/png'))
                 
-                # Agregar imagen al contenido
                 content.append({
                     "type": "image_url",
                     "image_url": f"data:{mime_type};base64,{image_data_b64}"
                 })
                 
-                print(f"✅ Imagen {idx} agregada: {mime_type}, tamaño base64: {len(image_data_b64)}")
+                print(f"✅ Imagen {idx} agregada: {mime_type}")
                 
             except Exception as e:
                 print(f"❌ Error procesando imagen {idx}: {e}")
                 continue
-        
-        # Verificar que se agregaron imágenes
-        image_count = len([c for c in content if c.get('type') == 'image_url'])
-        if image_count == 0:
-            return "Error: No se pudieron procesar las imágenes proporcionadas."
-        
-        print(f"📤 Enviando {image_count} imagen(es) a Gemini para análisis...")
         
         message = HumanMessage(content=content)
         
@@ -323,13 +313,11 @@ Proporciona un análisis médico completo y profesional."""
         """
         Procesa una consulta médica con streaming.
         
-        Args:
-            query: Consulta del usuario
-            context_id: ID del contexto de conversación
-            images: Lista opcional de imágenes [{'data': bytes o str, 'mime_type': str}]
-        
-        Yields:
-            Diccionarios con información de progreso y respuestas
+        IMPORTANTE: Este método DEBE yieldar diccionarios con estas claves:
+        - 'is_task_complete': bool
+        - 'require_user_input': bool
+        - 'content': str
+        - 'status': str (opcional)
         """
         print(f"\n{'='*80}")
         print(f"🏥 Procesando consulta médica")
@@ -349,7 +337,7 @@ Proporciona un análisis médico completo y profesional."""
             yield {
                 'is_task_complete': False,
                 'require_user_input': False,
-                'content': f'Analizando {len(images)} imagen(es) médica(s)...',
+                'content': f'🔍 Analizando {len(images)} imagen(es) médica(s)...',
                 'status': 'analyzing_images'
             }
             
@@ -357,28 +345,25 @@ Proporciona un análisis médico completo y profesional."""
             self.visual_findings[context_id] = visual_findings
             
             print(f"✅ Análisis visual completado")
-            print(f"Hallazgos: {visual_findings[:200]}...")
             
             yield {
                 'is_task_complete': False,
                 'require_user_input': False,
-                'content': f'Hallazgos visuales identificados.',
+                'content': f'✅ Hallazgos visuales identificados.',
                 'status': 'analyzing_images'
             }
         else:
-            # Usar hallazgos previos si existen
             visual_findings = self.visual_findings.get(
                 context_id, 
                 "No se proporcionaron imágenes para análisis."
             )
-            print(f"ℹ️ No hay imágenes nuevas, usando hallazgos previos")
         
         # PASO 2: Clasificar consulta
         print(f"🔍 Clasificando consulta...")
         yield {
             'is_task_complete': False,
             'require_user_input': False,
-            'content': 'Clasificando consulta médica...',
+            'content': '🏥 Clasificando consulta médica...',
             'status': 'classifying'
         }
         
@@ -390,14 +375,13 @@ Proporciona un análisis médico completo y profesional."""
         yield {
             'is_task_complete': False,
             'require_user_input': False,
-            'content': 'Buscando información médica relevante...',
+            'content': '🔎 Buscando información médica relevante...',
             'status': 'searching'
         }
         
         search_query = await self.generate_search_queries(
             classification, visual_findings, query
         )
-        print(f"✅ Query de búsqueda: {search_query[:100]}...")
         
         # PASO 4: Buscar información
         print(f"🌐 Buscando información médica...")
@@ -409,7 +393,7 @@ Proporciona un análisis médico completo y profesional."""
         yield {
             'is_task_complete': False,
             'require_user_input': False,
-            'content': 'Generando análisis médico completo...',
+            'content': '📝 Generando análisis médico completo...',
             'status': 'generating_response'
         }
         
@@ -418,13 +402,14 @@ Proporciona un análisis médico completo y profesional."""
         )
         
         print(f"✅ Respuesta generada: {len(final_response)} caracteres")
+        print(f"📄 Respuesta preview: {final_response[:200]}...")
         
         # Guardar en memoria
         self._save_to_memory(context_id, query, final_response)
         
         print(f"✅ Consulta médica completada\n")
         
-        # Retornar respuesta final
+        # CRÍTICO: Retornar respuesta final con is_task_complete=True
         yield {
             'is_task_complete': True,
             'require_user_input': False,

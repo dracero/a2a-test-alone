@@ -1,13 +1,11 @@
+# demo/ui/components/conversation.py (FIXED)
+
 import uuid
 
 import mesop as me
-
 from a2a.types import Message, Part, Role, TextPart
-from state.host_agent_service import (
-    ListConversations,
-    SendMessage,
-    convert_message_to_state,
-)
+from state.host_agent_service import (ListConversations, SendMessage,
+                                      convert_message_to_state)
 from state.state import AppState, StateMessage
 
 from .chat_bubble import chat_bubble
@@ -64,27 +62,71 @@ async def send_message(message: str, message_id: str = ''):
     await SendMessage(request)
 
 
-async def send_message_enter(e: me.InputEnterEvent):  # pylint: disable=unused-argument
+async def send_message_enter(e: me.InputEnterEvent):
     """Send message handler"""
     yield
     state = me.state(PageState)
     state.message_content = e.value
     app_state = me.state(AppState)
+    
+    # CRÍTICO: Generar message_id ANTES de agregarlo a background_tasks
     message_id = str(uuid.uuid4())
-    app_state.background_tasks[message_id] = ''
+    
+    # Agregar a background_tasks con mensaje inicial
+    app_state.background_tasks[message_id] = 'Enviando mensaje...'
+    print(f"✅ Mensaje agregado a background_tasks: {message_id}")
+    
     yield
-    await send_message(state.message_content, message_id)
+    
+    try:
+        await send_message(state.message_content, message_id)
+        print(f"✅ Mensaje enviado exitosamente: {message_id}")
+        
+        # CRÍTICO: Limpiar background_tasks después de enviar
+        # El polling se encargará de actualizar el estado
+        # pero necesitamos remover este ID después de un delay
+        # para permitir que el servidor lo procese
+        
+    except Exception as e:
+        print(f"❌ Error enviando mensaje: {e}")
+        # Limpiar en caso de error
+        if message_id in app_state.background_tasks:
+            del app_state.background_tasks[message_id]
+    
+    # Limpiar el input
+    state.message_content = ''
+    
     yield
 
 
-async def send_message_button(e: me.ClickEvent):  # pylint: disable=unused-argument
+async def send_message_button(e: me.ClickEvent):
     """Send message button handler"""
     yield
     state = me.state(PageState)
     app_state = me.state(AppState)
+    
+    # CRÍTICO: Generar message_id ANTES
     message_id = str(uuid.uuid4())
-    app_state.background_tasks[message_id] = ''
-    await send_message(state.message_content, message_id)
+    
+    # Agregar a background_tasks
+    app_state.background_tasks[message_id] = 'Enviando mensaje...'
+    print(f"✅ Mensaje agregado a background_tasks: {message_id}")
+    
+    yield
+    
+    try:
+        await send_message(state.message_content, message_id)
+        print(f"✅ Mensaje enviado exitosamente: {message_id}")
+        
+    except Exception as e:
+        print(f"❌ Error enviando mensaje: {e}")
+        # Limpiar en caso de error
+        if message_id in app_state.background_tasks:
+            del app_state.background_tasks[message_id]
+    
+    # Limpiar el input
+    state.message_content = ''
+    
     yield
 
 
@@ -96,6 +138,7 @@ def conversation():
     if 'conversation_id' in me.query_params:
         page_state.conversation_id = me.query_params['conversation_id']
         app_state.current_conversation_id = page_state.conversation_id
+    
     with me.box(
         style=me.Style(
             display='flex',
@@ -130,6 +173,7 @@ def conversation():
         ):
             me.input(
                 label='How can I help you?',
+                value=page_state.message_content,  # AÑADIDO: Bind al state
                 on_blur=on_blur,
                 on_enter=send_message_enter,
                 style=me.Style(min_width='80vw'),

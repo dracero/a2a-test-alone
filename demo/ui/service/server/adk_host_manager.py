@@ -6,37 +6,23 @@ import os
 import uuid
 
 import httpx
-
-from a2a.types import (
-    AgentCard,
-    Artifact,
-    DataPart,
-    FilePart,
-    FileWithBytes,
-    FileWithUri,
-    Message,
-    Part,
-    Role,
-    Task,
-    TaskArtifactUpdateEvent,
-    TaskState,
-    TaskStatus,
-    TaskStatusUpdateEvent,
-    TextPart,
-)
+from a2a.types import (AgentCard, Artifact, DataPart, FilePart, FileWithBytes,
+                       FileWithUri, Message, Part, Role, Task,
+                       TaskArtifactUpdateEvent, TaskState, TaskStatus,
+                       TaskStatusUpdateEvent, TextPart)
 from google.adk import Runner
 from google.adk.artifacts import InMemoryArtifactService
 from google.adk.events.event import Event as ADKEvent
 from google.adk.events.event_actions import EventActions as ADKEventActions
 from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
-from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from google.adk.sessions.in_memory_session_service import \
+    InMemorySessionService
 from google.genai import types
 from host_agent import HostAgent
 from remote_agent_connection import TaskCallbackArg
-from utils.agent_card import get_agent_card
-
 from service.server.application_manager import ApplicationManager
 from service.types import Conversation, Event
+from utils.agent_card import get_agent_card
 
 
 class ADKHostManager(ApplicationManager):
@@ -217,6 +203,13 @@ class ADKHostManager(ApplicationManager):
         if conversation and response:
             conversation.messages.append(response)
         self._pending_message_ids.remove(message_id)
+        # CRÍTICO: Limpiar pending message al final
+        try:
+            if message_id and message_id in self._pending_message_ids:
+                self._pending_message_ids.remove(message_id)
+                print(f"✅ Pending message limpiado: {message_id}")
+        except Exception as e:
+            print(f"⚠️ Error limpiando pending message: {e}")
 
     def add_task(self, task: Task):
         self._tasks.append(task)
