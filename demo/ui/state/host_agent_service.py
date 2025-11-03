@@ -1,51 +1,44 @@
+# demo/ui/state/host_agent_service.py (Modificado)
+
 import json
 import os
 import sys
 import traceback
 import uuid
-
 from typing import Any
 
 from a2a.types import FileWithBytes, Message, Part, Role, Task, TaskState
-from service.client.client import ConversationClient
-from service.types import (
-    Conversation,
-    CreateConversationRequest,
-    Event,
-    GetEventRequest,
-    ListAgentRequest,
-    ListConversationRequest,
-    ListMessageRequest,
-    ListTaskRequest,
-    MessageInfo,
-    PendingMessageRequest,
-    RegisterAgentRequest,
-    SendMessageRequest,
-)
+from service.client.client import \
+    ConversationClient  # <--- Importamos el cliente
+from service.types import (Conversation, CreateConversationRequest, Event,
+                           GetEventRequest, ListAgentRequest,
+                           ListConversationRequest, ListMessageRequest,
+                           ListTaskRequest, MessageInfo, PendingMessageRequest,
+                           RegisterAgentRequest, SendMessageRequest)
 
-from .state import (
-    AppState,
-    SessionTask,
-    StateConversation,
-    StateEvent,
-    StateMessage,
-    StateTask,
-)
-
+from .state import (AppState, SessionTask, StateConversation, StateEvent,
+                    StateMessage, StateTask)
 
 server_url = 'http://localhost:12000'
 
 
-async def ListConversations() -> list[Conversation]:
-    client = ConversationClient(server_url)
+# --- INICIO DE MODIFICACIÓN ---
+# Modificamos las funciones del poller para que acepten un cliente existente
+# y no creen uno nuevo cada vez.
+
+async def ListConversations(
+    client: ConversationClient | None = None,
+) -> list[Conversation]:
+    c = client or ConversationClient(server_url)
     try:
-        response = await client.list_conversation(ListConversationRequest())
+        response = await c.list_conversation(ListConversationRequest())
         return response.result if response.result else []
     except Exception as e:
         print('Failed to list conversations: ', e)
     return []
 
-
+# SendMessage y CreateConversation están bien, se usan para eventos
+# puntuales, no para el sondeo (polling).
 async def SendMessage(message: Message) -> Message | MessageInfo | None:
     client = ConversationClient(server_url)
     try:
@@ -55,7 +48,6 @@ async def SendMessage(message: Message) -> Message | MessageInfo | None:
         traceback.print_exc()
         print('Failed to send message: ', e)
     return None
-
 
 async def CreateConversation() -> Conversation:
     client = ConversationClient(server_url)
@@ -71,6 +63,7 @@ async def CreateConversation() -> Conversation:
     return Conversation(conversation_id='', is_active=False)
 
 
+# AddRemoteAgent y ListRemoteAgents también son puntuales.
 async def ListRemoteAgents():
     client = ConversationClient(server_url)
     try:
@@ -88,43 +81,52 @@ async def AddRemoteAgent(path: str):
         print('Failed to register the agent', e)
 
 
-async def GetEvents() -> list[Event]:
-    client = ConversationClient(server_url)
+async def GetEvents(
+    client: ConversationClient | None = None,
+) -> list[Event]:
+    c = client or ConversationClient(server_url)
     try:
-        response = await client.get_events(GetEventRequest())
+        response = await c.get_events(GetEventRequest())
         return response.result if response.result else []
     except Exception as e:
         print('Failed to get events', e)
     return []
 
 
-async def GetProcessingMessages():
-    client = ConversationClient(server_url)
+async def GetProcessingMessages(
+    client: ConversationClient | None = None,
+):
+    c = client or ConversationClient(server_url)
     try:
-        response = await client.get_pending_messages(PendingMessageRequest())
+        response = await c.get_pending_messages(PendingMessageRequest())
         return dict(response.result)
     except Exception as e:
         print('Error getting pending messages', e)
+        return {}  # Devolver dict vacío en caso de error
 
 
 def GetMessageAliases():
     return {}
 
 
-async def GetTasks():
-    client = ConversationClient(server_url)
+async def GetTasks(
+    client: ConversationClient | None = None,
+):
+    c = client or ConversationClient(server_url)
     try:
-        response = await client.list_tasks(ListTaskRequest())
+        response = await c.list_tasks(ListTaskRequest())
         return response.result
     except Exception as e:
         print('Failed to list tasks ', e)
         return []
 
 
-async def ListMessages(conversation_id: str) -> list[Message]:
-    client = ConversationClient(server_url)
+async def ListMessages(
+    conversation_id: str, client: ConversationClient | None = None
+) -> list[Message]:
+    c = client or ConversationClient(server_url)
     try:
-        response = await client.list_messages(
+        response = await c.list_messages(
             ListMessageRequest(params=conversation_id)
         )
         return response.result if response.result else []
@@ -135,15 +137,25 @@ async def ListMessages(conversation_id: str) -> list[Message]:
 
 async def UpdateAppState(state: AppState, conversation_id: str):
     """Update the app state."""
+    
+    # ESTA ES LA MODIFICACIÓN CLAVE:
+    # Creamos UN cliente aquí y lo reutilizamos para TODAS las
+    # llamadas de red dentro de esta función de sondeo (poll).
+    # Esto reduce el "churn" de sockets de 4+/seg a 1/seg.
+    client = ConversationClient(server_url)
+    
     try:
         if conversation_id:
             state.current_conversation_id = conversation_id
-            messages = await ListMessages(conversation_id)
+            # Pasamos el cliente compartido
+            messages = await ListMessages(conversation_id, client=client)
             if not messages:
                 state.messages = []
             else:
                 state.messages = [convert_message_to_state(x) for x in messages]
-        conversations = await ListConversations()
+        
+        # Pasamos el cliente compartido
+        conversations = await ListConversations(client=client)
         if not conversations:
             state.conversations = []
         else:
@@ -152,19 +164,25 @@ async def UpdateAppState(state: AppState, conversation_id: str):
             ]
 
         state.task_list = []
-        for task in await GetTasks():
+        # Pasamos el cliente compartido
+        for task in await GetTasks(client=client):
             state.task_list.append(
                 SessionTask(
                     context_id=extract_conversation_id(task),
                     task=convert_task_to_state(task),
                 )
             )
-        state.background_tasks = await GetProcessingMessages()
+        
+        # Pasamos el cliente compartido
+        state.background_tasks = await GetProcessingMessages(client=client)
         state.message_aliases = GetMessageAliases()
     except Exception as e:
         print('Failed to update state: ', e)
         traceback.print_exc(file=sys.stdout)
 
+# --- FIN DE LA MODIFICACIÓN ---
+# El resto de las funciones (UpdateApiKey, convert_message_to_state, etc.)
+# pueden permanecer exactamente iguales que en tu archivo original.
 
 async def UpdateApiKey(api_key: str):
     """Update the API key"""

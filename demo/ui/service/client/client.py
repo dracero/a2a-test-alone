@@ -1,32 +1,20 @@
-import json
+# demo/ui/service/client/client.py (Debe quedar así, como el original)
 
+import json
 from typing import Any
 
 import httpx
-
-from service.types import (
-    AgentClientHTTPError,
-    AgentClientJSONError,
-    CreateConversationRequest,
-    CreateConversationResponse,
-    GetEventRequest,
-    GetEventResponse,
-    JSONRPCRequest,
-    ListAgentRequest,
-    ListAgentResponse,
-    ListConversationRequest,
-    ListConversationResponse,
-    ListMessageRequest,
-    ListMessageResponse,
-    ListTaskRequest,
-    ListTaskResponse,
-    PendingMessageRequest,
-    PendingMessageResponse,
-    RegisterAgentRequest,
-    RegisterAgentResponse,
-    SendMessageRequest,
-    SendMessageResponse,
-)
+from service.types import (AgentClientHTTPError, AgentClientJSONError,
+                           CreateConversationRequest,
+                           CreateConversationResponse, GetEventRequest,
+                           GetEventResponse, JSONRPCRequest, ListAgentRequest,
+                           ListAgentResponse, ListConversationRequest,
+                           ListConversationResponse, ListMessageRequest,
+                           ListMessageResponse, ListTaskRequest,
+                           ListTaskResponse, PendingMessageRequest,
+                           PendingMessageResponse, RegisterAgentRequest,
+                           RegisterAgentResponse, SendMessageRequest,
+                           SendMessageResponse)
 
 
 class ConversationClient:
@@ -39,7 +27,7 @@ class ConversationClient:
         return SendMessageResponse(**await self._send_request(payload))
 
     async def _send_request(self, request: JSONRPCRequest) -> dict[str, Any]:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient() as client:  # <--- Esta línea debe estar así
             try:
                 response = await client.post(
                     self.base_url + '/' + request.method,

@@ -5,19 +5,9 @@ import os
 import uuid
 
 import httpx
-
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
-from a2a.types import (
-    AgentCard,
-    DataPart,
-    Message,
-    Part,
-    Role,
-    Task,
-    TaskState,
-    TextPart,
-    TransportProtocol,
-)
+from a2a.types import (AgentCard, DataPart, Message, Part, Role, Task,
+                       TaskState, TextPart, TransportProtocol)
 from google.adk import Agent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.readonly_context import ReadonlyContext
@@ -90,7 +80,7 @@ class HostAgent:
 
     def create_agent(self) -> Agent:
         LITELLM_MODEL = os.getenv(
-            'LITELLM_MODEL', 'gemini/gemini-2.0-flash-001'
+            'LITELLM_MODEL', 'gemini/gemini-2.5-flash'
         )
         return Agent(
             model=LiteLlm(model=LITELLM_MODEL),
