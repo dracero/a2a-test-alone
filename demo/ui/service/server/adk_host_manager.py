@@ -1,5 +1,5 @@
 import asyncio
-import base64
+import base64  # <--- Asegúrate que esté importado
 import datetime
 import json
 import os
@@ -166,10 +166,23 @@ class ADKHostManager(ApplicationManager):
                 actions=ADKEventActions(state_delta=state_update),
             ),
         )
+        
+        # --- DEBUG: Ver el contenido que se envía al ADK ---
+        adk_message_content = self.adk_content_from_message(message)
+        print(f"DEBUG ADK_HOST: Enviando {len(adk_message_content.parts)} partes al ADK Runner.")
+        for i, part in enumerate(adk_message_content.parts):
+            if part.text:
+                print(f"DEBUG ADK_HOST: Parte {i} (Texto): {part.text[:50]}...")
+            elif part.inline_data:
+                print(f"DEBUG ADK_HOST: Parte {i} (Bytes): {len(part.inline_data.data)} bytes, mime={part.inline_data.mime_type}")
+            elif part.file_data:
+                 print(f"DEBUG ADK_HOST: Parte {i} (URI): {part.file_data.file_uri}")
+        # --- FIN DEBUG ---
+
         async for event in self._host_runner.run_async(
             user_id=self.user_id,
             session_id=context_id,
-            new_message=self.adk_content_from_message(message),
+            new_message=adk_message_content, # Usar la variable de depuración
         ):
             if (
                 event.actions.state_delta
@@ -202,7 +215,7 @@ class ADKHostManager(ApplicationManager):
 
         if conversation and response:
             conversation.messages.append(response)
-        self._pending_message_ids.remove(message_id)
+        
         # CRÍTICO: Limpiar pending message al final
         try:
             if message_id and message_id in self._pending_message_ids:
@@ -470,12 +483,21 @@ class ADKHostManager(ApplicationManager):
                         )
                     )
                 else:
-                    parts.append(
-                        types.Part.from_bytes(
-                            data=part.file.bytes.encode('utf-8'),
-                            mime_type=part.file.mime_type,
+                    # --- INICIO DE LA CORRECCIÓN 1 ---
+                    # El frontend (Mesop) envía FileWithBytes donde 'bytes' es un string base64.
+                    # 'Part.from_bytes' espera bytes crudos.
+                    # Debemos decodificar desde base64.
+                    try:
+                        raw_bytes = base64.b64decode(part.file.bytes) # <--- CORREGIDO
+                        parts.append(
+                            types.Part.from_bytes(
+                                data=raw_bytes,
+                                mime_type=part.file.mime_type,
+                            )
                         )
-                    )
+                    except Exception as e:
+                        print(f"Error al decodificar FileWithBytes (usuario a agente): {e}")
+                    # --- FIN DE LA CORRECCIÓN 1 ---
         return types.Content(parts=parts, role=message.role)
 
     async def adk_content_to_message(
@@ -502,16 +524,25 @@ class ADKHostManager(ApplicationManager):
                 except:  # noqa: E722
                     parts.append(Part(root=TextPart(text=part.text)))
             elif part.inline_data:
-                parts.append(
-                    Part(
-                        root=FilePart(
-                            file=FileWithBytes(
-                                bytes=part.inline_data.decode('utf-8'),
-                                mime_type=part.file_data.mime_type,
-                            ),
+                # --- INICIO DE LA CORRECCIÓN 2 ---
+                # 'part.inline_data.data' son bytes crudos del agente.
+                # 'FileWithBytes' en nuestro frontend espera un string base64.
+                # Debemos codificar a base64.
+                try:
+                    base64_string = base64.b64encode(part.inline_data.data).decode('utf-8') # <--- CORREGIDO
+                    parts.append(
+                        Part(
+                            root=FilePart(
+                                file=FileWithBytes(
+                                    bytes=base64_string, # <--- CORREGIDO
+                                    mime_type=part.file_data.mime_type,
+                                ),
+                            )
                         )
                     )
-                )
+                except Exception as e:
+                     print(f"Error al codificar inline_data (agente a usuario): {e}")
+                # --- FIN DE LA CORRECCIÓN 2 ---
             elif part.file_data:
                 parts.append(
                     Part(
@@ -625,6 +656,6 @@ def task_still_open(task: Task | None) -> bool:
         return False
     return task.status.state in [
         TaskState.submitted,
-        TaskState.working,
+        Task_state.working,
         TaskState.input_required,
     ]
