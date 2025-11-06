@@ -36,7 +36,7 @@ class MedicalAgent:
         """Inicializar el agente médico."""
         # Modelo principal
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-exp",
+            model="gemini-2.5-flash",
             temperature=0.3,
             max_output_tokens=4096,
         )
