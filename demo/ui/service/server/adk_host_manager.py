@@ -466,16 +466,25 @@ class ADKHostManager(ApplicationManager):
         return sorted(self._events.values(), key=lambda x: x.timestamp)
 
     def adk_content_from_message(self, message: Message) -> types.Content:
+        """
+        Convierte un mensaje A2A al formato de Google ADK.
+        CORREGIDO: Maneja correctamente las imágenes en base64.
+        """
         parts: list[types.Part] = []
+        
         for p in message.parts:
             part = p.root
+            
             if part.kind == 'text':
                 parts.append(types.Part.from_text(text=part.text))
+            
             elif part.kind == 'data':
                 json_string = json.dumps(part.data)
                 parts.append(types.Part.from_text(text=json_string))
+            
             elif part.kind == 'file':
                 if isinstance(part.file, FileWithUri):
+                    # Archivo con URI
                     parts.append(
                         types.Part.from_uri(
                             file_uri=part.file.uri,
@@ -483,21 +492,37 @@ class ADKHostManager(ApplicationManager):
                         )
                     )
                 else:
-                    # --- INICIO DE LA CORRECCIÓN 1 ---
-                    # El frontend (Mesop) envía FileWithBytes donde 'bytes' es un string base64.
-                    # 'Part.from_bytes' espera bytes crudos.
-                    # Debemos decodificar desde base64.
-                    try:
-                        raw_bytes = base64.b64decode(part.file.bytes) # <--- CORREGIDO
-                        parts.append(
-                            types.Part.from_bytes(
-                                data=raw_bytes,
-                                mime_type=part.file.mime_type,
-                            )
+                    # Archivo con bytes
+                    file_bytes = part.file.bytes
+                    
+                    # ✅ CORRECCIÓN: Manejar correctamente los bytes
+                    if isinstance(file_bytes, str):
+                        # Si es un string base64, decodificarlo a bytes
+                        try:
+                            # Intentar decodificar como base64
+                            decoded_bytes = base64.b64decode(file_bytes)
+                            print(f"✅ Base64 decodificado: {len(decoded_bytes)} bytes")
+                        except Exception as e:
+                            # Si falla, intentar como UTF-8
+                            print(f"⚠️ No es base64, usando UTF-8: {e}")
+                            decoded_bytes = file_bytes.encode('utf-8')
+                    elif isinstance(file_bytes, bytes):
+                        # Ya son bytes, usar directamente
+                        decoded_bytes = file_bytes
+                        print(f"✅ Bytes directo: {len(decoded_bytes)} bytes")
+                    else:
+                        print(f"❌ Tipo de bytes no soportado: {type(file_bytes)}")
+                        continue
+                    
+                    parts.append(
+                        types.Part.from_bytes(
+                            data=decoded_bytes,
+                            mime_type=part.file.mime_type,
                         )
-                    except Exception as e:
-                        print(f"Error al decodificar FileWithBytes (usuario a agente): {e}")
-                    # --- FIN DE LA CORRECCIÓN 1 ---
+                    )
+                    
+                    print(f"📎 Archivo agregado: {part.file.mime_type}, {len(decoded_bytes)} bytes")
+        
         return types.Content(parts=parts, role=message.role)
 
     async def adk_content_to_message(

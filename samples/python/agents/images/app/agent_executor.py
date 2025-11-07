@@ -1,5 +1,6 @@
 """Agent executor for A2A protocol with LangSmith monitoring."""
 
+import base64
 import logging
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -21,6 +22,7 @@ class ImageGenerationAgentExecutor(AgentExecutor):
     def __init__(self) -> None:
         """Initialize the executor with LangSmith tracing."""
         self.agent = ImageGenerationAgent()
+        self._is_cancelled = False
         
         # Log executor initialization
         if LANGSMITH_ENABLED:
@@ -37,6 +39,28 @@ class ImageGenerationAgentExecutor(AgentExecutor):
             except Exception as e:
                 logger.debug(f"LangSmith feedback error: {e}")
 
+    async def cancel(self, context: RequestContext) -> None:
+        """Cancel the current execution.
+        
+        Args:
+            context: Request context for the execution to cancel
+        """
+        logger.info(f"🛑 Cancelling execution for task: {context.task_id}")
+        self._is_cancelled = True
+        
+        if LANGSMITH_ENABLED:
+            try:
+                langsmith_client.create_feedback(
+                    run_id=None,
+                    key="execution_cancelled",
+                    value={
+                        "task_id": context.task_id,
+                        "context_id": context.context_id
+                    }
+                )
+            except Exception as e:
+                logger.debug(f"LangSmith feedback error: {e}")
+
     @traceable(name="a2a_request_execution", run_type="chain")
     async def execute(
         self,
@@ -49,6 +73,9 @@ class ImageGenerationAgentExecutor(AgentExecutor):
             context: Request context containing task and user input
             event_queue: Queue for sending events back to client
         """
+        # Reset cancellation flag
+        self._is_cancelled = False
+        
         # Log request start
         if LANGSMITH_ENABLED:
             try:
@@ -89,6 +116,11 @@ class ImageGenerationAgentExecutor(AgentExecutor):
         print(f"📝 Query: {query}")
         
         try:
+            # Check for cancellation
+            if self._is_cancelled:
+                logger.info("Execution cancelled before agent execution")
+                return
+            
             # Execute agent with tracing
             result = await self._execute_agent_with_tracing(
                 query, 
@@ -96,54 +128,22 @@ class ImageGenerationAgentExecutor(AgentExecutor):
                 context.task_id
             )
             
+            # Check for cancellation after execution
+            if self._is_cancelled:
+                logger.info("Execution cancelled after agent execution")
+                return
+            
             print(f'✅ Agent execution completed')
             logger.info(f'Final Result: {result}')
             
-            # Get image data
-            data = self.agent.get_image_data(
-                session_id=context.context_id, 
-                image_key=result.raw
-            )
-            
-            # Prepare response parts
-            if data and not data.error:
-                parts = [
-                    FilePart(
-                        file=FileWithBytes(
-                            bytes=data.bytes,
-                            mime_type=data.mime_type,
-                            name=data.id,
-                        )
-                    )
-                ]
+            # ✅ CORRECCIÓN: Validar el resultado antes de procesarlo
+            if result is None:
+                error_msg = 'Agent returned None - no response generated'
+                logger.error(error_msg)
+                print(f'❌ {error_msg}')
                 
-                # Log success with image details
-                if LANGSMITH_ENABLED:
-                    try:
-                        langsmith_client.create_feedback(
-                            run_id=None,
-                            key="a2a_request_success",
-                            value={
-                                "task_id": context.task_id,
-                                "context_id": context.context_id,
-                                "image_id": data.id,
-                                "mime_type": data.mime_type,
-                                "query": query[:200]
-                            }
-                        )
-                    except:
-                        pass
+                parts = [Part(root=TextPart(text=error_msg))]
                 
-                print(f'🖼️ Image ready: {data.id}')
-            else:
-                error_msg = data.error if data else 'failed to generate image'
-                parts = [
-                    Part(
-                        root=TextPart(text=error_msg)
-                    )
-                ]
-                
-                # Log failure
                 if LANGSMITH_ENABLED:
                     try:
                         langsmith_client.create_feedback(
@@ -159,10 +159,196 @@ class ImageGenerationAgentExecutor(AgentExecutor):
                     except:
                         pass
                 
-                logger.error(f'Image generation failed: {error_msg}')
-                print(f'❌ Generation failed: {error_msg}')
+                await event_queue.enqueue_event(
+                    completed_task(
+                        context.task_id,
+                        context.context_id,
+                        [new_artifact(parts, f'error_{context.task_id}')],
+                        [context.message],
+                    )
+                )
+                return
             
-            # Send completion event
+            # ✅ Convertir resultado a string y validar
+            result_str = str(result).strip()
+            
+            if not result_str:
+                error_msg = 'Agent returned empty response'
+                logger.error(error_msg)
+                print(f'❌ {error_msg}')
+                
+                parts = [Part(root=TextPart(text=error_msg))]
+                
+                await event_queue.enqueue_event(
+                    completed_task(
+                        context.task_id,
+                        context.context_id,
+                        [new_artifact(parts, f'error_{context.task_id}')],
+                        [context.message],
+                    )
+                )
+                return
+            
+            # ✅ Verificar si es un mensaje de error del agente
+            if result_str.startswith("ERROR:"):
+                error_msg = result_str[6:].strip()  # Remover prefijo "ERROR:"
+                logger.error(f'Agent error: {error_msg}')
+                print(f'❌ Agent error: {error_msg}')
+                
+                parts = [Part(root=TextPart(text=error_msg))]
+                
+                if LANGSMITH_ENABLED:
+                    try:
+                        langsmith_client.create_feedback(
+                            run_id=None,
+                            key="a2a_request_agent_error",
+                            value={
+                                "task_id": context.task_id,
+                                "context_id": context.context_id,
+                                "error": error_msg,
+                                "query": query[:200]
+                            }
+                        )
+                    except:
+                        pass
+                
+                await event_queue.enqueue_event(
+                    completed_task(
+                        context.task_id,
+                        context.context_id,
+                        [new_artifact(parts, f'error_{context.task_id}')],
+                        [context.message],
+                    )
+                )
+                return
+            
+            # ✅ Extraer image_key del resultado
+            # El resultado puede ser un objeto con .raw o directamente un string
+            try:
+                image_key = result.raw if hasattr(result, 'raw') else result_str
+            except Exception as e:
+                logger.warning(f"Could not extract .raw attribute: {e}")
+                image_key = result_str
+            
+            # ✅ Validar que image_key no esté vacío
+            if not image_key or not isinstance(image_key, str):
+                error_msg = f'Invalid image key: {image_key}'
+                logger.error(error_msg)
+                print(f'❌ {error_msg}')
+                
+                parts = [Part(root=TextPart(text=error_msg))]
+                
+                await event_queue.enqueue_event(
+                    completed_task(
+                        context.task_id,
+                        context.context_id,
+                        [new_artifact(parts, f'error_{context.task_id}')],
+                        [context.message],
+                    )
+                )
+                return
+            
+            # ✅ Procesar la imagen generada
+            logger.info(f'Processing image with key: {image_key}')
+            print(f'🖼️  Image key: {image_key}')
+            
+            # ✅ OBTENER LA IMAGEN REAL DEL CACHE
+            try:
+                image_data = self.agent.get_image_data(context.context_id, image_key)
+                
+                # Validar que se obtuvo la imagen correctamente
+                if image_data.error:
+                    error_msg = f'Error retrieving image: {image_data.error}'
+                    logger.error(error_msg)
+                    print(f'❌ {error_msg}')
+                    
+                    parts = [Part(root=TextPart(text=error_msg))]
+                    
+                    await event_queue.enqueue_event(
+                        completed_task(
+                            context.task_id,
+                            context.context_id,
+                            [new_artifact(parts, f'error_{context.task_id}')],
+                            [context.message],
+                        )
+                    )
+                    return
+                
+                if not image_data.bytes:
+                    error_msg = 'Image data is empty'
+                    logger.error(error_msg)
+                    print(f'❌ {error_msg}')
+                    
+                    parts = [Part(root=TextPart(text=error_msg))]
+                    
+                    await event_queue.enqueue_event(
+                        completed_task(
+                            context.task_id,
+                            context.context_id,
+                            [new_artifact(parts, f'error_{context.task_id}')],
+                            [context.message],
+                        )
+                    )
+                    return
+                
+                # ✅ NO decodificar - mantener como base64 string
+                # FileWithBytes espera base64 string, no bytes crudos
+                image_base64 = image_data.bytes
+                
+                # Calcular tamaño aproximado para logging
+                estimated_size = len(base64.b64decode(image_base64))
+                print(f'✅ Image retrieved: ~{estimated_size} bytes')
+                
+                # Crear parte de archivo con la imagen en base64
+                file_part = FilePart(
+                    file=FileWithBytes(
+                        name=image_data.name or f"{image_key}.png",
+                        mime_type=image_data.mime_type or "image/png",
+                        bytes=image_base64  # ✅ Base64 string, NO bytes crudos
+                    )
+                )
+                
+                parts = [
+                    Part(root=TextPart(text=f"Image generated successfully")),
+                    Part(root=file_part)
+                ]
+                
+            except Exception as e:
+                error_msg = f'Error retrieving image from cache: {str(e)}'
+                logger.exception(error_msg)
+                print(f'❌ {error_msg}')
+                
+                parts = [Part(root=TextPart(text=error_msg))]
+                
+                await event_queue.enqueue_event(
+                    completed_task(
+                        context.task_id,
+                        context.context_id,
+                        [new_artifact(parts, f'error_{context.task_id}')],
+                        [context.message],
+                    )
+                )
+                return
+            
+            # Log success
+            if LANGSMITH_ENABLED:
+                try:
+                    langsmith_client.create_feedback(
+                        run_id=None,
+                        key="a2a_request_success",
+                        value={
+                            "task_id": context.task_id,
+                            "context_id": context.context_id,
+                            "image_key": image_key,
+                            "image_size_bytes": estimated_size,
+                            "query": query[:200]
+                        }
+                    )
+                    logger.info("✅ Request completed successfully")
+                except Exception as e:
+                    logger.debug(f"LangSmith feedback error: {e}")
+            
+            # Enviar respuesta completa
             await event_queue.enqueue_event(
                 completed_task(
                     context.task_id,
@@ -172,14 +358,12 @@ class ImageGenerationAgentExecutor(AgentExecutor):
                 )
             )
             
-            print(f'📤 Response sent to client')
-            
         except Exception as e:
-            error_msg = f'Error invoking agent: {e}'
-            logger.error(error_msg)
-            print(f'❌ Execution error: {error_msg}')
+            error_msg = f'Unexpected error during execution: {str(e)}'
+            logger.exception(error_msg)
+            print(f'❌ {error_msg}')
             
-            # Log exception to LangSmith
+            # Log error to LangSmith
             if LANGSMITH_ENABLED:
                 try:
                     langsmith_client.create_feedback(
@@ -196,176 +380,68 @@ class ImageGenerationAgentExecutor(AgentExecutor):
                 except:
                     pass
             
-            raise ServerError(error=ValueError(error_msg)) from e
+            parts = [Part(root=TextPart(text=f"Error: {str(e)}"))]
+            
+            await event_queue.enqueue_event(
+                completed_task(
+                    context.task_id,
+                    context.context_id,
+                    [new_artifact(parts, f'error_{context.task_id}')],
+                    [context.message],
+                )
+            )
 
-    @traceable(name="agent_invocation", run_type="chain")
     async def _execute_agent_with_tracing(
         self, 
         query: str, 
         context_id: str,
         task_id: str
-    ):
-        """Execute agent with detailed tracing.
-        
-        Args:
-            query: User query/prompt
-            context_id: Session/context identifier
-            task_id: Task identifier
-            
-        Returns:
-            Agent execution result
-        """
-        # Log agent invocation details
+    ) -> any:
+        """Execute agent with LangSmith tracing."""
         if LANGSMITH_ENABLED:
             try:
                 langsmith_client.create_feedback(
                     run_id=None,
-                    key="agent_invocation_start",
+                    key="agent_execution_start",
                     value={
                         "task_id": task_id,
                         "context_id": context_id,
-                        "query_length": len(query),
-                        "query_preview": query[:100]
+                        "query_length": len(query)
                     }
                 )
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"LangSmith feedback error: {e}")
         
-        try:
-            # Execute the agent
-            result = self.agent.invoke(query, context_id)
-            
-            # Log successful invocation
-            if LANGSMITH_ENABLED:
-                try:
-                    langsmith_client.create_feedback(
-                        run_id=None,
-                        key="agent_invocation_success",
-                        value={
-                            "task_id": task_id,
-                            "context_id": context_id,
-                            "result_preview": str(result)[:200]
-                        }
-                    )
-                except:
-                    pass
-            
-            return result
-            
-        except Exception as e:
-            # Log invocation failure
-            if LANGSMITH_ENABLED:
-                try:
-                    langsmith_client.create_feedback(
-                        run_id=None,
-                        key="agent_invocation_failure",
-                        value={
-                            "task_id": task_id,
-                            "context_id": context_id,
-                            "error": str(e),
-                            "error_type": type(e).__name__
-                        }
-                    )
-                except:
-                    pass
-            
-            raise
-
-    async def cancel(
-        self, request: RequestContext, event_queue: EventQueue
-    ) -> Task | None:
-        """Cancel operation (not supported).
+        # Execute the agent using invoke() method with session_id (context_id)
+        # Note: invoke() is synchronous, not async
+        result = self.agent.invoke(query, context_id)
         
-        Args:
-            request: Request context
-            event_queue: Event queue
-            
-        Raises:
-            ServerError: Always raises UnsupportedOperationError
-        """
-        # Log cancellation attempt
         if LANGSMITH_ENABLED:
             try:
                 langsmith_client.create_feedback(
                     run_id=None,
-                    key="cancel_attempt",
+                    key="agent_execution_complete",
                     value={
-                        "task_id": request.task_id,
-                        "context_id": request.context_id,
-                        "result": "unsupported"
+                        "task_id": task_id,
+                        "context_id": context_id,
+                        "result_type": type(result).__name__,
+                        "result": str(result)[:200]  # First 200 chars
                     }
                 )
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"LangSmith feedback error: {e}")
         
-        raise ServerError(error=UnsupportedOperationError())
+        return result
 
-    def _validate_request(self, context: RequestContext) -> bool:
-        """Validate incoming request.
+    def _validate_request(self, context: RequestContext) -> str | None:
+        """Validate the incoming request."""
+        user_input = context.get_user_input()
         
-        Args:
-            context: Request context to validate
-            
-        Returns:
-            True if validation fails, False if validation passes
-        """
-        # Add validation logic here if needed
-        # Return True to indicate error, False to indicate success
+        if not user_input or not user_input.strip():
+            return "Empty user input"
         
-        # Log validation
-        if LANGSMITH_ENABLED:
-            try:
-                langsmith_client.create_feedback(
-                    run_id=None,
-                    key="request_validation",
-                    value={
-                        "task_id": context.task_id,
-                        "context_id": context.context_id,
-                        "has_user_input": bool(context.get_user_input()),
-                        "validation_passed": True
-                    }
-                )
-            except:
-                pass
+        # Validación adicional si es necesario
+        if len(user_input) > 10000:
+            return "User input too long (max 10000 characters)"
         
-        return False
-    
-    def get_metrics(self, context_id: str) -> dict:
-        """Get execution metrics for a context/session.
-        
-        Args:
-            context_id: Session identifier
-            
-        Returns:
-            Dictionary with execution metrics
-        """
-        try:
-            from in_memory_cache import InMemoryCache
-            cache = InMemoryCache()
-            session_data = cache.get(context_id)
-            
-            metrics = {
-                "context_id": context_id,
-                "total_images": len(session_data) if session_data else 0,
-                "langsmith_enabled": LANGSMITH_ENABLED
-            }
-            
-            # Log metrics retrieval
-            if LANGSMITH_ENABLED:
-                try:
-                    langsmith_client.create_feedback(
-                        run_id=None,
-                        key="metrics_retrieved",
-                        value=metrics
-                    )
-                except:
-                    pass
-            
-            return metrics
-            
-        except Exception as e:
-            logger.error(f"Error getting metrics: {e}")
-            return {
-                "context_id": context_id,
-                "error": str(e)
-            }
+        return None

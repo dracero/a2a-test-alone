@@ -308,6 +308,80 @@ Proporciona un análisis médico completo y profesional."""
         except Exception as e:
             return f"Error generando respuesta: {str(e)}"
     
+    async def invoke(self, query: str, context_id: str, 
+                    images: list[dict] = None) -> str:
+        """
+        Procesa una consulta médica y retorna la respuesta completa.
+        
+        Args:
+            query: Consulta del usuario
+            context_id: ID del contexto/sesión
+            images: Lista de imágenes (opcional)
+        
+        Returns:
+            Respuesta médica completa como string
+        """
+        print(f"\n{'='*80}")
+        print(f"🏥 Procesando consulta médica")
+        print(f"Context ID: {context_id}")
+        print(f"Query: {query[:100]}...")
+        print(f"Imágenes recibidas: {len(images) if images else 0}")
+        print(f"{'='*80}\n")
+        
+        try:
+            # Obtener contexto de memoria
+            memory_context = self._get_memory_context(context_id)
+            
+            # PASO 1: Analizar imágenes si existen
+            visual_findings = ""
+            if images and len(images) > 0:
+                print(f"📸 Analizando {len(images)} imagen(es)...")
+                visual_findings = await self.analyze_images(images)
+                self.visual_findings[context_id] = visual_findings
+                print(f"✅ Análisis visual completado")
+            else:
+                visual_findings = self.visual_findings.get(
+                    context_id, 
+                    "No se proporcionaron imágenes para análisis."
+                )
+            
+            # PASO 2: Clasificar consulta
+            print(f"🔍 Clasificando consulta...")
+            classification = await self.classify_query(query, memory_context, visual_findings)
+            print(f"✅ Clasificación completada")
+            
+            # PASO 3: Generar consultas de búsqueda
+            print(f"🔎 Generando consultas de búsqueda...")
+            search_query = await self.generate_search_queries(
+                classification, visual_findings, query
+            )
+            
+            # PASO 4: Buscar información
+            print(f"🌐 Buscando información médica...")
+            search_info = await self.search_medical_info(search_query)
+            print(f"✅ Búsqueda completada")
+            
+            # PASO 5: Generar respuesta final
+            print(f"📝 Generando respuesta médica final...")
+            final_response = await self.generate_medical_response(
+                query, memory_context, classification, visual_findings, search_info
+            )
+            
+            print(f"✅ Respuesta generada: {len(final_response)} caracteres")
+            print(f"📄 Respuesta preview: {final_response[:200]}...")
+            
+            # Guardar en memoria
+            self._save_to_memory(context_id, query, final_response)
+            
+            print(f"✅ Consulta médica completada\n")
+            
+            return final_response
+            
+        except Exception as e:
+            error_msg = f"ERROR: {str(e)}"
+            print(f"❌ {error_msg}")
+            return error_msg
+    
     async def stream(self, query: str, context_id: str, 
                     images: list[dict] = None) -> AsyncIterable[dict[str, Any]]:
         """
@@ -320,7 +394,7 @@ Proporciona un análisis médico completo y profesional."""
         - 'status': str (opcional)
         """
         print(f"\n{'='*80}")
-        print(f"🏥 Procesando consulta médica")
+        print(f"🏥 Procesando consulta médica (streaming)")
         print(f"Context ID: {context_id}")
         print(f"Query: {query[:100]}...")
         print(f"Imágenes recibidas: {len(images) if images else 0}")
