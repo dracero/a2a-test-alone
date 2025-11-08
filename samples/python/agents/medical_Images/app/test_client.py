@@ -101,7 +101,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
 
-    base_url = 'http://localhost:10001'
+    base_url = 'http://localhost:10002'
 
     # Crear el cliente httpx con un timeout más largo
     httpx_client = httpx.AsyncClient(timeout=60.0)

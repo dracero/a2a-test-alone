@@ -1,11 +1,14 @@
+# dracero/a2a-test-alone/a2a-test-alone-main/demo/ui/service/server/adk_host_manager.py (REVERTIDO A LA LÓGICA CORRECTA)
+
 import asyncio
-import base64  # <--- Asegúrate que esté importado
+import base64
 import datetime
 import json
 import os
 import uuid
 
 import httpx
+# MODIFICADO: Quitar BytesPart de esta lista
 from a2a.types import (AgentCard, Artifact, DataPart, FilePart, FileWithBytes,
                        FileWithUri, Message, Part, Role, Task,
                        TaskArtifactUpdateEvent, TaskState, TaskStatus,
@@ -166,9 +169,56 @@ class ADKHostManager(ApplicationManager):
                 actions=ADKEventActions(state_delta=state_update),
             ),
         )
-        
+
         # --- DEBUG: Ver el contenido que se envía al ADK ---
         adk_message_content = self.adk_content_from_message(message)
+        # Agrega estos logs JUSTO ANTES de enviar al ADK Runner en adk_host_manager.py
+        # En el método process_message(), después de la línea:
+        # adk_message_content = self.adk_content_from_message(message)
+
+        # AGREGA ESTE BLOQUE DE DEBUG:
+        print(f"\n{'='*80}")
+        print(f"🔍 DEBUG ADK_HOST_MANAGER - ANTES DE ENVIAR AL RUNNER")
+        print(f"Message ID: {message.message_id}")
+        print(f"Context ID: {context_id}")
+        print(f"Message parts count: {len(message.parts)}")
+
+        for i, part in enumerate(message.parts):
+            p = part.root
+            print(f"\n📦 Original Message Part {i}:")
+            print(f"  • kind: {p.kind}")
+            if p.kind == 'file':
+                print(f"  • file type: {type(p.file)}")
+                print(f"  • mime_type: {p.file.mime_type}")
+                if isinstance(p.file, FileWithBytes):
+                    print(f"  • bytes length: {len(p.file.bytes)} chars")
+                    print(f"  • bytes preview: {p.file.bytes[:50]}...")
+                elif isinstance(p.file, FileWithUri):
+                    print(f"  • uri: {p.file.uri}")
+
+        print(f"\n🔄 ADK Content parts count: {len(adk_message_content.parts)}")
+
+        for i, part in enumerate(adk_message_content.parts):
+            print(f"\n📦 ADK Content Part {i}:")
+            if part.text:
+                print(f"  • Type: TEXT")
+                print(f"  • Content: {part.text[:50]}...")
+            elif part.inline_data:
+                print(f"  • Type: INLINE_DATA")
+                print(f"  • mime_type: {part.inline_data.mime_type}")
+                print(f"  • data length: {len(part.inline_data.data)} bytes")
+                print(f"  • data preview: {part.inline_data.data[:20]}")
+            elif part.file_data:
+                print(f"  • Type: FILE_DATA")
+                print(f"  • uri: {part.file_data.file_uri}")
+            else:
+                print(f"  • Type: UNKNOWN")
+                print(f"  • Part: {part}")
+
+        print(f"{'='*80}\n")
+
+        # Luego continúa con el código normal:
+        # async for event in self._host_runner.run_async(...)
         print(f"DEBUG ADK_HOST: Enviando {len(adk_message_content.parts)} partes al ADK Runner.")
         for i, part in enumerate(adk_message_content.parts):
             if part.text:
@@ -215,7 +265,7 @@ class ADKHostManager(ApplicationManager):
 
         if conversation and response:
             conversation.messages.append(response)
-        
+
         # CRÍTICO: Limpiar pending message al final
         try:
             if message_id and message_id in self._pending_message_ids:
@@ -468,7 +518,6 @@ class ADKHostManager(ApplicationManager):
     def adk_content_from_message(self, message: Message) -> types.Content:
         """
         Convierte un mensaje A2A al formato de Google ADK.
-        CORREGIDO: Maneja correctamente las imágenes en base64.
         """
         parts: list[types.Part] = []
         
@@ -478,13 +527,20 @@ class ADKHostManager(ApplicationManager):
             if part.kind == 'text':
                 parts.append(types.Part.from_text(text=part.text))
             
+            # --- INICIO DE LA REVERSIÓN ---
+            # Se elimina el bloque 'elif part.kind == 'bytes': ...'
+            # --- FIN DE LA REVERSIÓN ---
+
             elif part.kind == 'data':
                 json_string = json.dumps(part.data)
                 parts.append(types.Part.from_text(text=json_string))
             
+            # Este bloque 'file' es el original y el correcto.
+            # Manejará el FilePart(FileWithBytes(...)) que envía el frontend.
             elif part.kind == 'file':
                 if isinstance(part.file, FileWithUri):
                     # Archivo con URI
+                    print(f"📎 Agregando FilePart (URI): {part.file.mime_type}, {part.file.uri}")
                     parts.append(
                         types.Part.from_uri(
                             file_uri=part.file.uri,
@@ -492,22 +548,20 @@ class ADKHostManager(ApplicationManager):
                         )
                     )
                 else:
-                    # Archivo con bytes
-                    file_bytes = part.file.bytes
+                    # Archivo con bytes (FileWithBytes)
+                    # Aquí part.file.bytes es el string base64 enviado por el frontend
+                    file_bytes = part.file.bytes 
                     
-                    # ✅ CORRECCIÓN: Manejar correctamente los bytes
                     if isinstance(file_bytes, str):
                         # Si es un string base64, decodificarlo a bytes
                         try:
-                            # Intentar decodificar como base64
                             decoded_bytes = base64.b64decode(file_bytes)
                             print(f"✅ Base64 decodificado: {len(decoded_bytes)} bytes")
                         except Exception as e:
-                            # Si falla, intentar como UTF-8
                             print(f"⚠️ No es base64, usando UTF-8: {e}")
                             decoded_bytes = file_bytes.encode('utf-8')
                     elif isinstance(file_bytes, bytes):
-                        # Ya son bytes, usar directamente
+                        # Si ya son bytes (aunque no debería pasar desde el front), usar directamente
                         decoded_bytes = file_bytes
                         print(f"✅ Bytes directo: {len(decoded_bytes)} bytes")
                     else:
@@ -516,12 +570,12 @@ class ADKHostManager(ApplicationManager):
                     
                     parts.append(
                         types.Part.from_bytes(
-                            data=decoded_bytes,
+                            data=decoded_bytes, # Pasamos los bytes decodificados al ADK
                             mime_type=part.file.mime_type,
                         )
                     )
                     
-                    print(f"📎 Archivo agregado: {part.file.mime_type}, {len(decoded_bytes)} bytes")
+                    print(f"📎 Archivo agregado (FileWithBytes): {part.file.mime_type}, {len(decoded_bytes)} bytes")
         
         return types.Content(parts=parts, role=message.role)
 
@@ -548,26 +602,26 @@ class ADKHostManager(ApplicationManager):
                     parts.append(Part(root=DataPart(data=data)))
                 except:  # noqa: E722
                     parts.append(Part(root=TextPart(text=part.text)))
+            
+            # CORRECCIÓN (Bonus):
+            # Asegurarse de que el agente pueda devolver imágenes
             elif part.inline_data:
-                # --- INICIO DE LA CORRECCIÓN 2 ---
-                # 'part.inline_data.data' son bytes crudos del agente.
-                # 'FileWithBytes' en nuestro frontend espera un string base64.
-                # Debemos codificar a base64.
                 try:
-                    base64_string = base64.b64encode(part.inline_data.data).decode('utf-8') # <--- CORREGIDO
+                    # Codificar los bytes del agente a base64 para el frontend
+                    base64_string = base64.b64encode(part.inline_data.data).decode('utf-8')
                     parts.append(
                         Part(
                             root=FilePart(
                                 file=FileWithBytes(
-                                    bytes=base64_string, # <--- CORREGIDO
-                                    mime_type=part.file_data.mime_type,
+                                    bytes=base64_string,
+                                    mime_type=part.inline_data.mime_type, # Usar mime_type de inline_data
                                 ),
                             )
                         )
                     )
                 except Exception as e:
                      print(f"Error al codificar inline_data (agente a usuario): {e}")
-                # --- FIN DE LA CORRECCIÓN 2 ---
+
             elif part.file_data:
                 parts.append(
                     Part(
@@ -679,8 +733,9 @@ def get_message_id(m: Message | None) -> str | None:
 def task_still_open(task: Task | None) -> bool:
     if not task:
         return False
+    # CORRECCIÓN de typo
     return task.status.state in [
         TaskState.submitted,
-        Task_state.working,
+        TaskState.working, # <--- Corregido
         TaskState.input_required,
     ]

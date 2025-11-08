@@ -1,14 +1,15 @@
 import asyncio
 import base64
-import copy  # ← AGREGAR ESTE IMPORT
+import copy
 import os
 import uuid
-from typing import cast
+from typing import Any, cast
 
 import httpx
-from a2a.types import FilePart, FileWithUri, Message, Part
+from a2a.types import (FilePart, FileWithBytes, FileWithUri, Message, Part,
+                       TextPart)
 from fastapi import BackgroundTasks, FastAPI, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from service.types import (CreateConversationResponse, GetEventResponse,
                            ListAgentResponse, ListConversationResponse,
                            ListMessageResponse, ListTaskResponse, MessageInfo,
@@ -22,7 +23,15 @@ from .in_memory_manager import InMemoryFakeAgentManager
 # --- MODELOS PYDANTIC PARA LOS BODIES ---
 
 class SendMessageBody(BaseModel):
-    params: Message
+    params: dict[str, Any]  # Cambiado a dict para parseo manual
+    
+    @field_validator('params', mode='before')
+    @classmethod
+    def parse_params(cls, v: Any) -> dict[str, Any]:
+        """Validador que acepta el dict tal cual viene del frontend"""
+        if isinstance(v, dict):
+            return v
+        return v
 
 class ListMessagesBody(BaseModel):
     params: str
@@ -93,11 +102,171 @@ class ConversationServer:
         c = await self.manager.create_conversation()
         return CreateConversationResponse(result=c)
 
+    def parse_message_from_dict(self, data: dict[str, Any]) -> Message:
+        """
+        🔧 NUEVO: Parsea un diccionario del frontend a un objeto Message válido.
+        Maneja los diferentes formatos de Part que puede enviar el frontend.
+        """
+        print(f"\n{'='*60}")
+        print(f"🔍 PARSING MESSAGE FROM FRONTEND")
+        print(f"Raw data keys: {data.keys()}")
+        print(f"{'='*60}\n")
+        
+        parts: list[Part] = []
+        
+        for i, part_data in enumerate(data.get('parts', [])):
+            print(f"📦 Part {i}: {part_data}")
+            
+            kind = part_data.get('kind')
+            
+            if kind == 'text':
+                # Texto simple
+                parts.append(Part(root=TextPart(text=part_data.get('text', ''))))
+                print(f"  ✅ Text part added")
+                
+            elif kind == 'file':
+                # Archivo (imagen u otro)
+                file_data = part_data.get('file', {})
+                mime_type = file_data.get('mime_type', 'application/octet-stream')
+                
+                if 'bytes' in file_data:
+                    # FileWithBytes (nuevo del frontend)
+                    bytes_data = file_data['bytes']
+                    print(f"  ✅ File part (bytes) added: {mime_type}, {len(bytes_data)} chars")
+                    parts.append(
+                        Part(
+                            root=FilePart(
+                                file=FileWithBytes(
+                                    bytes=bytes_data,
+                                    mime_type=mime_type,
+                                    name=file_data.get('name')
+                                )
+                            )
+                        )
+                    )
+                elif 'uri' in file_data:
+                    # FileWithUri (del cache)
+                    print(f"  ✅ File part (URI) added: {file_data['uri']}")
+                    parts.append(
+                        Part(
+                            root=FilePart(
+                                file=FileWithUri(
+                                    uri=file_data['uri'],
+                                    mime_type=mime_type
+                                )
+                            )
+                        )
+                    )
+                else:
+                    print(f"  ⚠️ File part without bytes or URI")
+            else:
+                print(f"  ⚠️ Unknown part kind: {kind}")
+        
+        # 🔧 CORRECCIÓN: Normalizar el role a string sin 'Role.' prefix
+        role_value = data.get('role', 'user')
+        if isinstance(role_value, str):
+            # Limpiar si viene como 'Role.user' o 'user'
+            role_value = role_value.replace('Role.', '').lower()
+        
+        # Construir el mensaje usando model_validate para que Pydantic maneje la conversión
+        message_dict = {
+            'message_id': data.get('message_id', str(uuid.uuid4())),
+            'context_id': data.get('context_id', ''),
+            'role': role_value,
+            'parts': parts,
+        }
+        
+        # Agregar campos opcionales solo si existen
+        if 'recipient' in data:
+            message_dict['recipient'] = data['recipient']
+        if 'metadata' in data:
+            message_dict['metadata'] = data['metadata']
+        
+        message = Message(**message_dict)
+        
+        print(f"\n✅ Message parsed successfully:")
+        print(f"  • message_id: {message.message_id}")
+        print(f"  • context_id: {message.context_id}")
+        print(f"  • role: {message.role}")
+        print(f"  • parts count: {len(message.parts)}")
+        print(f"{'='*60}\n")
+        
+        return message
+
+    def restore_files_from_cache(self, message: Message) -> Message:
+        """
+        🔧 CORREGIDO: Maneja tanto archivos nuevos (FileWithBytes) como cacheados (FileWithUri).
+        - FileWithBytes (nuevo del frontend): Se mantiene tal cual
+        - FileWithUri (del cache): Se restaura desde el cache
+        """
+        message_copy = copy.deepcopy(message)
+        restored_parts: list[Part] = []
+        
+        for i, part in enumerate(message_copy.parts):
+            p = part.root
+            
+            # Si NO es un archivo, mantenerlo tal cual
+            if p.kind != 'file':
+                restored_parts.append(part)
+                continue
+            
+            # Si es FileWithBytes (mensaje nuevo del frontend), mantenerlo
+            if isinstance(p.file, FileWithBytes):
+                print(f"✅ Keeping new FileWithBytes: {p.file.mime_type}, {len(p.file.bytes)} chars")
+                restored_parts.append(part)
+                continue
+            
+            # Si es FileWithUri (mensaje del cache), restaurar desde cache
+            if isinstance(p.file, FileWithUri):
+                # Extraer el cache_id de la URI (formato: /message/file/{cache_id})
+                uri_parts = p.file.uri.split('/')
+                if len(uri_parts) >= 3 and uri_parts[-2] == 'file':
+                    cache_id = uri_parts[-1]
+                    
+                    # Buscar en el cache
+                    if cache_id in self._file_cache:
+                        cached_part = self._file_cache[cache_id]
+                        print(f"✅ Restored file from cache: {cache_id}")
+                        restored_parts.append(Part(root=cached_part))
+                        continue
+                    else:
+                        print(f"⚠️ Cache ID not found: {cache_id}")
+                
+                # Si no se pudo restaurar, mantener la URI
+                print(f"⚠️ Keeping FileWithUri (not in cache): {p.file.uri}")
+                restored_parts.append(part)
+                continue
+        
+        message_copy.parts = restored_parts
+        return message_copy
+
     async def _send_message(
         self, body: SendMessageBody, background_tasks: BackgroundTasks
     ):
-        message = body.params
+        # 🔧 CORRECCIÓN CRÍTICA: Parsear el dict a Message manualmente
+        message = self.parse_message_from_dict(body.params)
+        
         message = self.manager.sanitize_message(message)
+        
+        # Restaurar archivos desde cache (solo para URIs)
+        # Los FileWithBytes nuevos se mantienen intactos
+        message = self.restore_files_from_cache(message)
+        
+        print(f"\n{'='*60}")
+        print(f"📤 SEND MESSAGE - Parts after restore:")
+        for i, part in enumerate(message.parts):
+            p = part.root
+            if p.kind == 'file':
+                if isinstance(p.file, FileWithBytes):
+                    print(f"  Part {i}: FileWithBytes - {p.file.mime_type}, {len(p.file.bytes)} chars base64")
+                elif isinstance(p.file, FileWithUri):
+                    print(f"  Part {i}: FileWithUri - {p.file.uri}")
+            elif p.kind == 'text':
+                print(f"  Part {i}: Text - {p.text[:50]}...")
+            else:
+                print(f"  Part {i}: {p.kind}")
+        print(f"{'='*60}\n")
+        
         background_tasks.add_task(self.manager.process_message, message)
         return SendMessageResponse(
             result=MessageInfo(
@@ -117,8 +286,8 @@ class ConversationServer:
 
     def cache_content(self, messages: list[Message]) -> list[Message]:
         """
-        CORRECCIÓN: Hace una copia profunda de los mensajes antes de modificarlos
-        para no alterar el estado interno del manager.
+        Hace una copia profunda de los mensajes y reemplaza FileWithBytes
+        con FileWithUri para la UI. Los archivos originales se guardan en cache.
         """
         rval = []
 
@@ -143,15 +312,15 @@ class ConversationServer:
                 # Verificar si ya tenemos este archivo cacheado
                 if message_part_id in self._message_to_cache:
                     cache_id = self._message_to_cache[message_part_id]
-
                 else:
                     cache_id = str(uuid.uuid4())
                     self._message_to_cache[message_part_id] = cache_id
                     # Solo cachear si no existe
                     if cache_id not in self._file_cache:
                         self._file_cache[cache_id] = part
+                        print(f"💾 File cached: {cache_id} ({part.file.mime_type})")
 
-                # Reemplazar con URI
+                # Reemplazar con URI para la UI
                 new_parts.append(
                     Part(
                         root=FilePart(
@@ -184,14 +353,17 @@ class ConversationServer:
         return ListTaskResponse(result=self.manager.tasks)
 
     async def _register_agent(self, body: RegisterAgentBody):
+        """Register a new agent"""
         url = body.params
         self.manager.register_agent(url)
         return RegisterAgentResponse()
 
     async def _list_agents(self):
+        """List all registered agents"""
         return ListAgentResponse(result=self.manager.agents)
 
     def _files(self, file_id: str):
+        """Serve cached files"""
         if file_id not in self._file_cache:
             raise Exception('file not found')
         part = self._file_cache[file_id]
