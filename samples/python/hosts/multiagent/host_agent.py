@@ -6,8 +6,9 @@ import uuid
 
 import httpx
 from a2a.client import A2ACardResolver, ClientConfig, ClientFactory
-from a2a.types import (AgentCard, DataPart, Message, Part, Role, Task,
-                       TaskState, TextPart, TransportProtocol)
+from a2a.types import (AgentCard, DataPart, FilePart, FileWithBytes, Message,
+                       Part, Role, Task, TaskState, TextPart,
+                       TransportProtocol)
 from google.adk import Agent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.readonly_context import ReadonlyContext
@@ -34,13 +35,21 @@ class HostAgent:
         self.task_callback = task_callback
         self.httpx_client = http_client
         self.timestamp_extension = TimestampExtension()
+        # 🔧 NUEVO: Cache para guardar los archivos del mensaje original
+        self._user_message_files: dict[str, list[Part]] = {}
+        # Crear el cliente httpx con timeout personalizado
+        httpx_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(300.0)  # 300 segundos
+        )
+
+        # Usar ese cliente en tu configuración
         config = ClientConfig(
-            httpx_client=self.httpx_client,
+            httpx_client=httpx_client,
             supported_transports=[
                 TransportProtocol.jsonrpc,
                 TransportProtocol.http_json,
-            ],
-        )
+            ]
+)
         client_factory = ClientFactory(config)
         client_factory = self.timestamp_extension.wrap_client_factory(
             client_factory
@@ -60,9 +69,6 @@ class HostAgent:
         async with asyncio.TaskGroup() as task_group:
             for address in remote_agent_addresses:
                 task_group.create_task(self.retrieve_card(address))
-        # The task groups run in the background and complete.
-        # Once completed the self.agents string is set and the remote
-        # connections are established.
 
     async def retrieve_card(self, address: str):
         card_resolver = A2ACardResolver(self.httpx_client, address)
@@ -138,6 +144,38 @@ Current agent: {current_agent['active_agent']}
         if 'session_active' not in state or not state['session_active']:
             state['session_active'] = True
 
+        # 🔧 NUEVO: Guardar archivos del mensaje original
+        message_id = state.get('message_id')
+        if message_id and llm_request.contents:
+            file_parts = []
+            for content in llm_request.contents:
+                if hasattr(content, 'parts'):
+                    for part in content.parts:
+                        # Buscar partes con inline_data (imágenes/archivos)
+                        if hasattr(part, 'inline_data') and part.inline_data:
+                            print(f"🔍 HOST_AGENT before_model_callback: Archivo detectado")
+                            print(f"   • mime_type: {part.inline_data.mime_type}")
+                            print(f"   • data length: {len(part.inline_data.data)} bytes")
+                            
+                            # Convertir a base64 para guardar
+                            base64_data = base64.b64encode(part.inline_data.data).decode('utf-8')
+                            
+                            file_parts.append(
+                                Part(
+                                    root=FilePart(
+                                        file=FileWithBytes(
+                                            bytes=base64_data,
+                                            mime_type=part.inline_data.mime_type,
+                                            name=f'file_{len(file_parts)}'
+                                        )
+                                    )
+                                )
+                            )
+            
+            if file_parts:
+                self._user_message_files[message_id] = file_parts
+                print(f"✅ HOST_AGENT: Guardados {len(file_parts)} archivos para message_id={message_id}")
+
     def list_remote_agents(self):
         """List the available remote agents you can use to delegate the task."""
         if not self.remote_agent_connections:
@@ -165,30 +203,66 @@ Current agent: {current_agent['active_agent']}
         Yields:
           A dictionary of JSON data.
         """
+        print(f"\n{'='*60}")
+        print(f"🔍 HOST_AGENT send_message:")
+        print(f"   • agent_name: {agent_name}")
+        print(f"   • message: {message[:100]}...")
+        
         if agent_name not in self.remote_agent_connections:
             raise ValueError(f'Agent {agent_name} not found')
+        
         state = tool_context.state
         state['agent'] = agent_name
         client = self.remote_agent_connections[agent_name]
         if not client:
             raise ValueError(f'Client not available for {agent_name}')
+        
         task_id = state.get('task_id', None)
         context_id = state.get('context_id', None)
         message_id = state.get('message_id', None)
-        task: Task
+        
+        print(f"   • message_id: {message_id}")
+        print(f"   • context_id: {context_id}")
+        print(f"   • task_id: {task_id}")
+        
         if not message_id:
             message_id = str(uuid.uuid4())
 
+        # 🔧 NUEVO: Construir partes del mensaje incluyendo archivos
+        message_parts = [Part(root=TextPart(text=message))]
+        
+        # Recuperar archivos del mensaje original si existen
+        if message_id in self._user_message_files:
+            file_parts = self._user_message_files[message_id]
+            print(f"   ✅ Recuperados {len(file_parts)} archivos del cache")
+            message_parts.extend(file_parts)
+            
+            # Limpiar el cache después de usar
+            del self._user_message_files[message_id]
+        else:
+            print(f"   ⚠️ No hay archivos en cache para message_id={message_id}")
+
+        print(f"   📤 Enviando {len(message_parts)} partes al remote agent")
+        for i, part in enumerate(message_parts):
+            p = part.root
+            if p.kind == 'text':
+                print(f"      Part {i}: Text ({len(p.text)} chars)")
+            elif p.kind == 'file':
+                print(f"      Part {i}: File ({p.file.mime_type})")
+        print(f"{'='*60}\n")
+
         request_message = Message(
             role=Role.user,
-            parts=[Part(root=TextPart(text=message))],
+            parts=message_parts,  # 🔧 Ahora incluye texto + archivos
             message_id=message_id,
             context_id=context_id,
             task_id=task_id,
         )
+        
         response = await client.send_message(request_message)
         if isinstance(response, Message):
             return await convert_parts(response.parts, tool_context)
+        
         task: Task = response
         # Assume completion unless a state returns that isn't complete
         state['session_active'] = task.status.state not in [
@@ -205,14 +279,12 @@ Current agent: {current_agent['active_agent']}
             tool_context.actions.skip_summarization = True
             tool_context.actions.escalate = True
         elif task.status.state == TaskState.canceled:
-            # Open question, should we return some info for cancellation instead
             raise ValueError(f'Agent {agent_name} task {task.id} is cancelled')
         elif task.status.state == TaskState.failed:
-            # Raise error for failure
             raise ValueError(f'Agent {agent_name} task {task.id} failed')
+        
         response = []
         if task.status.message:
-            # Assume the information is in the task message.
             if ts := self.timestamp_extension.get_timestamp(
                 task.status.message
             ):
@@ -238,22 +310,61 @@ async def convert_parts(parts: list[Part], tool_context: ToolContext):
 
 
 async def convert_part(part: Part, tool_context: ToolContext):
+    """
+    🔧 CORREGIDO: Maneja tanto string base64 como bytes directos
+    """
     if part.root.kind == 'text':
         return part.root.text
+    
     if part.root.kind == 'data':
         return part.root.data
+    
     if part.root.kind == 'file':
-        # Repackage A2A FilePart to google.genai Blob
-        # Currently not considering plain text as files
-        file_id = part.root.file.name
-        file_bytes = base64.b64decode(part.root.file.bytes)
+        print(f"\n{'='*60}")
+        print(f"🔍 HOST_AGENT convert_part (FILE):")
+        print(f"  • mime_type: {part.root.file.mime_type}")
+        print(f"  • name: {part.root.file.name}")
+        print(f"  • bytes type: {type(part.root.file.bytes)}")
+        
+        file_id = part.root.file.name or str(uuid.uuid4())
+        file_bytes_raw = part.root.file.bytes
+        
+        # 🔧 CORRECCIÓN: Normalizar el formato de bytes
+        if isinstance(file_bytes_raw, str):
+            # Si es string, asumimos que es base64 y lo decodificamos
+            print(f"  • Decoding from base64 string ({len(file_bytes_raw)} chars)")
+            try:
+                file_bytes = base64.b64decode(file_bytes_raw)
+                print(f"  ✅ Decoded to {len(file_bytes)} bytes")
+            except Exception as e:
+                print(f"  ❌ Error decoding base64: {e}")
+                print(f"  • Trying UTF-8 encode as fallback")
+                file_bytes = file_bytes_raw.encode('utf-8')
+        elif isinstance(file_bytes_raw, bytes):
+            # Si ya son bytes, usarlos directamente
+            print(f"  • Already bytes ({len(file_bytes_raw)} bytes)")
+            file_bytes = file_bytes_raw
+        else:
+            print(f"  ❌ Unsupported bytes type: {type(file_bytes_raw)}")
+            print(f"{'='*60}\n")
+            return f'Unknown file type: {type(file_bytes_raw)}'
+        
+        # Crear Part de ADK con inline_data
         file_part = types.Part(
             inline_data=types.Blob(
-                mime_type=part.root.file.mime_type, data=file_bytes
+                mime_type=part.root.file.mime_type, 
+                data=file_bytes
             )
         )
+        
+        # Guardar como artefacto
         await tool_context.save_artifact(file_id, file_part)
         tool_context.actions.skip_summarization = True
         tool_context.actions.escalate = True
+        
+        print(f"  ✅ File saved as artifact: {file_id}")
+        print(f"{'='*60}\n")
+        
         return DataPart(data={'artifact-file-id': file_id})
-    return f'Unknown type: {part.kind}'
+    
+    return f'Unknown type: {part.root.kind}'

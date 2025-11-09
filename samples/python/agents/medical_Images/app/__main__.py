@@ -13,6 +13,7 @@ from a2a.server.tasks import (BasePushNotificationSender,
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 from app.agent import MedicalAgent
 from app.agent_executor import MedicalAgentExecutor
+from app.custom_request_handler import MedicalAgentExecutorWrapper
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -89,12 +90,24 @@ def main(host, port):
             config_store=push_config_store
         )
         
+        # ✨ NUEVO: Crear executor con wrapper para manejar inline_data
+        logger.info("🔧 Inicializando executor con soporte de inline_data...")
+        
+        # Executor real
+        real_executor = MedicalAgentExecutor()
+        
+        # Wrapper que pre-procesa inline_data → FilePart
+        wrapped_executor = MedicalAgentExecutorWrapper(real_executor)
+        
+        # Request handler con el executor envuelto
         request_handler = DefaultRequestHandler(
-            agent_executor=MedicalAgentExecutor(),
+            agent_executor=wrapped_executor,
             task_store=InMemoryTaskStore(),
             push_config_store=push_config_store,
             push_sender=push_sender
         )
+        
+        logger.info("✅ Executor wrapper configurado correctamente")
         
         # Crear aplicación
         server = A2AStarletteApplication(
@@ -104,6 +117,7 @@ def main(host, port):
         
         logger.info(f"🏥 Iniciando Asistente Médico en http://{host}:{port}")
         logger.info(f"📋 Capacidades: Análisis de imágenes, Búsqueda médica, Memoria conversacional")
+        logger.info(f"🔧 Modo: Executor con wrapper para inline_data")
         
         # Ejecutar servidor
         uvicorn.run(server.build(), host=host, port=port)

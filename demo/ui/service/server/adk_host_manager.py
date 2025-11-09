@@ -129,7 +129,7 @@ class ADKHostManager(ApplicationManager):
                 ):
                     message.task_id = task_id
         return message
-
+    ####
     async def process_message(self, message: Message):
         message_id = message.message_id
         if message_id:
@@ -148,10 +148,35 @@ class ADKHostManager(ApplicationManager):
             )
         )
         final_event = None
-        # Determine if a task is to be resumed.
-        session = await self._session_service.get_session(
-            app_name='A2A', user_id='test_user', session_id=context_id
-        )
+        
+        # 🔧 CORRECCIÓN: Verificar y crear sesión si no existe
+        session = None
+        if context_id:
+            try:
+                session = await self._session_service.get_session(
+                    app_name='A2A', 
+                    user_id='test_user', 
+                    session_id=context_id
+                )
+            except Exception as e:
+                print(f"⚠️ Session no encontrada: {e}")
+                session = None
+        
+        # Si no hay sesión, crear una nueva
+        if not session:
+            print(f"🔧 Creando nueva sesión para context_id={context_id}")
+            session = await self._session_service.create_session(
+                app_name='A2A',
+                user_id='test_user'
+            )
+            # Actualizar context_id si se creó nueva sesión
+            if not context_id:
+                context_id = session.id
+                message.context_id = context_id
+                if conversation:
+                    conversation.conversation_id = context_id
+            print(f"✅ Sesión creada: {session.id}")
+        
         task_id = message.task_id
         # Update state must happen in an event
         state_update = {
@@ -159,28 +184,34 @@ class ADKHostManager(ApplicationManager):
             'context_id': context_id,
             'message_id': message.message_id,
         }
-        # Need to upsert session state now, only way is to append an event.
-        await self._session_service.append_event(
-            session,
-            ADKEvent(
-                id=ADKEvent.new_id(),
-                author='host_agent',
-                invocation_id=ADKEvent.new_id(),
-                actions=ADKEventActions(state_delta=state_update),
-            ),
-        )
+        
+        # 🔧 CORRECCIÓN: Verificar que session existe antes de append_event
+        if session:
+            try:
+                await self._session_service.append_event(
+                    session,
+                    ADKEvent(
+                        id=ADKEvent.new_id(),
+                        author='host_agent',
+                        invocation_id=ADKEvent.new_id(),
+                        actions=ADKEventActions(state_delta=state_update),
+                    ),
+                )
+            except Exception as e:
+                print(f"❌ Error en append_event: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"⚠️ No se pudo agregar evento: session es None")
 
         # --- DEBUG: Ver el contenido que se envía al ADK ---
         adk_message_content = self.adk_content_from_message(message)
-        # Agrega estos logs JUSTO ANTES de enviar al ADK Runner en adk_host_manager.py
-        # En el método process_message(), después de la línea:
-        # adk_message_content = self.adk_content_from_message(message)
-
-        # AGREGA ESTE BLOQUE DE DEBUG:
+        
         print(f"\n{'='*80}")
         print(f"🔍 DEBUG ADK_HOST_MANAGER - ANTES DE ENVIAR AL RUNNER")
         print(f"Message ID: {message.message_id}")
         print(f"Context ID: {context_id}")
+        print(f"Session ID: {session.id if session else 'None'}")
         print(f"Message parts count: {len(message.parts)}")
 
         for i, part in enumerate(message.parts):
@@ -217,22 +248,11 @@ class ADKHostManager(ApplicationManager):
 
         print(f"{'='*80}\n")
 
-        # Luego continúa con el código normal:
-        # async for event in self._host_runner.run_async(...)
-        print(f"DEBUG ADK_HOST: Enviando {len(adk_message_content.parts)} partes al ADK Runner.")
-        for i, part in enumerate(adk_message_content.parts):
-            if part.text:
-                print(f"DEBUG ADK_HOST: Parte {i} (Texto): {part.text[:50]}...")
-            elif part.inline_data:
-                print(f"DEBUG ADK_HOST: Parte {i} (Bytes): {len(part.inline_data.data)} bytes, mime={part.inline_data.mime_type}")
-            elif part.file_data:
-                 print(f"DEBUG ADK_HOST: Parte {i} (URI): {part.file_data.file_uri}")
-        # --- FIN DEBUG ---
-
+        # Continuar con el flujo normal
         async for event in self._host_runner.run_async(
             user_id=self.user_id,
             session_id=context_id,
-            new_message=adk_message_content, # Usar la variable de depuración
+            new_message=adk_message_content,
         ):
             if (
                 event.actions.state_delta
@@ -250,6 +270,7 @@ class ADKHostManager(ApplicationManager):
                 )
             )
             final_event = event
+        
         response: Message | None = None
         if final_event:
             if (
@@ -664,32 +685,69 @@ class ADKHostManager(ApplicationManager):
             task_id=task_id,
             message_id=str(uuid.uuid4()),
         )
-
+    #####
     async def _handle_function_response(
-        self, part: types.Part, context_id: str | None, task_id: str | None
-    ) -> list[Part]:
+    self, part: types.Part, context_id: str | None, task_id: str | None
+) -> list[Part]:
+        """
+        🔧 CORREGIDO: Agregado debugging para ver qué responde el remote agent
+        """
         parts = []
+        
+        print(f"\n{'='*60}")
+        print(f"🔍 ADK_HOST _handle_function_response:")
+        print(f"  • function_name: {part.function_response.name}")
+        print(f"  • response keys: {part.function_response.response.keys()}")
+        
         try:
-            for p in part.function_response.response['result']:
+            result = part.function_response.response.get('result', [])
+            print(f"  • result items count: {len(result)}")
+            
+            for i, p in enumerate(result):
+                print(f"\n  📦 Result item {i}:")
+                print(f"    • type: {type(p)}")
+                
                 if isinstance(p, str):
+                    print(f"    • String: {p[:100]}...")
                     parts.append(Part(root=TextPart(text=p)))
+                    
                 elif isinstance(p, dict):
+                    print(f"    • Dict keys: {p.keys()}")
+                    
                     if 'kind' in p and p['kind'] == 'file':
+                        print(f"    • File part detected")
+                        print(f"      - mime_type: {p.get('file', {}).get('mime_type')}")
+                        
+                        # 🔧 IMPORTANTE: Verificar formato de bytes
+                        file_data = p.get('file', {})
+                        if 'bytes' in file_data:
+                            bytes_data = file_data['bytes']
+                            print(f"      - bytes type: {type(bytes_data)}")
+                            print(f"      - bytes length: {len(bytes_data) if isinstance(bytes_data, (str, bytes)) else 'N/A'}")
+                        
                         parts.append(Part(root=FilePart(**p)))
                     else:
                         parts.append(Part(root=DataPart(data=p)))
+                        
                 elif isinstance(p, DataPart):
+                    print(f"    • DataPart")
+                    
                     if 'artifact-file-id' in p.data:
+                        print(f"    • Loading artifact: {p.data['artifact-file-id']}")
+                        
                         file_part = await self._artifact_service.load_artifact(
                             user_id=self.user_id,
                             session_id=context_id,
                             app_name=self.app_name,
                             filename=p.data['artifact-file-id'],
                         )
+                        
                         file_data = file_part.inline_data
-                        base64_data = base64.b64encode(file_data.data).decode(
-                            'utf-8'
-                        )
+                        print(f"      - Loaded {len(file_data.data)} bytes")
+                        
+                        base64_data = base64.b64encode(file_data.data).decode('utf-8')
+                        print(f"      - Encoded to base64: {len(base64_data)} chars")
+                        
                         parts.append(
                             Part(
                                 root=FilePart(
@@ -704,12 +762,20 @@ class ADKHostManager(ApplicationManager):
                     else:
                         parts.append(Part(root=DataPart(data=p.data)))
                 else:
+                    print(f"    ⚠️ Unknown type: {type(p)}")
                     parts.append(Part(root=TextPart(text='Unknown content')))
+                    
         except Exception as e:
-            print("Couldn't convert to messages:", e)
+            print(f"❌ Error converting response: {e}")
+            import traceback
+            traceback.print_exc()
             parts.append(
                 Part(root=DataPart(data=part.function_response.model_dump()))
             )
+        
+        print(f"\n  ✅ Converted to {len(parts)} parts")
+        print(f"{'='*60}\n")
+        
         return parts
 
     def process_message_threadsafe(

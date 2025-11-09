@@ -2,7 +2,7 @@ import base64
 import logging
 from typing import Any
 
-import httpx  # Asegúrate de que httpx esté en tu pyproject.toml
+import httpx
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
@@ -28,130 +28,115 @@ class MedicalAgentExecutor(AgentExecutor):
         Soporta ImagePart (kind='image') y FilePart (kind='file').
         """
         images = []
-        
-        # --- DEBUG LOG 1 ---
         if not context.message or not context.message.parts:
-            logger.info("DEBUG EXECUTOR: _extract_images_from_message FUE LLAMADO PERO NO HAY PARTES (context.message.parts está vacío)")
+            logger.info("DEBUG EXECUTOR: _extract_images_from_message llamado pero no hay partes.")
             return images
-        
-        # --- DEBUG LOG 2 ---
-        logger.info(f"DEBUG EXECUTOR: Procesando {len(context.message.parts)} partes del mensaje")
-        
-        # --- DEBUG LOG 3 ---
-        if context.message.metadata:
-            logger.info(f"DEBUG EXECUTOR: Metadata del mensaje: {context.message.metadata}")
-        else:
-            logger.info("DEBUG EXECUTOR: El mensaje NO tiene metadata")
 
-        logger.info("DEBUG EXECUTOR: Iniciando bucle de partes...")
-        # ---------------------
+        logger.info(f"DEBUG EXECUTOR: Procesando {len(context.message.parts)} partes del mensaje")
 
         for idx, part in enumerate(context.message.parts):
             part_root = part.root
             part_kind = getattr(part_root, 'kind', None)
-            
-            # --- DEBUG LOG 4 (El más importante) ---
-            logger.info(f"DEBUG EXECUTOR Parte {idx}: kind='{part_kind}', tipo={type(part_root).__name__}")
-            logger.info(f"DEBUG EXECUTOR Parte {idx} (repr): {repr(part_root)}")
-            # ---------------------------------------
-            
-            # ImagePart
-            if part_kind == 'image':
+            part_class_name = type(part_root).__name__
+
+            logger.info(f"DEBUG EXECUTOR Parte {idx}: kind='{part_kind}', tipo='{part_class_name}'")
+
+            # --- Lógica unificada para ImagePart ---
+            if part_kind == 'image' or part_class_name == 'ImagePart':
                 try:
                     if hasattr(part_root, 'data') and hasattr(part_root, 'mime_type'):
                         image_data = part_root.data
                         mime_type = part_root.mime_type
                         
+                        # Si es bytes, mantener como bytes crudos (NO codificar nuevamente)
                         if isinstance(image_data, bytes):
-                            image_data = base64.b64encode(image_data).decode('utf-8')
+                            logger.info(f"✅ ImagePart (bytes) extraída: {mime_type}, longitud datos: {len(image_data)} bytes")
+                        # Si es string, decodificar a bytes
+                        elif isinstance(image_data, str):
+                            try:
+                                image_data = base64.b64decode(image_data)
+                                logger.info(f"✅ ImagePart (string) decodificada: {mime_type}, longitud datos: {len(image_data)} bytes")
+                            except Exception as e:
+                                logger.warning(f"❌ Error decodificando ImagePart: {e}")
+                                continue
                         
                         images.append({
-                            'data': image_data,
+                            'data': image_data,  # ¡BYTES CRUDOS!
                             'mime_type': mime_type
                         })
-                        logger.info(f"✅ ImagePart extraída: {mime_type}")
+                        continue
                 except Exception as e:
                     logger.warning(f"❌ Error extrayendo ImagePart: {e}")
-            
-            # FilePart - LO QUE ENVÍA EL CLIENTE
-            elif part_kind == 'file':
+
+            # --- Lógica CORREGIDA para FilePart ---
+            elif part_kind == 'file' or part_class_name == 'FilePart':
                 try:
                     if hasattr(part_root, 'file'):
                         file_obj = part_root.file
-                        
-                        logger.debug(f"FilePart detectada, tipo: {type(file_obj).__name__}")
-                        
-                        # FileWithBytes
+                        logger.debug(f"FilePart detectada, tipo de file_obj: {type(file_obj).__name__}")
+
+                        # FileWithBytes (Tu caso de uso)
                         if hasattr(file_obj, 'bytes') and hasattr(file_obj, 'mime_type'):
                             image_data = file_obj.bytes
                             mime_type = file_obj.mime_type
                             
+                            # CORRECCIÓN: Si es bytes, mantener como bytes crudos (NO codificar nuevamente)
                             if isinstance(image_data, bytes):
-                                image_data = base64.b64encode(image_data).decode('utf-8')
+                                logger.info(f"✅ FilePart (bytes) extraída: {mime_type}, longitud datos: {len(image_data)} bytes")
+                            # Si es string, decodificar a bytes
+                            elif isinstance(image_data, str):
+                                try:
+                                    image_data = base64.b64decode(image_data)
+                                    logger.info(f"✅ FilePart (string) decodificada: {mime_type}, longitud datos: {len(image_data)} bytes")
+                                except Exception as e:
+                                    logger.warning(f"❌ Error decodificando base64: {e}")
+                                    continue
                             
                             images.append({
-                                'data': image_data,
+                                'data': image_data,  # ¡BYTES CRUDOS!
                                 'mime_type': mime_type
                             })
-                            logger.info(f"✅ FilePart (bytes) extraída: {mime_type}")
-                        
-                        # FileWithUri
+                            continue
+
+                        # FileWithUri (Caso de uso futuro)
                         elif hasattr(file_obj, 'uri') and hasattr(file_obj, 'mime_type'):
                             try:
-                                # 1. Construir la URL completa
-                                host_url = None
+                                host_url = "http://localhost:8080" # Fallback
                                 if context.message.metadata:
-                                    host_url = context.message.metadata.get('host_base_url')
+                                    host_url = context.message.metadata.get('host_base_url', host_url)
 
-                                # --- DEBUG LOG 5 ---
-                                logger.info(f"DEBUG EXECUTOR (FileWithUri): host_url extraído de metadata: {host_url}")
-                                
-                                if not host_url:
-                                    host_url = "http://localhost:8080" # ¡AJUSTA ESTO si tu UI no corre en 8080!
-                                    logger.warning(f"DEBUG EXECUTOR: No se encontró 'host_base_url', usando fallback: {host_url}")
+                                logger.info(f"DEBUG EXECUTOR (FileWithUri): host_url: {host_url}")
                                 
                                 image_url = file_obj.uri
                                 if not image_url.startswith('http'):
                                     image_url = f"{host_url.rstrip('/')}/{image_url.lstrip('/')}"
                                 
-                                # --- DEBUG LOG 6 ---
-                                logger.info(f"DEBUG EXECUTOR (FileWithUri): Intentando descargar desde URL completa: {image_url}")
+                                logger.info(f"DEBUG EXECUTOR (FileWithUri): Descargando desde: {image_url}")
                                 
-                                # 2. Descargar la imagen
                                 async with httpx.AsyncClient() as client:
                                     response = await client.get(image_url)
-                                    response.raise_for_status() # Lanza error si no es 200
+                                    response.raise_for_status()
                                     image_data_bytes = response.content
                                 
-                                # 3. Codificar y agregar
-                                image_data_b64 = base64.b64encode(image_data_bytes).decode('utf-8')
                                 images.append({
-                                    'data': image_data_b64,
+                                    'data': image_data_bytes,  # ¡BYTES CRUDOS!
                                     'mime_type': file_obj.mime_type
                                 })
-                                logger.info(f"✅ FileWithUri extraída: {file_obj.mime_type} desde {image_url}")
+                                logger.info(f"✅ FileWithUri extraída: {file_obj.mime_type}, longitud datos: {len(image_data_bytes)} bytes")
+                                continue
 
                             except Exception as e:
                                 logger.warning(f"❌ DEBUG EXECUTOR: Error extrayendo FileWithUri ({file_obj.uri}): {e}", exc_info=True)
-                    
+                
                 except Exception as e:
                     logger.warning(f"❌ DEBUG EXECUTOR: Error extrayendo FilePart: {e}", exc_info=True)
-            
-            # Fallback por nombre de clase
-            elif part_root.__class__.__name__ in ['ImagePart', 'FilePart']:
-                try:
-                    if hasattr(part_root, 'data'):
-                        # ... (lógica de fallback) ...
-                        pass
-                    elif hasattr(part_root, 'file'):
-                        # ... (lógica de fallback) ...
-                        pass
-                except Exception as e:
-                    logger.warning(f"❌ DEBUG EXECUTOR: Error en fallback: {e}")
         
         logger.info(f"📊 Total imágenes extraídas: {len(images)}")
+        for i, img in enumerate(images):
+            logger.info(f"   Imagen {i+1}: {img['mime_type']}, longitud datos: {len(img['data'])} bytes")
+        
         return images
-    
+
     def _extract_text_from_message(self, context: RequestContext) -> str:
         """Extrae el texto del mensaje."""
         text_parts = []
@@ -168,7 +153,7 @@ class MedicalAgentExecutor(AgentExecutor):
                     text_parts.append(part_root.text)
         
         combined_text = " ".join(text_parts).strip()
-        logger.info(f"📝 Texto extraído: {combined_text[:100]}...")
+        logger.info(f"📝 Texto extraído: {combined_text}")
         return combined_text
     
     def _validate_request(self, context: RequestContext) -> bool:
@@ -190,8 +175,6 @@ class MedicalAgentExecutor(AgentExecutor):
         logger.info("🚀 INICIANDO EJECUCIÓN MEDICAL AGENT")
         logger.info(f"   Task ID: {context.task_id}")
         logger.info(f"   Context ID: {context.context_id}")
-        logger.info(f"   Message ID: {context.message.message_id if context.message else 'N/A'}")
-        logger.info("="*80)
         
         # Validar
         error = self._validate_request(context)
@@ -200,7 +183,8 @@ class MedicalAgentExecutor(AgentExecutor):
         
         # Extraer contenido
         query = self._extract_text_from_message(context)
-        images = await self._extract_images_from_message(context)
+        # CORRECCIÓN: Asegurar que images sea siempre una lista
+        images = await self._extract_images_from_message(context) or []
         
         if not query and not images:
              logger.error("❌ Solicitud inválida: sin texto ni imágenes extraíbles")
@@ -209,8 +193,15 @@ class MedicalAgentExecutor(AgentExecutor):
         if not query and images:
             query = "Por favor, analiza estas imágenes médicas."
         
-        logger.info(f"📋 Query: {query[:100]}...")
-        logger.info(f"🖼️ Imágenes: {len(images)}")
+        logger.info(f"📋 Query final: {query}")
+        logger.info(f"🖼️ Imágenes extraídas para el agente: {len(images)}")
+        
+        # Mostrar información detallada de las imágenes
+        for i, img in enumerate(images):
+            logger.info(f"   Imagen {i+1}: {img['mime_type']}, longitud datos: {len(img['data'])}")
+            # Mostrar los primeros 20 caracteres de los datos para verificar
+            if len(img['data']) > 20:
+                logger.info(f"   Datos imagen {i+1} (primeros 20 chars): {img['data'][:20]}")
         
         # CRÍTICO: Obtener o crear tarea
         task = context.current_task
@@ -233,10 +224,19 @@ class MedicalAgentExecutor(AgentExecutor):
             chunk_count = 0
             last_status = None
             
+            # Mostrar información de las imágenes ANTES de enviar al agente
+            logger.info("📤 ENVIANDO AL AGENTE:")
+            logger.info(f"   Query: {query[:50]}...")
+            logger.info(f"   Número de imágenes: {len(images)}")
+            for i, img in enumerate(images):
+                logger.info(f"   Imagen {i+1}: {img['mime_type']}, longitud datos: {len(img['data'])}")
+                if len(img['data']) > 20:
+                    logger.info(f"   Datos imagen {i+1} (primeros 20 chars): {img['data'][:20]}")
+            
             async for item in self.agent.stream(query, task.context_id, images):
                 chunk_count += 1
                 
-                # Validar estructura
+                # ... (resto del código execute sin cambios) ...
                 if not isinstance(item, dict):
                     logger.error(f"❌ Item inválido (no es dict): {type(item)}")
                     continue
@@ -246,20 +246,16 @@ class MedicalAgentExecutor(AgentExecutor):
                 content = item.get('content', '')
                 status = item.get('status', 'general')
                 
-                # Solo log si el estado cambió (reducir spam)
                 if status != last_status:
                     logger.info(f"📦 Chunk {chunk_count}: status={status}, complete={is_complete}")
                     last_status = status
                 
                 if is_complete:
-                    # RESPUESTA FINAL - Guardar para procesar después del loop
                     final_response = content
                     logger.info(f"🎉 RESPUESTA FINAL RECIBIDA ({len(content)} caracteres)")
-                    logger.info(f"   Preview: {content[:200]}...")
                     break
                     
                 elif require_input:
-                    # Requiere input del usuario
                     logger.info("⏸️ Requiere input del usuario")
                     await updater.update_status(
                         TaskState.input_required,
@@ -273,7 +269,6 @@ class MedicalAgentExecutor(AgentExecutor):
                     break
                     
                 else:
-                    # Estado intermedio - actualizar progreso
                     if chunk_count == 1 or chunk_count % 2 == 0:
                         await updater.update_status(
                             TaskState.working,
@@ -284,7 +279,6 @@ class MedicalAgentExecutor(AgentExecutor):
                             ),
                         )
             
-            # PROCESAR RESPUESTA FINAL FUERA DEL LOOP
             if final_response:
                 logger.info("📤 Enviando respuesta final al cliente...")
                 
@@ -298,18 +292,18 @@ class MedicalAgentExecutor(AgentExecutor):
                 logger.info("✅ Tarea completada y marcada como finalizada")
                 
             else:
-                logger.error("❌ No se recibió respuesta final del agente")
-                has_error = True
-                
-                await updater.update_status(
-                    TaskState.failed,
-                    new_agent_text_message(
-                        "Error: No se pudo generar una respuesta médica completa.",
-                        task.context_id,
-                        task.id,
-                    ),
-                    final=True,
-                )
+                if not has_error: # Evitar doble error
+                    logger.error("❌ No se recibió respuesta final del agente")
+                    has_error = True
+                    await updater.update_status(
+                        TaskState.failed,
+                        new_agent_text_message(
+                            "Error: No se pudo generar una respuesta médica completa.",
+                            task.context_id,
+                            task.id,
+                        ),
+                        final=True,
+                    )
             
             logger.info(f"📊 Total chunks procesados: {chunk_count}")
         

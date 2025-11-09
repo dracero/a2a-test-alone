@@ -26,6 +26,7 @@ from state.state import AppState
 load_dotenv()
 
 
+
 def on_load(e: me.LoadEvent):  # pylint: disable=unused-argument
     """On load event"""
     state = me.state(AppState)
