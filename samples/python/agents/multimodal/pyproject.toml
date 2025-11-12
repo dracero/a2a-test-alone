@@ -1,0 +1,25 @@
+[project]
+name = "multimodal"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "a2a-sdk>=0.3.2",
+    "click>=8.2.1",
+    "httpx>=0.28.1",
+    "langchain>=0.3.27",
+    "langchain-core>=0.3.74",
+    "langchain-google-genai>=2.1.9",
+    "pdf2image>=1.17.0",
+    "pillow>=11.3.0",
+    "pydantic>=2.11.7",
+    "pypdf2>=3.0.1",
+    "python-dotenv>=1.1.1",
+    "qdrant-client>=1.15.1",
+    "sse-starlette>=3.0.2",
+    "starlette>=0.47.2",
+    "torch>=2.9.1",
+    "transformers>=4.46.3",
+    "uvicorn>=0.35.0",
+]

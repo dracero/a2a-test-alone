@@ -23,13 +23,14 @@ packages = ["common", "hosts"]
 [tool.uv.workspace]
 members = [
    "agents/medical_Images",
-    "agents/images",
-    "hosts/cli",
-    "hosts/extended_agent_card_cli",
-    "hosts/multiagent",
-    "hosts/a2a_multiagent_host",
-    "extensions/timestamp",
-    "extensions/traceability",
+   "agents/images",
+   "hosts/cli",
+   "hosts/extended_agent_card_cli",
+   "hosts/multiagent",
+   "hosts/a2a_multiagent_host",
+   "extensions/timestamp",
+   "extensions/traceability",
+   "agents/multimodal",
 ]
 
 [tool.hatch.metadata]
