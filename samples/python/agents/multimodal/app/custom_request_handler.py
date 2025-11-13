@@ -1,3 +1,5 @@
+# samples/python/agents/multimodal/app/custom_request_handler.py (CORREGIDO)
+
 """
 Custom Request Handler para el Asistente de Física.
 
@@ -67,7 +69,7 @@ class PhysicsAgentExecutorWrapper(AgentExecutor):
             else:
                 part_dict = {}
 
-            logger.info(f"📦 Parte {idx} dict keys: {part_dict.keys() if part_dict else 'empty'}")
+            logger.info(f"📦 Parte {idx} dict keys: {list(part_dict.keys()) if part_dict else 'empty'}")
 
             # CASO 1: inline_data (viene del host ADK con imágenes)
             if 'inline_data' in part_dict:
@@ -90,10 +92,10 @@ class PhysicsAgentExecutorWrapper(AgentExecutor):
                     # Convertir a base64 si son bytes
                     if isinstance(image_bytes, bytes):
                         image_data_b64 = base64.b64encode(image_bytes).decode('utf-8')
-                        logger.info(f"✅ Bytes → base64: {len(image_data_b64)} chars")
+                        logger.info(f"✅ inline_data: Bytes → base64 ({len(image_data_b64)} chars)")
                     elif isinstance(image_bytes, str):
                         image_data_b64 = image_bytes
-                        logger.info(f"✅ Base64 mantenido: {len(image_data_b64)} chars")
+                        logger.info(f"✅ inline_data: Base64 ya es string ({len(image_data_b64)} chars)")
                     else:
                         logger.warning(f"⚠️ Tipo de bytes desconocido: {type(image_bytes)}")
                         continue
@@ -161,20 +163,17 @@ class PhysicsAgentExecutorWrapper(AgentExecutor):
         logger.info("🔧 WRAPPER: Interceptando mensaje")
         logger.info("="*80)
 
-        # Pre-procesar el mensaje si existe
+        # 🔧 CORRECCIÓN CRÍTICA: Crear nuevo contexto en lugar de modificar ilegalmente
         if context.message:
             original_parts = len(context.message.parts) if context.message.parts else 0
             processed_message = self._preprocess_message(context.message)
             new_parts = len(processed_message.parts) if processed_message.parts else 0
             logger.info(f"📊 Transformación: {original_parts} → {new_parts} partes")
             
-            # Modificar el mensaje en el contexto
-            try:
-                object.__setattr__(context, '_message', processed_message)
-                logger.info("✅ Mensaje modificado en el contexto")
-            except Exception as e:
-                logger.error(f"❌ Error modificando mensaje: {e}")
-                logger.warning("⚠️ Usando contexto original")
+            # Crear un nuevo contexto con el mensaje procesado
+            from dataclasses import replace
+            context = replace(context, message=processed_message)
+            logger.info("✅ Contexto reemplazado con mensaje procesado")
         else:
             logger.warning("⚠️ Contexto sin mensaje")
 

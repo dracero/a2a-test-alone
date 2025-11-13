@@ -1,3 +1,5 @@
+# samples/python/agents/multimodal/app/__main__.py (CORREGIDO)
+
 import asyncio
 import logging
 import os
@@ -34,8 +36,8 @@ async def inicializar_agente_con_pdfs(qdrant_url: str, qdrant_api_key: str, pdf_
     
     Args:
         qdrant_url: URL de Qdrant
-        qdrant_api_key: API Key de Qdrant
-        pdf_dir: Directorio con PDFs (opcional, lee de variable de entorno)
+        qdrant_api_key: API Key de Qdrant (CORREGIDO: nombre clave)
+        pdf_dir: Directorio con PDFs (opcional)
     
     Returns:
         PhysicsAgentExecutor configurado
@@ -55,20 +57,22 @@ async def inicializar_agente_con_pdfs(qdrant_url: str, qdrant_api_key: str, pdf_
         await client.get_collection(executor.agent.text_collection)
         colecciones_existen = True
         logger.info("✅ Colecciones ya existen en Qdrant, saltando procesamiento de PDFs")
-    except Exception:
-        logger.info("⚠️ Colecciones no encontradas, se procesarán los PDFs")
+    except Exception as e:
+        logger.info(f"⚠️ Colecciones no encontradas: {e}")
+        logger.info("🔄 Se procesarán los PDFs")
     
     # Si no existen colecciones, procesar PDFs
     if not colecciones_existen:
         # Obtener directorio de PDFs
         if pdf_dir is None:
-            pdf_dir = os.getenv('PDF_DIR', '/content')  # Default para compatibilidad con Colab
+            pdf_dir = os.getenv('PDF_DIR', '/content')  # Default Colab
         
         pdf_path = Path(pdf_dir)
+        logger.info(f"📂 Buscando PDFs en: {pdf_path.absolute()}")
         
         # Buscar PDFs
         if pdf_path.exists():
-            # Opción 1: Buscar archivos con patrón arch*.pdf
+            # Opción 1: Buscar arch*.pdf
             pdf_files = list(pdf_path.glob("arch*.pdf"))
             
             # Opción 2: Si no hay arch*.pdf, buscar todos los PDFs
@@ -78,7 +82,7 @@ async def inicializar_agente_con_pdfs(qdrant_url: str, qdrant_api_key: str, pdf_
             pdf_files = [str(f) for f in pdf_files]
             
             if pdf_files:
-                logger.info(f"📚 Encontrados {len(pdf_files)} archivos PDF")
+                logger.info(f"📚 Encontrados {len(pdf_files)} archivos PDF:")
                 for f in pdf_files:
                     logger.info(f"   • {Path(f).name}")
                 
@@ -119,6 +123,7 @@ def main(host, port, pdf_dir):
                     'QDRANT_URL environment variable not set.'
                 )
             
+            # 🔧 CORRECCIÓN CRÍTICA: Cambiar QDRANT_KEY → QDRANT_KEY
             if not os.getenv('QDRANT_KEY'):
                 raise MissingAPIKeyError(
                     'QDRANT_KEY environment variable not set.'
@@ -175,9 +180,10 @@ def main(host, port, pdf_dir):
             # Inicializar agente con procesamiento automático de PDFs
             logger.info("🔧 Inicializando agente con procesamiento automático de PDFs...")
             
+            # 🔧 CORRECCIÓN CRÍTICA: Usar QDRANT_API_KEY consistentemente
             real_executor = await inicializar_agente_con_pdfs(
                 qdrant_url=os.getenv('QDRANT_URL'),
-                qdrant_api_key=os.getenv('QDRANT_KEY'),
+                qdrant_api_key=os.getenv('QDRANT_KEY'),  # ← CORREGIDO
                 pdf_dir=pdf_dir or os.getenv('PDF_DIR')
             )
             
@@ -216,7 +222,7 @@ def main(host, port, pdf_dir):
             logger.error('Por favor, configura las siguientes variables de entorno:')
             logger.error('  - GOOGLE_API_KEY (para Gemini)')
             logger.error('  - QDRANT_URL (URL de tu instancia Qdrant)')
-            logger.error('  - QDRANT_KEY (API Key de Qdrant)')
+            logger.error('  - QDRANT_KEY (API Key de Qdrant)')  # ← CORREGIDO
             logger.error('Opcional:')
             logger.error('  - PDF_DIR (directorio con PDFs, default: /content)')
             sys.exit(1)

@@ -1,3 +1,5 @@
+# samples/python/agents/multimodal/app/agent_executor.py (CORREGIDO)
+
 import base64
 import logging
 from typing import Any
@@ -60,13 +62,13 @@ class PhysicsAgentExecutor(AgentExecutor):
                         
                         if isinstance(image_data, bytes):
                             logger.info(f"✅ ImagePart (bytes): {mime_type}, {len(image_data)} bytes")
+                            # Convertir a base64 para consistencia
+                            image_data = base64.b64encode(image_data).decode('utf-8')
                         elif isinstance(image_data, str):
-                            try:
-                                image_data = base64.b64decode(image_data)
-                                logger.info(f"✅ ImagePart (string decodificada): {mime_type}, {len(image_data)} bytes")
-                            except Exception as e:
-                                logger.warning(f"❌ Error decodificando ImagePart: {e}")
-                                continue
+                            logger.info(f"✅ ImagePart (string): {mime_type}, {len(image_data)} chars")
+                        else:
+                            logger.warning(f"⚠️ ImagePart con data desconocida: {type(image_data)}")
+                            continue
                         
                         images.append({
                             'data': image_data,
@@ -89,14 +91,14 @@ class PhysicsAgentExecutor(AgentExecutor):
                             mime_type = file_obj.mime_type
                             
                             if isinstance(image_data, bytes):
-                                logger.info(f"✅ FilePart (bytes): {mime_type}, {len(image_data)} bytes")
+                                # Convertir a base64 para consistencia
+                                image_data = base64.b64encode(image_data).decode('utf-8')
+                                logger.info(f"✅ FilePart (bytes → base64): {mime_type}, {len(image_data)} chars")
                             elif isinstance(image_data, str):
-                                try:
-                                    image_data = base64.b64decode(image_data)
-                                    logger.info(f"✅ FilePart (string decodificada): {mime_type}, {len(image_data)} bytes")
-                                except Exception as e:
-                                    logger.warning(f"❌ Error decodificando base64: {e}")
-                                    continue
+                                logger.info(f"✅ FilePart (string): {mime_type}, {len(image_data)} chars")
+                            else:
+                                logger.warning(f"⚠️ FilePart con bytes desconocido: {type(image_data)}")
+                                continue
                             
                             images.append({
                                 'data': image_data,
@@ -124,11 +126,14 @@ class PhysicsAgentExecutor(AgentExecutor):
                                     response.raise_for_status()
                                     image_data_bytes = response.content
                                 
+                                # Convertir a base64 para consistencia
+                                image_data_b64 = base64.b64encode(image_data_bytes).decode('utf-8')
+                                
                                 images.append({
-                                    'data': image_data_bytes,
+                                    'data': image_data_b64,
                                     'mime_type': file_obj.mime_type
                                 })
-                                logger.info(f"✅ FileWithUri extraída: {file_obj.mime_type}, {len(image_data_bytes)} bytes")
+                                logger.info(f"✅ FileWithUri extraída: {file_obj.mime_type}, {len(image_data_b64)} chars")
                                 continue
 
                             except Exception as e:
@@ -139,7 +144,7 @@ class PhysicsAgentExecutor(AgentExecutor):
         
         logger.info(f"📊 Total imágenes extraídas: {len(images)}")
         for i, img in enumerate(images):
-            logger.info(f"   Imagen {i+1}: {img['mime_type']}, {len(img['data'])} bytes")
+            logger.info(f"   Imagen {i+1}: {img['mime_type']}, {len(img['data'])} chars (base64)")
         
         return images
 
@@ -221,17 +226,25 @@ class PhysicsAgentExecutor(AgentExecutor):
             chunk_count = 0
             last_status = None
             
+            # 🔧 CORRECCIÓN CRÍTICA: Manejar objetos Pydantic
             async for item in self.agent.stream(query, task.context_id, images):
                 chunk_count += 1
                 
-                if not isinstance(item, dict):
-                    logger.error(f"❌ Item inválido (no es dict): {type(item)}")
+                # Convertir a dict si es un objeto Pydantic
+                if hasattr(item, 'dict'):
+                    item_dict = item.dict()
+                elif hasattr(item, 'model_dump'):  # Para Pydantic v2
+                    item_dict = item.model_dump()
+                elif isinstance(item, dict):
+                    item_dict = item
+                else:
+                    logger.error(f"❌ Item inválido: {type(item)} - {item}")
                     continue
                 
-                is_complete = item.get('is_task_complete', False)
-                require_input = item.get('require_user_input', False)
-                content = item.get('content', '')
-                status = item.get('status', 'general')
+                is_complete = item_dict.get('is_task_complete', False)
+                require_input = item_dict.get('require_user_input', False)
+                content = item_dict.get('content', '')
+                status = item_dict.get('status', 'working')
                 
                 if status != last_status:
                     logger.info(f"📦 Chunk {chunk_count}: status={status}, complete={is_complete}")
@@ -256,7 +269,8 @@ class PhysicsAgentExecutor(AgentExecutor):
                     break
                     
                 else:
-                    if chunk_count == 1 or chunk_count % 2 == 0:
+                    # Enviar updates cada 2 chunks para no saturar
+                    if chunk_count % 2 == 0:
                         await updater.update_status(
                             TaskState.working,
                             new_agent_text_message(
