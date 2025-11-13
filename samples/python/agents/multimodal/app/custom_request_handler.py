@@ -158,22 +158,27 @@ class PhysicsAgentExecutorWrapper(AgentExecutor):
     ) -> None:
         """
         Intercepta execute() para pre-procesar el mensaje.
+        
+        IMPORTANTE: No modificamos el contexto porque es inmutable.
+        En su lugar, procesamos el mensaje y dejamos que el wrapped_executor
+        lo maneje directamente.
         """
         logger.info("="*80)
         logger.info("🔧 WRAPPER: Interceptando mensaje")
         logger.info("="*80)
 
-        # 🔧 CORRECCIÓN CRÍTICA: Crear nuevo contexto en lugar de modificar ilegalmente
+        # Pre-procesar mensaje si existe
         if context.message:
             original_parts = len(context.message.parts) if context.message.parts else 0
             processed_message = self._preprocess_message(context.message)
             new_parts = len(processed_message.parts) if processed_message.parts else 0
             logger.info(f"📊 Transformación: {original_parts} → {new_parts} partes")
             
-            # Crear un nuevo contexto con el mensaje procesado
-            from dataclasses import replace
-            context = replace(context, message=processed_message)
-            logger.info("✅ Contexto reemplazado con mensaje procesado")
+            # 🔧 SOLUCIÓN: Modificar las partes in-place
+            # El contexto es inmutable, pero la lista de partes sí es mutable
+            context.message.parts.clear()
+            context.message.parts.extend(processed_message.parts)
+            logger.info("✅ Partes del mensaje actualizadas in-place")
         else:
             logger.warning("⚠️ Contexto sin mensaje")
 
