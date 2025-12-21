@@ -11,6 +11,8 @@ from collections.abc import AsyncIterable
 from io import BytesIO
 from typing import Any
 from uuid import uuid4
+import urllib.request
+import urllib.parse
 
 from app.in_memory_cache import InMemoryCache
 # Import LangSmith configuration
@@ -71,19 +73,12 @@ def generate_image_tool(
 def _generate_image_internal(
     prompt: str, session_id: str, artifact_file_id: str = None
 ) -> str:
-    """Internal image generation logic with LangSmith tracing."""
+    """Internal image generation logic with LangSmith tracing using Pollinations.ai (Free)."""
     if not prompt:
         raise ValueError('Prompt cannot be empty')
 
-    client = genai.Client()
     cache = InMemoryCache()
 
-    text_input = (
-        prompt,
-        'Ignore any input images if they do not match the request.',
-    )
-
-    ref_image = None
     logger.info(f'Session id {session_id}')
     print(f'🎨 Generating image for session: {session_id}')
 
@@ -102,48 +97,61 @@ def _generate_image_internal(
         except Exception as e:
             logger.debug(f"LangSmith feedback error: {e}")
 
-    # Get reference image from cache if exists
+    # Reference image logic - Pollinations simple API doesn't support it directly
+    if artifact_file_id:
+        print(f'⚠️ Reference image {artifact_file_id} ignored (not supported by free model)')
+
+    print('🆕 Generating new image with Pollinations.ai')
+
     try:
-        ref_image_data = None
-        session_image_data = cache.get(session_id)
+        # Pollinations.ai generation
+        encoded_prompt = urllib.parse.quote(prompt)
+        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
         
-        if session_image_data and artifact_file_id:
-            try:
-                ref_image_data = session_image_data[artifact_file_id]
-                logger.info('Found reference image in prompt input')
-                print(f'🔄 Using reference image: {artifact_file_id}')
-            except Exception:
-                ref_image_data = None
-                
-        if not ref_image_data and session_image_data:
-            latest_image_key = list(session_image_data.keys())[-1]
-            ref_image_data = session_image_data[latest_image_key]
-            print(f'🔄 Using latest image as reference: {latest_image_key}')
-
-        if ref_image_data:
-            ref_bytes = base64.b64decode(ref_image_data.bytes)
-            ref_image = Image.open(BytesIO(ref_bytes))
-            
-    except Exception as e:
-        ref_image = None
-        logger.warning(f"Could not load reference image: {e}")
-
-    if ref_image:
-        contents = [text_input, ref_image]
-        print('🖼️ Generating with reference image')
-    else:
-        contents = text_input
-        print('🆕 Generating new image')
-
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.0-flash-preview-image-generation',
-            contents=contents,
-            config=types.GenerateContentConfig(
-                response_modalities=['Text', 'Image']
-            ),
+        print(f'🚀 Calling Pollinations.ai: {url}')
+        
+        req = urllib.request.Request(
+            url, 
+            headers={'User-Agent': 'Mozilla/5.0'}
         )
-        print('✅ Response received from Gemini')
+        
+        with urllib.request.urlopen(req) as response:
+            image_data_bytes = response.read()
+            
+        print('✅ Response received from Pollinations.ai')
+        
+        data = Imagedata(
+            bytes=base64.b64encode(image_data_bytes).decode('utf-8'),
+            mime_type='image/jpeg',
+            name='generated_image.jpg',
+            id=uuid4().hex,
+        )
+        
+        session_data = cache.get(session_id)
+        if session_data is None:
+            cache.set(session_id, {data.id: data})
+        else:
+            session_data[data.id] = data
+
+        print(f'✅ Image generated with ID: {data.id}')
+        
+        # Log success to LangSmith
+        if LANGSMITH_ENABLED:
+            try:
+                langsmith_client.create_feedback(
+                    run_id=None,
+                    key="image_generation_success",
+                    value={
+                        "image_id": data.id,
+                        "prompt": prompt,
+                        "session_id": session_id,
+                        "mime_type": data.mime_type
+                    }
+                )
+            except:
+                pass
+
+        return data.id
         
     except Exception as e:
         logger.error(f'Error generating image: {e}')
@@ -160,54 +168,7 @@ def _generate_image_internal(
             except:
                 pass
         
-        # ✅ Devolver mensaje de error claro en lugar de número
         return f"ERROR: {str(e)}"
-
-    # Process response
-    for part in response.candidates[0].content.parts:
-        if part.inline_data is not None:
-            try:
-                print('Creating image data')
-                data = Imagedata(
-                    bytes=base64.b64encode(part.inline_data.data).decode('utf-8'),
-                    mime_type=part.inline_data.mime_type,
-                    name='generated_image.png',
-                    id=uuid4().hex,
-                )
-                
-                session_data = cache.get(session_id)
-                if session_data is None:
-                    cache.set(session_id, {data.id: data})
-                else:
-                    session_data[data.id] = data
-
-                print(f'✅ Image generated with ID: {data.id}')
-                
-                # Log success to LangSmith
-                if LANGSMITH_ENABLED:
-                    try:
-                        langsmith_client.create_feedback(
-                            run_id=None,
-                            key="image_generation_success",
-                            value={
-                                "image_id": data.id,
-                                "prompt": prompt,
-                                "session_id": session_id,
-                                "mime_type": data.mime_type
-                            }
-                        )
-                    except:
-                        pass
-
-                return data.id
-                
-            except Exception as e:
-                logger.error(f'Error processing image: {e}')
-                print(f'❌ Error processing image: {e}')
-                return f"ERROR: {str(e)}"
-    
-    # ✅ Si no hay inline_data, devolver mensaje claro
-    return "ERROR: No image data received from Gemini"
 
 
 class ImageGenerationAgent:
