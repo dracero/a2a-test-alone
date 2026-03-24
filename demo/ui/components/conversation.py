@@ -138,6 +138,9 @@ def conversation():
     if 'conversation_id' in me.query_params:
         page_state.conversation_id = me.query_params['conversation_id']
         app_state.current_conversation_id = page_state.conversation_id
+    elif not page_state.conversation_id and app_state.conversations:
+        page_state.conversation_id = app_state.conversations[0].conversation_id
+        app_state.current_conversation_id = page_state.conversation_id
     
     with me.box(
         style=me.Style(

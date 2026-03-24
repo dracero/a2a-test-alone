@@ -4,11 +4,41 @@ from collections.abc import AsyncIterable
 from pathlib import Path
 from typing import Any, Literal
 
-from langchain.memory import ConversationSummaryBufferMemory
 from langchain_community.tools import TavilySearchResults
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel
+
+
+class SimpleMemory:
+    """Memoria conversacional simplificada."""
+    
+    def __init__(self, max_entries: int = 10):
+        self.conversations = []
+        self.max_entries = max_entries
+    
+    def add_interaction(self, query: str, response: str):
+        """Guardar interacción."""
+        self.conversations.append({"query": query, "response": response})
+        if len(self.conversations) > self.max_entries:
+            self.conversations.pop(0)
+    
+    def get_context(self) -> str:
+        """Obtener contexto de conversación."""
+        if not self.conversations:
+            return "Primera consulta del paciente."
+        
+        # Mantener las últimas 3 conversaciones
+        recent = self.conversations[-3:]
+        context = []
+        for conv in recent:
+            context.append(f"Usuario: {conv['query']}")
+            context.append(f"Asistente: {conv['response']}")
+        return "\n".join(context)
+    
+    def clear(self):
+        """Limpiar memoria."""
+        self.conversations = []
 
 
 class MedicalResponseFormat(BaseModel):
@@ -59,32 +89,18 @@ class MedicalAgent:
     def _get_or_create_memory(self, context_id: str):
         """Obtener o crear memoria para un contexto específico."""
         if context_id not in self.memories:
-            self.memories[context_id] = ConversationSummaryBufferMemory(
-                llm=self.llm,
-                max_token_limit=2000,
-                return_messages=True
-            )
+            self.memories[context_id] = SimpleMemory()
         return self.memories[context_id]
     
     def _get_memory_context(self, context_id: str) -> str:
         """Obtener el contexto de memoria para un contexto específico."""
         memory = self._get_or_create_memory(context_id)
-        try:
-            memory_variables = memory.load_memory_variables({})
-            history_messages = memory_variables.get("history", [])
-            if history_messages:
-                return "\n".join([
-                    f"{type(msg).__name__}: {msg.content}" 
-                    for msg in history_messages
-                ])
-            return "Primera consulta del paciente."
-        except Exception:
-            return "Primera consulta del paciente."
+        return memory.get_context()
     
     def _save_to_memory(self, context_id: str, query: str, response: str):
         """Guardar interacción en memoria."""
         memory = self._get_or_create_memory(context_id)
-        memory.save_context({"input": query}, {"output": response})
+        memory.add_interaction(query, response)
     
     def encode_image(self, image_data: bytes) -> str:
         """Codifica imagen en base64."""

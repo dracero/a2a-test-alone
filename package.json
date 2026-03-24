@@ -1,0 +1,22 @@
+{
+  "name": "a2a-test-alone",
+  "version": "1.0.0",
+  "description": "Start demo UI and agents simultaneously",
+  "scripts": {
+    "dev": "bash start-ordered.sh",
+    "dev:all": "concurrently -n \"backend,frontend,img,med,mm\" -c \"blue,green,yellow,cyan,magenta\" \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run dev:agent:images\" \"npm run dev:agent:medical\" \"npm run dev:agent:multimodal\"",
+    "dev:backend": "cd demo/ui && uv run main.py",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:ui": "npm run dev:backend",
+    "dev:agent:images": "cd samples/python/agents/images && uv run python -m app",
+    "dev:agent:medical": "cd samples/python/agents/medical_Images && uv run python -m app",
+    "dev:agent:multimodal": "cd samples/python/agents/multimodal && uv run python -m app",
+    "dev:ordered": "bash start-ordered.sh",
+    "install:frontend": "cd frontend && npm install",
+    "build:frontend": "cd frontend && npm run build",
+    "type-check": "cd frontend && npm run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

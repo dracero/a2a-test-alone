@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, List, Literal, Optional
 
 import torch
-from langchain.memory import ConversationSummaryBufferMemory
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from PIL import Image
@@ -25,7 +24,7 @@ from transformers import CLIPModel, CLIPProcessor
 GEMINI_MODEL = "gemini-2.5-flash"
 
 class SemanticMemory:
-    """Memoria conversacional con resumen semántico."""
+    """Memoria conversacional simplificada sin dependencias deprecadas."""
     
     def __init__(self, llm, max_entries: int = 10):
         self.conversations = []
@@ -33,26 +32,23 @@ class SemanticMemory:
         self.summary = ""
         self.direct_history = ""
         self.llm = llm
-        self.memory = ConversationSummaryBufferMemory(
-            llm=self.llm,
-            max_token_limit=2000,
-            return_messages=True
-        )
     
     def add_interaction(self, query: str, response: str):
         """Guardar interacción en memoria."""
-        self.memory.save_context({"input": query}, {"output": response})
         self.conversations.append({"query": query, "response": response})
         
         if len(self.conversations) > self.max_entries:
             self.conversations.pop(0)
         
-        self.direct_history += f"\nUsuario: {query}\nAsistente: {response}\n"
-        
+        # Mantener solo las últimas 3 conversaciones en el historial directo
         if len(self.conversations) > 3:
             recent = self.conversations[-3:]
             self.direct_history = ""
             for conv in recent:
+                self.direct_history += f"\nUsuario: {conv['query']}\nAsistente: {conv['response']}\n"
+        else:
+            self.direct_history = ""
+            for conv in self.conversations:
                 self.direct_history += f"\nUsuario: {conv['query']}\nAsistente: {conv['response']}\n"
         
         self.update_summary()
@@ -75,7 +71,6 @@ class SemanticMemory:
         self.conversations = []
         self.summary = ""
         self.direct_history = ""
-        self.memory.clear()
 
 
 class PhysicsMultimodalAgent:
@@ -172,7 +167,14 @@ class PhysicsMultimodalAgent:
             ).to(self.clip_model.device)
             
             with torch.no_grad():
-                text_features = self.clip_model.get_text_features(**inputs)
+                outputs = self.clip_model.get_text_features(**inputs)
+                # Extraer el tensor del output (puede ser un objeto BaseModelOutputWithPooling)
+                if hasattr(outputs, 'pooler_output'):
+                    text_features = outputs.pooler_output
+                elif hasattr(outputs, 'last_hidden_state'):
+                    text_features = outputs.last_hidden_state[:, 0]  # CLS token
+                else:
+                    text_features = outputs  # Ya es un tensor
             embeddings.extend(text_features.cpu().numpy().tolist())
         return embeddings
     
@@ -182,7 +184,14 @@ class PhysicsMultimodalAgent:
             image = Image.open(BytesIO(image_data)).convert("RGB")
             inputs = self.clip_processor(images=image, return_tensors="pt").to(self.clip_model.device)
             with torch.no_grad():
-                image_features = self.clip_model.get_image_features(**inputs)
+                outputs = self.clip_model.get_image_features(**inputs)
+                # Extraer el tensor del output
+                if hasattr(outputs, 'pooler_output'):
+                    image_features = outputs.pooler_output
+                elif hasattr(outputs, 'last_hidden_state'):
+                    image_features = outputs.last_hidden_state[:, 0]
+                else:
+                    image_features = outputs
             return image_features.cpu().numpy().flatten().tolist()
         except Exception as e:
             print(f"❌ Error generando embedding: {e}")
@@ -199,7 +208,14 @@ class PhysicsMultimodalAgent:
                 max_length=77
             ).to(self.clip_model.device)
             with torch.no_grad():
-                text_features = self.clip_model.get_text_features(**inputs)
+                outputs = self.clip_model.get_text_features(**inputs)
+                # Extraer el tensor del output
+                if hasattr(outputs, 'pooler_output'):
+                    text_features = outputs.pooler_output
+                elif hasattr(outputs, 'last_hidden_state'):
+                    text_features = outputs.last_hidden_state[:, 0]
+                else:
+                    text_features = outputs
             return text_features.cpu().numpy().flatten().tolist()
         except Exception as e:
             print(f"❌ Error: {e}")
@@ -207,7 +223,7 @@ class PhysicsMultimodalAgent:
     
     async def store_in_qdrant(self, points: List[Any], collection_name: str):
         """Almacenar puntos en Qdrant."""
-        client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
+        client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=60.0)
         try:
             await client.get_collection(collection_name)
             print(f"📦 Colección '{collection_name}' existe")
@@ -217,8 +233,14 @@ class PhysicsMultimodalAgent:
                 vectors_config=VectorParams(size=512, distance=Distance.COSINE)
             )
             print(f"✨ Colección '{collection_name}' creada")
-        await client.upsert(collection_name=collection_name, points=points, wait=True)
-        print(f"✅ {len(points)} elementos almacenados")
+            
+        batch_size = 50
+        for i in range(0, len(points), batch_size):
+            batch = points[i:i + batch_size]
+            await client.upsert(collection_name=collection_name, points=batch, wait=True)
+            print(f"🔄 Lote de {len(batch)} puntos insertado ({min(i + batch_size, len(points))}/{len(points)})")
+            
+        print(f"✅ {len(points)} elementos almacenados en '{collection_name}'")
     
     async def extraer_temario(self, contenido_completo: str) -> str:
         """Extraer temario con Gemini."""
@@ -378,17 +400,19 @@ Contenido:
             
             for collection in collections:
                 try:
-                    search_results = await client.search(
+                    search_results = await client.query_points(
                         collection_name=collection,
-                        query_vector=search_embedding,
+                        query=search_embedding,
                         limit=top_k
                     )
                     col_type = collection.split("_")[-1]
+                    # query_points returns a QueryResponse object with a 'points' attribute
+                    points = search_results.points if hasattr(search_results, 'points') else search_results
                     results[col_type] = [{
                         "id": r.id,
                         "score": round(r.score, 4),
                         "payload": r.payload
-                    } for r in search_results]
+                    } for r in points]
                 except Exception as e:
                     print(f"⚠️ Error en {collection}: {e}")
             

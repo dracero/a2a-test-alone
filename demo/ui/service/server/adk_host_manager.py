@@ -21,11 +21,20 @@ from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
 from google.adk.sessions.in_memory_session_service import \
     InMemorySessionService
 from google.genai import types
-from host_agent import HostAgent
-from remote_agent_connection import TaskCallbackArg
+# from host_agent import HostAgent  # Comentado - no disponible sin workspace hosts
+# from remote_agent_connection import TaskCallbackArg  # Comentado - no disponible sin workspace hosts
 from service.server.application_manager import ApplicationManager
 from service.types import Conversation, Event
 from utils.agent_card import get_agent_card
+
+
+# Definiciones temporales para evitar errores de importación
+class HostAgent:
+    """Placeholder para HostAgent cuando no está disponible."""
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError("HostAgent requiere el workspace 'hosts' que fue eliminado")
+
+TaskCallbackArg = Task  # Type alias temporal
 
 
 class ADKHostManager(ApplicationManager):

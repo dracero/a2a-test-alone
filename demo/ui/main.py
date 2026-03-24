@@ -3,6 +3,7 @@ run:
   uv main.py
 """
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -62,21 +63,50 @@ security_policy = me.SecurityPolicy(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    os.environ['A2A_HOST'] = 'BEEAI'
     httpx_client_wrapper.start()
     
-    # ============ AGREGAR CORS AQUÍ ============
-    from fastapi.middleware.cors import CORSMiddleware
+    server = ConversationServer(app, httpx_client_wrapper())
     
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+    # Auto-register local sample agents with retry logic
+    async def register_with_retry(url: str, max_retries: int = 30, delay: float = 5.0):
+        """Intenta registrar un agente con reintentos (hasta 2.5 minutos)"""
+        for attempt in range(max_retries):
+            try:
+                server.manager.register_agent(url)
+                print(f"✅ Successfully registered agent at {url}")
+                return
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    if attempt == 0:
+                        print(f"⏳ Waiting for agent at {url} to be ready...")
+                    if attempt % 5 == 0 and attempt > 0:
+                        print(f"   Still waiting... ({attempt}/{max_retries} attempts)")
+                    await asyncio.sleep(delay)
+                else:
+                    print(f"❌ Failed to register agent at {url} after {max_retries} attempts")
+                    print(f"   The agent may still be processing PDFs. You can register it manually later using:")
+                    print(f"   curl -X POST http://localhost:12000/agent/register/manual -H 'Content-Type: application/json' -d '{{\"url\": \"{url}\"}}'")
+    
+    print("🚀 Starting agent registration (this may take a few minutes if agents are processing PDFs)...")
+    print("   Agents will be registered as they become available...")
+    print()
+    
+    # Registrar agentes en paralelo con reintentos (solo 3 agentes ahora)
+    await asyncio.gather(
+        register_with_retry("http://localhost:10001"),
+        register_with_retry("http://localhost:10002"),
+        register_with_retry("http://localhost:10003"),
+        return_exceptions=True
     )
-    # ============================================
     
-    ConversationServer(app, httpx_client_wrapper())
+    # Crear conversación inicial si no existe
+    try:
+        if not server.manager.conversations:
+            await server.manager.create_conversation()
+    except Exception as e:
+        print(f"Error creating initial conversation: {e}")
+
     app.openapi_schema = None
     app.mount(
         '/',
@@ -90,6 +120,7 @@ async def lifespan(app: FastAPI):
     yield
     await httpx_client_wrapper.stop()
 
+
 @me.page(
     path='/',
     title='Chat',
@@ -99,10 +130,8 @@ async def lifespan(app: FastAPI):
 def home_page():
     """Main Page"""
     state = me.state(AppState)
-    # Show API key dialog if needed
     api_key_dialog()
-    with page_scaffold():  # pylint: disable=not-context-manager
-        home_page_content(state)
+    conversation_page(state)
 
 
 @me.page(
@@ -191,39 +220,20 @@ httpx_client_wrapper = HTTPXClientWrapper()
 agent_server = None
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    httpx_client_wrapper.start()
-    ConversationServer(app, httpx_client_wrapper())
-    app.openapi_schema = None
-    app.mount(
-        '/',
-        WSGIMiddleware(
-            me.create_wsgi_app(
-                debug_mode=os.environ.get('DEBUG_MODE', '') == 'true'
-            )
-        ),
-    )
-    app.setup()
-    yield
-    await httpx_client_wrapper.stop()
-
-
 if __name__ == '__main__':
     import uvicorn
-    from fastapi.middleware.cors import CORSMiddleware  # ✅ Descomentar
+    from fastapi.middleware.cors import CORSMiddleware
     
     app = FastAPI(lifespan=lifespan)
     
-    # ====== AGREGAR CORS AQUÍ (DESCOMENTADO) ======
+    # Add CORS middleware to allow frontend requests
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    # ================================================
     
     # Setup the connection details, these should be set in the environment
     host = os.environ.get('A2A_UI_HOST', '0.0.0.0')

@@ -17,7 +17,8 @@ dependencies = [
     "google-genai>=1.9.0",
     "google-adk[a2a]>=1.7.0",
     "litellm",
-    "a2a-sample-client-multiagent",
+    "beeai-framework>=0.1.0",
+    "langchain-google-genai>=2.0.8",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -28,7 +29,6 @@ allow-direct-references = true
 
 [tool.uv.sources]
 a2a_ui = { workspace = true }
-a2a-sample-client-multiagent = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

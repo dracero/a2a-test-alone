@@ -18,18 +18,12 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["common", "hosts"]
+packages = []
 
 [tool.uv.workspace]
 members = [
    "agents/medical_Images",
    "agents/images",
-   "hosts/cli",
-   "hosts/extended_agent_card_cli",
-   "hosts/multiagent",
-   "hosts/a2a_multiagent_host",
-   "extensions/timestamp",
-   "extensions/traceability",
    "agents/multimodal",
 ]
 

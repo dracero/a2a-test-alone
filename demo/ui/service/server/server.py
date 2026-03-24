@@ -16,9 +16,10 @@ from service.types import (CreateConversationResponse, GetEventResponse,
                            PendingMessageResponse, RegisterAgentResponse,
                            SendMessageResponse)
 
-from .adk_host_manager import ADKHostManager, get_message_id
+from .adk_host_manager import ADKHostManager
 from .application_manager import ApplicationManager
 from .in_memory_manager import InMemoryFakeAgentManager
+from .message_utils import get_message_id
 
 # --- MODELOS PYDANTIC PARA LOS BODIES ---
 
@@ -35,6 +36,9 @@ class SendMessageBody(BaseModel):
 
 class ListMessagesBody(BaseModel):
     params: str
+    
+    class Config:
+        extra = 'allow'  # Permitir campos adicionales
 
 class RegisterAgentBody(BaseModel):
     params: str
@@ -62,6 +66,13 @@ class ConversationServer:
                 api_key=api_key,
                 uses_vertex_ai=uses_vertex_ai,
             )
+        elif agent_manager.upper() == 'BEEAI':
+            from .beeai_host_manager import BeeAIHostManager
+            self.manager = BeeAIHostManager(
+                http_client,
+                api_key=api_key,
+                uses_vertex_ai=uses_vertex_ai,
+            )
         else:
             self.manager = InMemoryFakeAgentManager()
 
@@ -85,6 +96,9 @@ class ConversationServer:
         app.add_api_route('/task/list', self._list_tasks, methods=['POST'])
         app.add_api_route(
             '/agent/register', self._register_agent, methods=['POST']
+        )
+        app.add_api_route(
+            '/agent/register/manual', self._register_agent_manual, methods=['POST']
         )
         app.add_api_route('/agent/list', self._list_agents, methods=['POST'])
         app.add_api_route(
@@ -276,6 +290,8 @@ class ConversationServer:
         )
 
     async def _list_messages(self, body: ListMessagesBody):
+        print(f"📋 LIST MESSAGES - Received body: {body}")
+        print(f"📋 Conversation ID: {body.params}")
         conversation_id = body.params
         conversation = self.manager.get_conversation(conversation_id)
         if conversation:
@@ -357,6 +373,19 @@ class ConversationServer:
         url = body.params
         self.manager.register_agent(url)
         return RegisterAgentResponse()
+    
+    async def _register_agent_manual(self, request: Request):
+        """Manually register an agent by URL (for debugging)"""
+        try:
+            data = await request.json()
+            url = data.get('url')
+            if not url:
+                return {'status': 'error', 'message': 'URL is required'}
+            
+            self.manager.register_agent(url)
+            return {'status': 'success', 'message': f'Agent registered: {url}'}
+        except Exception as e:
+            return {'status': 'error', 'message': str(e)}
 
     async def _list_agents(self):
         """List all registered agents"""
