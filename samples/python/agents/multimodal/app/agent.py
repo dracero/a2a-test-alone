@@ -3,12 +3,16 @@
 import asyncio
 import base64
 import glob
+import io
 import os
+import re
 from collections.abc import AsyncIterable
 from io import BytesIO
 from pathlib import Path
 from typing import Any, List, Literal, Optional
 
+# Importar matplotlib para renderizar LaTeX
+import matplotlib
 import torch
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -19,9 +23,110 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 from transformers import CLIPModel, CLIPProcessor
 
+matplotlib.use('Agg')  # Backend sin GUI
+import matplotlib.pyplot as plt
+from matplotlib import mathtext
+
 # ==================== CONFIGURACIÓN ====================
 
 GEMINI_MODEL = "gemini-2.5-flash"
+
+# ==================== UTILIDADES PARA RENDERIZAR LATEX ====================
+
+def latex_to_image_base64(latex_formula: str, fontsize: int = 16) -> str:
+    """
+    Convierte una fórmula LaTeX a imagen PNG en base64.
+    
+    Args:
+        latex_formula: Fórmula LaTeX (sin delimitadores $ o $$)
+        fontsize: Tamaño de fuente
+    
+    Returns:
+        String base64 de la imagen PNG
+    """
+    try:
+        # Crear figura con fondo transparente
+        fig = plt.figure(figsize=(0.01, 0.01), dpi=150)
+        fig.patch.set_alpha(0)
+        
+        # Renderizar LaTeX
+        text = fig.text(
+            0, 0, 
+            f'${latex_formula}$',
+            fontsize=fontsize,
+            color='black'
+        )
+        
+        # Ajustar tamaño de figura al texto
+        fig.canvas.draw()
+        bbox = text.get_window_extent(fig.canvas.get_renderer())
+        width, height = bbox.width / fig.dpi, bbox.height / fig.dpi
+        fig.set_size_inches(width * 1.2, height * 1.2)
+        
+        # Reposicionar texto centrado
+        text.set_position((0.5, 0.5))
+        text.set_horizontalalignment('center')
+        text.set_verticalalignment('center')
+        
+        # Guardar en buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight', 
+                   pad_inches=0.1, transparent=True, dpi=150)
+        plt.close(fig)
+        
+        # Convertir a base64
+        buf.seek(0)
+        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+        buf.close()
+        
+        return img_base64
+    except Exception as e:
+        print(f"❌ Error renderizando LaTeX '{latex_formula}': {e}")
+        return None
+
+
+def convert_latex_to_images_in_text(text: str) -> str:
+    """
+    Convierte todas las fórmulas LaTeX en un texto a imágenes embebidas en markdown.
+    
+    Busca patrones:
+    - $formula$ (inline)
+    - $$formula$$ (display)
+    
+    Y los reemplaza con:
+    ![formula](data:image/png;base64,...)
+    
+    Args:
+        text: Texto con fórmulas LaTeX
+    
+    Returns:
+        Texto con fórmulas convertidas a imágenes
+    """
+    # Patrón para display math ($$...$$)
+    display_pattern = r'\$\$(.*?)\$\$'
+    # Patrón para inline math ($...$)
+    inline_pattern = r'\$([^\$]+?)\$'
+    
+    def replace_display(match):
+        latex = match.group(1).strip()
+        img_base64 = latex_to_image_base64(latex, fontsize=18)
+        if img_base64:
+            return f'\n\n![formula](data:image/png;base64,{img_base64})\n\n'
+        return match.group(0)  # Si falla, mantener original
+    
+    def replace_inline(match):
+        latex = match.group(1).strip()
+        img_base64 = latex_to_image_base64(latex, fontsize=14)
+        if img_base64:
+            return f'![formula](data:image/png;base64,{img_base64})'
+        return match.group(0)  # Si falla, mantener original
+    
+    # Primero reemplazar display ($$...$$) para evitar conflictos
+    text = re.sub(display_pattern, replace_display, text, flags=re.DOTALL)
+    # Luego reemplazar inline ($...$)
+    text = re.sub(inline_pattern, replace_inline, text)
+    
+    return text
 
 class SemanticMemory:
     """Memoria conversacional simplificada sin dependencias deprecadas."""
@@ -32,6 +137,11 @@ class SemanticMemory:
         self.summary = ""
         self.direct_history = ""
         self.llm = llm
+        # Modo socrático
+        self.socratic_mode = False
+        self.socratic_questions_asked = 0
+        self.socratic_answers = []
+        self.original_query = ""
     
     def add_interaction(self, query: str, response: str):
         """Guardar interacción en memoria."""
@@ -71,6 +181,10 @@ class SemanticMemory:
         self.conversations = []
         self.summary = ""
         self.direct_history = ""
+        self.socratic_mode = False
+        self.socratic_questions_asked = 0
+        self.socratic_answers = []
+        self.original_query = ""
 
 
 class PhysicsMultimodalAgent:
@@ -560,7 +674,15 @@ Reglas:
 - Técnico pero claro
 - Relacionar con temario
 - Conectar imágenes con teoría
-- Incluir ecuaciones
+- **IMPORTANTE: Todas las fórmulas y ecuaciones DEBEN estar en formato LaTeX**
+  - Usa `$formula$` para fórmulas inline (en línea con el texto)
+  - Usa `$$formula$$` para fórmulas display (en bloque separado)
+  - Ejemplos:
+    * Inline: La energía cinética es $E_k = \\frac{{1}}{{2}}mv^2$
+    * Display: $$F = ma$$
+    * Display complejo: $$\\vec{{F}} = m\\vec{{a}}$$
+- NUNCA uses texto plano para fórmulas (NO escribas "F = m*a" o "E = 1/2*m*v^2")
+- Usa notación matemática correcta: vectores con \\vec{{}}, fracciones con \\frac{{}}{{}}, subíndices con _, superíndices con ^
 """
         
         user_prompt = f"""
@@ -582,7 +704,145 @@ DOCUMENTOS:
 IMÁGENES:
 {image_context}
 
-Explicación completa."""
+Explicación completa con todas las fórmulas en formato LaTeX."""
+        
+        try:
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
+            ]
+            response = self.llm.invoke(messages)
+            return response.content
+        except Exception as e:
+            return f"Error: {str(e)}"
+    
+    async def generate_socratic_question(
+        self,
+        original_query: str,
+        question_number: int,
+        previous_answers: List[str]
+    ) -> str:
+        """Genera una pregunta socrática para guiar al estudiante."""
+        system_prompt = f"""Eres un profesor de Física I de la UBA que usa el método socrático.
+
+Tu objetivo es guiar al estudiante a descubrir la respuesta por sí mismo mediante preguntas.
+
+TEMARIO:
+{self.temario}
+
+Reglas para las preguntas:
+- Pregunta {question_number + 1}/3
+- Haz preguntas que activen el pensamiento crítico
+- Relaciona con conceptos fundamentales
+- Progresa desde lo básico a lo específico
+- Sé breve y directo
+- **Si incluyes fórmulas, usa formato LaTeX**: `$formula$` para inline, `$$formula$$` para display
+  - Ejemplo: ¿Qué relación hay entre $F$ y $a$ en la segunda ley de Newton?
+
+Formato de respuesta:
+🎓 **Pregunta {question_number + 1}/3**
+
+[Tu pregunta aquí]
+
+💡 *Piensa en los conceptos fundamentales antes de responder.*
+"""
+        
+        previous_context = ""
+        if previous_answers:
+            previous_context = "\n\nRespuestas previas del estudiante:\n" + "\n".join([
+                f"Pregunta {i+1}: {ans}"
+                for i, ans in enumerate(previous_answers)
+            ])
+        
+        user_prompt = f"""
+CONSULTA ORIGINAL DEL ESTUDIANTE:
+{original_query}
+{previous_context}
+
+Genera la pregunta socrática número {question_number + 1} para guiar al estudiante."""
+        
+        try:
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
+            ]
+            response = self.llm.invoke(messages)
+            return response.content
+        except Exception as e:
+            return f"Error: {str(e)}"
+    
+    async def generate_physics_response_with_socratic(
+        self,
+        query: str,
+        context: str,
+        classification: str,
+        visual_findings: str,
+        document_context: str,
+        image_context: str,
+        student_answers: str
+    ) -> str:
+        """Genera respuesta final después del diálogo socrático."""
+        system_prompt = f"""Profesor de Física I UBA que usa el método socrático.
+
+Has guiado al estudiante con 3 preguntas socráticas. Ahora proporciona la respuesta completa.
+
+TEMARIO:
+{self.temario}
+
+Estructura de tu respuesta:
+1. **REFLEXIÓN SOBRE TUS RESPUESTAS**: Comenta brevemente las respuestas del estudiante
+2. **CONTEXTO DEL TEMA**: Sitúa el problema en el temario
+3. **EXPLICACIÓN TEÓRICA**: Teoría fundamental
+4. **ANÁLISIS DETALLADO**: Conecta con las preguntas socráticas
+5. **ECUACIONES Y CÁLCULOS**: Desarrollo matemático
+6. **EJEMPLOS PRÁCTICOS**: Aplicaciones
+7. **RESUMEN Y CONCLUSIÓN**: Síntesis final
+
+Reglas:
+- Reconoce los aciertos del estudiante
+- Corrige errores con tacto
+- Conecta sus respuestas con la teoría
+- Refuerza el aprendizaje activo
+- **CRÍTICO: Todas las fórmulas DEBEN estar en formato LaTeX**
+  - Usa `$formula$` para fórmulas inline (en línea con el texto)
+  - Usa `$$formula$$` para fórmulas display (en bloque separado)
+  - Ejemplos correctos:
+    * Inline: La segunda ley de Newton establece que $\\vec{{F}} = m\\vec{{a}}$
+    * Display: $$E_k = \\frac{{1}}{{2}}mv^2$$
+    * Display con múltiples líneas:
+      $$
+      \\begin{{align}}
+      W &= \\Delta E_k \\\\
+      W &= \\frac{{1}}{{2}}mv_f^2 - \\frac{{1}}{{2}}mv_i^2
+      \\end{{align}}
+      $$
+- NUNCA uses texto plano para fórmulas
+- Usa notación matemática correcta: \\vec{{}}, \\frac{{}}{{}}, \\Delta, \\theta, etc.
+"""
+        
+        user_prompt = f"""
+CONSULTA ORIGINAL:
+{query}
+
+CONTEXTO PREVIO:
+{context}
+
+CLASIFICACIÓN:
+{classification}
+
+HALLAZGOS VISUALES:
+{visual_findings}
+
+RESPUESTAS DEL ESTUDIANTE A LAS PREGUNTAS SOCRÁTICAS:
+{student_answers}
+
+DOCUMENTOS DE REFERENCIA:
+{document_context}
+
+IMÁGENES RELACIONADAS:
+{image_context}
+
+Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando el proceso de pensamiento del estudiante."""
         
         try:
             messages = [
@@ -598,7 +858,7 @@ Explicación completa."""
     
     async def invoke(self, query: str, context_id: str, 
                     images: List[dict] = None) -> str:
-        """Procesa consulta completa."""
+        """Procesa consulta completa con modo socrático."""
         print(f"\n{'='*80}")
         print(f"📚 Consulta de física")
         print(f"Query: {query[:100]}...")
@@ -606,7 +866,91 @@ Explicación completa."""
         print(f"{'='*80}\n")
         
         try:
+            memory = self._get_or_create_memory(context_id)
             memory_context = self._get_memory_context(context_id)
+            
+            # Verificar si estamos en modo socrático
+            if memory.socratic_mode:
+                # Guardar respuesta del estudiante
+                memory.socratic_answers.append(query)
+                memory.socratic_questions_asked += 1
+                
+                print(f"🎓 Modo socrático: {memory.socratic_questions_asked}/3 preguntas respondidas")
+                
+                # Si ya respondió las 3 preguntas, dar la respuesta completa
+                if memory.socratic_questions_asked >= 3:
+                    print(f"✅ Completadas las 3 preguntas, generando respuesta final...")
+                    
+                    # Analizar imágenes si las hay
+                    visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
+                    image_embedding = None
+                    
+                    # Clasificar
+                    classification = await self.classify_query(
+                        memory.original_query, memory_context, visual_findings
+                    )
+                    
+                    # Buscar
+                    search_query = await self.generate_search_query(
+                        classification, visual_findings, memory.original_query
+                    )
+                    search_results = await self.search_multimodal(
+                        query=search_query,
+                        image_embedding=image_embedding,
+                        top_k=5
+                    )
+                    
+                    # Contexto
+                    document_context = "\n".join([
+                        f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
+                        for i, r in enumerate(search_results.get('text', []))
+                    ])
+                    
+                    image_context = "\n".join([
+                        f"--- Imagen {i+1} ---\nPDF: {r['payload'].get('pdf_name', 'N/A')}"
+                        for i, r in enumerate(search_results.get('image', []))
+                    ])
+                    
+                    # Generar respuesta final incluyendo las respuestas del estudiante
+                    student_answers_summary = "\n".join([
+                        f"Pregunta {i+1}: {ans}"
+                        for i, ans in enumerate(memory.socratic_answers)
+                    ])
+                    
+                    final_response = await self.generate_physics_response_with_socratic(
+                        memory.original_query, memory_context, classification, 
+                        visual_findings, document_context, image_context,
+                        student_answers_summary
+                    )
+                    
+                    # Convertir fórmulas LaTeX a imágenes
+                    final_response = convert_latex_to_images_in_text(final_response)
+                    
+                    # Resetear modo socrático
+                    memory.socratic_mode = False
+                    memory.socratic_questions_asked = 0
+                    memory.socratic_answers = []
+                    memory.original_query = ""
+                    
+                    self._save_to_memory(context_id, query, final_response)
+                    print(f"✅ Completado\n")
+                    
+                    return final_response
+                else:
+                    # Generar siguiente pregunta socrática
+                    next_question = await self.generate_socratic_question(
+                        memory.original_query,
+                        memory.socratic_questions_asked,
+                        memory.socratic_answers
+                    )
+                    
+                    # Convertir fórmulas LaTeX a imágenes
+                    next_question = convert_latex_to_images_in_text(next_question)
+                    
+                    return next_question
+            
+            # Modo normal: iniciar modo socrático
+            print(f"🎓 Iniciando modo socrático...")
             
             # Analizar imágenes
             visual_findings = ""
@@ -621,46 +965,23 @@ Explicación completa."""
                 if isinstance(first_image_data, str):
                     first_image_data = base64.b64decode(first_image_data)
                 image_embedding = self.generate_image_embedding(first_image_data)
-            else:
-                visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
             
-            # Clasificar
-            print(f"🔍 Clasificando...")
-            classification = await self.classify_query(query, memory_context, visual_findings)
+            # Activar modo socrático
+            memory.socratic_mode = True
+            memory.original_query = query
+            memory.socratic_questions_asked = 0
+            memory.socratic_answers = []
             
-            # Buscar
-            print(f"🔎 Buscando...")
-            search_query = await self.generate_search_query(
-                classification, visual_findings, query
-            )
-            search_results = await self.search_multimodal(
-                query=search_query,
-                image_embedding=image_embedding,
-                top_k=5
+            # Generar primera pregunta socrática
+            first_question = await self.generate_socratic_question(
+                query, 0, []
             )
             
-            # Contexto
-            document_context = "\n".join([
-                f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
-                for i, r in enumerate(search_results.get('text', []))
-            ])
+            # Convertir fórmulas LaTeX a imágenes
+            first_question = convert_latex_to_images_in_text(first_question)
             
-            image_context = "\n".join([
-                f"--- Imagen {i+1} ---\nPDF: {r['payload'].get('pdf_name', 'N/A')}"
-                for i, r in enumerate(search_results.get('image', []))
-            ])
+            return first_question
             
-            # Respuesta
-            print(f"📝 Generando respuesta...")
-            final_response = await self.generate_physics_response(
-                query, memory_context, classification, visual_findings,
-                document_context, image_context
-            )
-            
-            self._save_to_memory(context_id, query, final_response)
-            print(f"✅ Completado\n")
-            
-            return final_response
         except Exception as e:
             print(f"❌ Error: {e}")
             import traceback
@@ -675,6 +996,8 @@ Explicación completa."""
         - 'require_user_input': bool
         - 'content': str
         - 'status': str (opcional)
+        
+        Implementa modo socrático con 3 preguntas antes de la respuesta.
         """
         print(f"\n{'='*80}")
         print(f"📚 Consulta (streaming)")
@@ -682,97 +1005,194 @@ Explicación completa."""
         print(f"Imágenes: {len(images) if images else 0}")
         print(f"{'='*80}\n")
         
+        memory = self._get_or_create_memory(context_id)
         memory_context = self._get_memory_context(context_id)
         
-        # Analizar imágenes
-        visual_findings = ""
-        image_embedding = None
-        
-        if images and len(images) > 0:
-            yield {
-                'is_task_complete': False,
-                'require_user_input': False,
-                'content': f'🖼️ Analizando {len(images)} imagen(es)...',
-                'status': 'analyzing_images'
-            }
+        # Verificar si estamos en modo socrático
+        if memory.socratic_mode:
+            # Guardar respuesta del estudiante
+            memory.socratic_answers.append(query)
+            memory.socratic_questions_asked += 1
             
-            visual_findings = await self.analyze_physics_image(images)
-            self.visual_findings[context_id] = visual_findings
+            print(f"🎓 Modo socrático: {memory.socratic_questions_asked}/3 preguntas respondidas")
             
-            first_image_data = images[0].get('data') or images[0].get('bytes')
-            if isinstance(first_image_data, str):
-                first_image_data = base64.b64decode(first_image_data)
-            image_embedding = self.generate_image_embedding(first_image_data)
-            
-            yield {
-                'is_task_complete': False,
-                'require_user_input': False,
-                'content': '✅ Fenómenos físicos identificados.',
-                'status': 'analyzing_images'
-            }
+            # Si ya respondió las 3 preguntas, dar la respuesta completa
+            if memory.socratic_questions_asked >= 3:
+                print(f"✅ Completadas las 3 preguntas, generando respuesta final...")
+                
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': False,
+                    'content': '🎓 Excelente! Has completado las 3 preguntas. Ahora te daré la explicación completa...',
+                    'status': 'socratic_complete'
+                }
+                
+                # Analizar imágenes si las hay
+                visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
+                image_embedding = None
+                
+                # Clasificar
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': False,
+                    'content': '📚 Analizando tu proceso de pensamiento...',
+                    'status': 'classifying'
+                }
+                
+                classification = await self.classify_query(
+                    memory.original_query, memory_context, visual_findings
+                )
+                
+                # Buscar
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': False,
+                    'content': '🔎 Buscando información complementaria...',
+                    'status': 'searching_documents'
+                }
+                
+                search_query = await self.generate_search_query(
+                    classification, visual_findings, memory.original_query
+                )
+                search_results = await self.search_multimodal(
+                    query=search_query,
+                    image_embedding=image_embedding,
+                    top_k=5
+                )
+                
+                # Contexto
+                document_context = "\n".join([
+                    f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
+                    for i, r in enumerate(search_results.get('text', []))
+                ])
+                
+                image_context = "\n".join([
+                    f"--- Imagen {i+1} ---\nPDF: {r['payload'].get('pdf_name', 'N/A')}"
+                    for i, r in enumerate(search_results.get('image', []))
+                ])
+                
+                # Respuesta
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': False,
+                    'content': '📝 Generando explicación completa basada en tus respuestas...',
+                    'status': 'generating_response'
+                }
+                
+                # Generar respuesta final incluyendo las respuestas del estudiante
+                student_answers_summary = "\n".join([
+                    f"Pregunta {i+1}: {ans}"
+                    for i, ans in enumerate(memory.socratic_answers)
+                ])
+                
+                final_response = await self.generate_physics_response_with_socratic(
+                    memory.original_query, memory_context, classification,
+                    visual_findings, document_context, image_context,
+                    student_answers_summary
+                )
+                
+                # Convertir fórmulas LaTeX a imágenes
+                final_response = convert_latex_to_images_in_text(final_response)
+                
+                # Resetear modo socrático
+                memory.socratic_mode = False
+                memory.socratic_questions_asked = 0
+                memory.socratic_answers = []
+                memory.original_query = ""
+                
+                self._save_to_memory(context_id, query, final_response)
+                
+                # Yield final response
+                yield {
+                    'is_task_complete': True,
+                    'require_user_input': False,
+                    'content': final_response,
+                    'status': 'completed'
+                }
+            else:
+                # Generar siguiente pregunta socrática
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': False,
+                    'content': f'💭 Procesando tu respuesta {memory.socratic_questions_asked}/3...',
+                    'status': 'socratic_processing'
+                }
+                
+                next_question = await self.generate_socratic_question(
+                    memory.original_query,
+                    memory.socratic_questions_asked,
+                    memory.socratic_answers
+                )
+                
+                # Convertir fórmulas LaTeX a imágenes
+                next_question = convert_latex_to_images_in_text(next_question)
+                
+                # CRÍTICO: require_user_input=True para indicar que esperamos respuesta
+                yield {
+                    'is_task_complete': True,
+                    'require_user_input': True,
+                    'content': next_question,
+                    'status': 'socratic_question'
+                }
         else:
-            visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
-        
-        # Clasificar
-        yield {
-            'is_task_complete': False,
-            'require_user_input': False,
-            'content': '📚 Clasificando según el temario...',
-            'status': 'classifying'
-        }
-        
-        classification = await self.classify_query(query, memory_context, visual_findings)
-        
-        # Buscar
-        yield {
-            'is_task_complete': False,
-            'require_user_input': False,
-            'content': '🔎 Buscando en documentos...',
-            'status': 'searching_documents'
-        }
-        
-        search_query = await self.generate_search_query(
-            classification, visual_findings, query
-        )
-        search_results = await self.search_multimodal(
-            query=search_query,
-                        image_embedding=image_embedding,
-            top_k=5
-        )
-
-        # Contexto
-        document_context = "\n".join([
-            f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
-            for i, r in enumerate(search_results.get('text', []))
-        ])
-
-        image_context = "\n".join([
-            f"--- Imagen {i+1} ---\nPDF: {r['payload'].get('pdf_name', 'N/A')}"
-            for i, r in enumerate(search_results.get('image', []))
-        ])
-
-        # Respuesta
-        yield {
-            'is_task_complete': False,
-            'require_user_input': False,
-            'content': '📝 Generando respuesta final...',
-            'status': 'generating_response'
-        }
-
-        final_response = await self.generate_physics_response(
-            query, memory_context, classification, visual_findings,
-            document_context, image_context
-        )
-
-        self._save_to_memory(context_id, query, final_response)
-
-        # Yield final response
-        yield {
-            'is_task_complete': True,
-            'require_user_input': False,
-            'content': final_response,
-            'status': 'completed'
-        }
+            # Modo normal: iniciar modo socrático
+            print(f"🎓 Iniciando modo socrático...")
+            
+            # Analizar imágenes
+            visual_findings = ""
+            image_embedding = None
+            
+            if images and len(images) > 0:
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': False,
+                    'content': f'🖼️ Analizando {len(images)} imagen(es)...',
+                    'status': 'analyzing_images'
+                }
+                
+                visual_findings = await self.analyze_physics_image(images)
+                self.visual_findings[context_id] = visual_findings
+                
+                first_image_data = images[0].get('data') or images[0].get('bytes')
+                if isinstance(first_image_data, str):
+                    first_image_data = base64.b64decode(first_image_data)
+                image_embedding = self.generate_image_embedding(first_image_data)
+                
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': False,
+                    'content': '✅ Fenómenos físicos identificados.',
+                    'status': 'analyzing_images'
+                }
+            
+            # Activar modo socrático
+            yield {
+                'is_task_complete': False,
+                'require_user_input': False,
+                'content': '🎓 Iniciando método socrático: te haré 3 preguntas para guiar tu aprendizaje...',
+                'status': 'socratic_init'
+            }
+            
+            memory.socratic_mode = True
+            memory.original_query = query
+            memory.socratic_questions_asked = 0
+            memory.socratic_answers = []
+            
+            # Generar primera pregunta socrática
+            first_question = await self.generate_socratic_question(
+                query, 0, []
+            )
+            
+            # Convertir fórmulas LaTeX a imágenes
+            first_question = convert_latex_to_images_in_text(first_question)
+            
+            # CRÍTICO: require_user_input=True para indicar que esperamos respuesta
+            yield {
+                'is_task_complete': True,
+                'require_user_input': True,
+                'content': first_question,
+                'status': 'socratic_question'
+            }
 
     async def clear_memory(self, context_id: str):
         """Limpia la memoria de un contexto específico."""
