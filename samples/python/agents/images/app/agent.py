@@ -7,12 +7,12 @@ import base64
 import logging
 import os
 import re
+import urllib.parse
+import urllib.request
 from collections.abc import AsyncIterable
 from io import BytesIO
 from typing import Any
 from uuid import uuid4
-import urllib.request
-import urllib.parse
 
 from app.in_memory_cache import InMemoryCache
 # Import LangSmith configuration
@@ -73,7 +73,7 @@ def generate_image_tool(
 def _generate_image_internal(
     prompt: str, session_id: str, artifact_file_id: str = None
 ) -> str:
-    """Internal image generation logic with LangSmith tracing using Pollinations.ai (Free)."""
+    """Internal image generation logic with LangSmith tracing using Gemini 2.5 Flash Image."""
     if not prompt:
         raise ValueError('Prompt cannot be empty')
 
@@ -97,29 +97,63 @@ def _generate_image_internal(
         except Exception as e:
             logger.debug(f"LangSmith feedback error: {e}")
 
-    # Reference image logic - Pollinations simple API doesn't support it directly
+    # Reference image logic
     if artifact_file_id:
-        print(f'⚠️ Reference image {artifact_file_id} ignored (not supported by free model)')
+        print(f'⚠️ Reference image {artifact_file_id} - editing not yet implemented')
 
-    print('🆕 Generating new image with Pollinations.ai')
+    print('🆕 Generating new image with Gemini 2.5 Flash Image')
 
     try:
-        # Pollinations.ai generation
-        encoded_prompt = urllib.parse.quote(prompt)
-        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+        # Use Gemini 2.5 Flash Image for generation
+        # Model: gemini-2.5-flash-image
+        client = genai.Client(api_key=os.getenv('GOOGLE_API_KEY'))
         
-        print(f'🚀 Calling Pollinations.ai: {url}')
-        
-        req = urllib.request.Request(
-            url, 
-            headers={'User-Agent': 'Mozilla/5.0'}
+        # Enhanced prompt for better image quality
+        enhanced_prompt = (
+            f"{prompt}\n\n"
+            f"Style: High-quality, detailed, professional. "
+            f"NEVER include any text, watermarks, or overlays in the image."
         )
         
-        with urllib.request.urlopen(req) as response:
-            image_data_bytes = response.read()
-            
-        print('✅ Response received from Pollinations.ai')
+        print(f'🚀 Calling Gemini 2.5 Flash Image API...')
         
+        # Generate image using Gemini 2.5 Flash Image
+        response = client.models.generate_content(
+            model='gemini-2.5-flash-image',
+            contents=enhanced_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.7,
+                response_modalities=['image'],  # Request image output
+            )
+        )
+        
+        print(f'✅ Response received from Gemini')
+        
+        # Extract image from response
+        # Gemini returns images in the response parts
+        image_data_bytes = None
+        
+        if response.candidates and len(response.candidates) > 0:
+            candidate = response.candidates[0]
+            if candidate.content and candidate.content.parts:
+                for part in candidate.content.parts:
+                    # Check if this part contains image data
+                    if hasattr(part, 'inline_data') and part.inline_data:
+                        image_data_bytes = part.inline_data.data
+                        print(f'✅ Image data extracted from inline_data')
+                        break
+                    elif hasattr(part, 'file_data') and part.file_data:
+                        # Handle file_data if present
+                        print(f'⚠️ Image in file_data format - not yet supported')
+                        continue
+        
+        if not image_data_bytes:
+            error_msg = 'No image data in Gemini response'
+            logger.error(error_msg)
+            print(f'❌ {error_msg}')
+            return f"ERROR: {error_msg}"
+        
+        # Store image in cache
         data = Imagedata(
             bytes=base64.b64encode(image_data_bytes).decode('utf-8'),
             mime_type='image/jpeg',
@@ -145,7 +179,8 @@ def _generate_image_internal(
                         "image_id": data.id,
                         "prompt": prompt,
                         "session_id": session_id,
-                        "mime_type": data.mime_type
+                        "mime_type": data.mime_type,
+                        "model": "gemini-2.5-flash-image"
                     }
                 )
             except:
@@ -154,8 +189,9 @@ def _generate_image_internal(
         return data.id
         
     except Exception as e:
-        logger.error(f'Error generating image: {e}')
-        print(f'❌ Generation error: {e}')
+        error_msg = str(e)
+        logger.error(f'Error generating image: {error_msg}')
+        print(f'❌ Generation error: {error_msg}')
         
         # Log error to LangSmith
         if LANGSMITH_ENABLED:
@@ -163,12 +199,12 @@ def _generate_image_internal(
                 langsmith_client.create_feedback(
                     run_id=None,
                     key="image_generation_error",
-                    value={"error": str(e), "prompt": prompt}
+                    value={"error": error_msg, "prompt": prompt}
                 )
             except:
                 pass
         
-        return f"ERROR: {str(e)}"
+        return f"ERROR: {error_msg}"
 
 
 class ImageGenerationAgent:
