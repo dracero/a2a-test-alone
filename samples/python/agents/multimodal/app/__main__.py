@@ -19,8 +19,12 @@ from app.agent import PhysicsMultimodalAgent
 from app.agent_executor import PhysicsAgentExecutor
 from app.custom_request_handler import PhysicsAgentExecutorWrapper
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# Load .env from project root (6 levels up: __main__.py -> app -> multimodal -> agents -> python -> samples -> root)
+root_dir = Path(__file__).resolve().parents[5]
+env_path = root_dir / '.env'
+load_dotenv(dotenv_path=env_path, override=True)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -111,10 +115,10 @@ def main(host, port, pdf_dir):
     
     async def startup():
         try:
-            # Verificar Google API Key
-            if not os.getenv('GOOGLE_API_KEY'):
+            # Verificar Groq API Key
+            if not os.getenv('GROQ_API_KEY'):
                 raise MissingAPIKeyError(
-                    'GOOGLE_API_KEY environment variable not set.'
+                    'GROQ_API_KEY environment variable not set.'
                 )
             
             # Verificar Qdrant
@@ -220,9 +224,9 @@ def main(host, port, pdf_dir):
         except MissingAPIKeyError as e:
             logger.error(f'❌ Error: {e}')
             logger.error('Por favor, configura las siguientes variables de entorno:')
-            logger.error('  - GOOGLE_API_KEY (para Gemini)')
+            logger.error('  - GROQ_API_KEY (para Llama 4)')
             logger.error('  - QDRANT_URL (URL de tu instancia Qdrant)')
-            logger.error('  - QDRANT_KEY (API Key de Qdrant)')  # ← CORREGIDO
+            logger.error('  - QDRANT_KEY (API Key de Qdrant)')
             logger.error('Opcional:')
             logger.error('  - PDF_DIR (directorio con PDFs, default: /content)')
             sys.exit(1)

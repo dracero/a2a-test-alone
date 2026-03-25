@@ -24,9 +24,10 @@ export function TasksManager() {
   const fetchTasks = async () => {
     try {
       const data = await chatAPI.listTasks();
-      setTasks(data);
+      setTasks(data.result || []);
     } catch (error) {
       console.error('Failed to fetch tasks:', error);
+      setTasks([]);
     }
   };
 

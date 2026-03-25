@@ -1,6 +1,6 @@
 """
 BeeAI Workflow-based Orchestrator
-Compatible with Gemini 2.5-flash
+Compatible with Groq (Llama 4)
 Uses explicit workflow steps instead of ReAct pattern
 """
 
@@ -47,9 +47,9 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             print(f"❌ {state.error}")
             return None
     
-    # Step 2: Use Gemini to classify and choose the best agent
+    # Step 2: Use Groq to classify and choose the best agent
     async def classify_and_choose(state: OrchestratorState) -> str:
-        """Use Gemini to analyze the request and choose the best agent or respond directly"""
+        """Use Groq to analyze the request and choose the best agent or respond directly"""
         print("🤔 Step 2: Classifying request and choosing agent...")
         
         if not state.available_agents:
@@ -63,7 +63,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 for i, agent in enumerate(state.available_agents)
             ])
             
-            # Create a classification prompt for Gemini
+            # Create a classification prompt for Groq
             classification_prompt = (
                 f"You are a routing system. Analyze the user's request and decide if it needs a specialized agent or if you should respond directly.\n\n"
                 f"Available specialized agents:\n{agents_description}\n\n"
@@ -86,19 +86,19 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 f"IMPORTANT: Respond with ONLY ONE WORD - either 'DIRECT' or the exact agent name. Nothing else."
             )
             
-            # Use Gemini to classify
+            # Use Groq to classify
             from langchain_core.messages import HumanMessage
             
-            print(f"🔍 Sending classification prompt to Gemini...")
+            print(f"🔍 Sending classification prompt to Groq...")
             llm_response = await llm.ainvoke([HumanMessage(content=classification_prompt)])
             
-            print(f"📥 Gemini response type: {type(llm_response)}")
-            print(f"📥 Gemini response content: {llm_response.content}")
+            print(f"📥 Groq response type: {type(llm_response)}")
+            print(f"📥 Groq response content: {llm_response.content}")
             
             chosen = str(llm_response.content).strip() if llm_response.content else ""
             
             if not chosen:
-                print(f"⚠️ Gemini returned empty response, using first agent")
+                print(f"⚠️ Groq returned empty response, using first agent")
                 state.chosen_agent = state.available_agents[0]['name']
                 return "send_to_agent"
             

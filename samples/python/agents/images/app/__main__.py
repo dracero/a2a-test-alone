@@ -16,8 +16,13 @@ from app.agent import ImageGenerationAgent
 from app.agent_executor import ImageGenerationAgentExecutor
 from app.langsmith_config import LANGSMITH_ENABLED, get_langsmith_status
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# Load .env from project root (6 levels up: __main__.py -> app -> images -> agents -> python -> samples -> root)
+root_dir = Path(__file__).resolve().parents[5]
+env_path = root_dir / '.env'
+load_dotenv(dotenv_path=env_path, override=True)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -30,12 +35,16 @@ class MissingAPIKeyError(Exception):
 def main(host, port):
     """Entry point for the A2A + CrewAI Image generation sample with LangSmith."""
     try:
-        # Check Google API configuration
-        if not os.getenv('GOOGLE_API_KEY') and not os.getenv(
-            'GOOGLE_GENAI_USE_VERTEXAI'
-        ):
+        # Check Groq API configuration
+        if not os.getenv('GROQ_API_KEY'):
             raise MissingAPIKeyError(
-                'GOOGLE_API_KEY or Vertex AI environment variables not set.'
+                'GROQ_API_KEY environment variable not set.'
+            )
+        
+        # También necesitamos Google API Key para generación de imágenes
+        if not os.getenv('GOOGLE_API_KEY'):
+            raise MissingAPIKeyError(
+                'GOOGLE_API_KEY environment variable not set (needed for image generation).'
             )
 
         # Display LangSmith status

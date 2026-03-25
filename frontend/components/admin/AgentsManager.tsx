@@ -28,9 +28,10 @@ export function AgentsManager() {
   const fetchAgents = async () => {
     try {
       const data = await chatAPI.listAgents();
-      setAgents(data);
+      setAgents(data.result || []);
     } catch (error) {
       console.error('Failed to fetch agents:', error);
+      setAgents([]);
     }
   };
 

@@ -22,12 +22,16 @@ from crewai import LLM, Agent, Crew, Task
 from crewai.process import Process
 from crewai.tools import tool
 from dotenv import load_dotenv
+from pathlib import Path
 from google import genai
 from google.genai import types
 from PIL import Image
 from pydantic import BaseModel
 
-load_dotenv()
+# Load .env from project root (5 levels up: agent.py -> app -> images -> agents -> python -> samples -> root)
+root_dir = Path(__file__).resolve().parents[5]
+env_path = root_dir / '.env'
+load_dotenv(dotenv_path=env_path, override=True)
 
 logger = logging.getLogger(__name__)
 
@@ -218,13 +222,13 @@ class ImageGenerationAgent:
         if LANGSMITH_ENABLED:
             logger.info(f"📊 LangSmith monitoring enabled - Project: {os.getenv('LANGCHAIN_PROJECT')}")
         
-        if os.getenv('GOOGLE_GENAI_USE_VERTEXAI'):
-            self.model = LLM(model='vertex_ai/gemini-2.5-flash')
-        elif os.getenv('GOOGLE_API_KEY'):
-            self.model = LLM(
-                model='gemini/gemini-2.5-flash',
-                api_key=os.getenv('GOOGLE_API_KEY'),
-            )
+        # Usar Groq para el razonamiento del agente
+        # CrewAI usa LiteLLM internamente, el formato correcto es: groq/<model>
+        from crewai import LLM as CrewAILLM
+        self.model = CrewAILLM(
+            model='groq/llama-3.3-70b-versatile',  # Modelo disponible en Groq
+            api_key=os.getenv('GROQ_API_KEY'),
+        )
 
         self.image_creator_agent = Agent(
             role='Image Generation Specialist',

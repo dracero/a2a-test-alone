@@ -26,9 +26,10 @@ export function EventsManager() {
   const fetchEvents = async () => {
     try {
       const data = await chatAPI.getEvents();
-      setEvents(data);
+      setEvents(data.result || []);
     } catch (error) {
       console.error('Failed to fetch events:', error);
+      setEvents([]);
     }
   };
 

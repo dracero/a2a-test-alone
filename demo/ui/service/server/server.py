@@ -55,7 +55,8 @@ class ConversationServer:
         agent_manager = os.environ.get('A2A_HOST', 'ADK')
         self.manager: ApplicationManager
 
-        api_key = os.environ.get('GOOGLE_API_KEY', '')
+        # Use GROQ_API_KEY for BeeAI, GOOGLE_API_KEY for ADK
+        api_key = os.environ.get('GROQ_API_KEY' if agent_manager.upper() == 'BEEAI' else 'GOOGLE_API_KEY', '')
         uses_vertex_ai = (
             os.environ.get('GOOGLE_GENAI_USE_VERTEXAI', '').upper() == 'TRUE'
         )
@@ -124,6 +125,7 @@ class ConversationServer:
         print(f"\n{'='*60}")
         print(f"🔍 PARSING MESSAGE FROM FRONTEND")
         print(f"Raw data keys: {data.keys()}")
+        print(f"Raw data: {data}")
         print(f"{'='*60}\n")
         
         parts: list[Part] = []
@@ -182,10 +184,18 @@ class ConversationServer:
             # Limpiar si viene como 'Role.user' o 'user'
             role_value = role_value.replace('Role.', '').lower()
         
+        # 🔧 CORRECCIÓN: Asegurar que context_id sea string
+        context_id_value = data.get('context_id', '')
+        if isinstance(context_id_value, dict):
+            # Si es un dict, intentar extraer un ID o usar string vacío
+            context_id_value = context_id_value.get('id', '') or context_id_value.get('conversation_id', '') or ''
+        elif not isinstance(context_id_value, str):
+            context_id_value = str(context_id_value) if context_id_value else ''
+        
         # Construir el mensaje usando model_validate para que Pydantic maneje la conversión
         message_dict = {
             'message_id': data.get('message_id', str(uuid.uuid4())),
-            'context_id': data.get('context_id', ''),
+            'context_id': context_id_value,
             'role': role_value,
             'parts': parts,
         }

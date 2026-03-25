@@ -24,8 +24,8 @@ async def save_api_key(e: me.ClickEvent):
     if not state.api_key.strip():
         return
 
-    # Set the environment variable for current process
-    os.environ['GOOGLE_API_KEY'] = state.api_key
+    # Set the environment variable for current process (use GROQ_API_KEY)
+    os.environ['GROQ_API_KEY'] = state.api_key
 
     # Update the API key in the server
     await UpdateApiKey(state.api_key)
@@ -45,16 +45,16 @@ def api_key_dialog():
             style=me.Style(display='flex', flex_direction='column', gap=12)
         ):
             me.text(
-                'Google API Key Required',
+                'Groq API Key Required',
                 type='headline-4',
                 style=me.Style(margin=me.Margin(bottom=10)),
             )
             me.text(
-                'Please enter your Google API Key to use the application.',
+                'Please enter your Groq API Key to use the application.',
                 style=me.Style(margin=me.Margin(bottom=20)),
             )
             me.input(
-                label='Google API Key',
+                label='Groq API Key',
                 value=state.api_key,
                 on_blur=on_api_key_change,
                 type='password',

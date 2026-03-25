@@ -15,7 +15,7 @@ from typing import Any, List, Literal, Optional
 import matplotlib
 import torch
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from PIL import Image
 from pydantic import BaseModel
 from PyPDF2 import PdfReader
@@ -29,7 +29,7 @@ from matplotlib import mathtext
 
 # ==================== CONFIGURACIÓN ====================
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # ==================== UTILIDADES PARA RENDERIZAR LATEX ====================
 
@@ -200,10 +200,12 @@ class PhysicsMultimodalAgent:
     
     def __init__(self, qdrant_url: str = None, qdrant_api_key: str = None):
         """Inicializar el agente de física."""
-        self.llm = ChatGoogleGenerativeAI(
-            model=GEMINI_MODEL,
+        from langchain_groq import ChatGroq
+        self.llm = ChatGroq(
+            model=GROQ_MODEL,
             temperature=0.3,
-            max_output_tokens=4096,
+            max_tokens=4096,
+            api_key=os.getenv('GROQ_API_KEY')
         )
         
         # Qdrant

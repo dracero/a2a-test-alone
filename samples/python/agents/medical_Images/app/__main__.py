@@ -15,8 +15,14 @@ from app.agent import MedicalAgent
 from app.agent_executor import MedicalAgentExecutor
 from app.custom_request_handler import MedicalAgentExecutorWrapper
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# Load .env from project root (6 levels up: __main__.py -> app -> medical_Images -> agents -> python -> samples -> root)
+root_dir = Path(__file__).resolve().parents[5]
+env_path = root_dir / '.env'
+
+# Force override existing environment variables
+load_result = load_dotenv(dotenv_path=env_path, override=True)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,10 +38,10 @@ class MissingAPIKeyError(Exception):
 def main(host, port):
     """Inicia el servidor del Asistente Médico."""
     try:
-        # Verificar Google API Key
-        if not os.getenv('GOOGLE_API_KEY'):
+        # Verificar Groq API Key
+        if not os.getenv('GROQ_API_KEY'):
             raise MissingAPIKeyError(
-                'GOOGLE_API_KEY environment variable not set.'
+                'GROQ_API_KEY environment variable not set.'
             )
         
         # Verificar Tavily API Key
@@ -125,7 +131,7 @@ def main(host, port):
     except MissingAPIKeyError as e:
         logger.error(f'❌ Error: {e}')
         logger.error('Por favor, configura las siguientes variables de entorno:')
-        logger.error('  - GOOGLE_API_KEY (para Gemini)')
+        logger.error('  - GROQ_API_KEY (para Llama 4)')
         logger.error('  - TAVILY_API_KEY (para búsqueda médica)')
         sys.exit(1)
     except Exception as e:

@@ -25,9 +25,10 @@ export function ConversationManager() {
     setIsLoading(true);
     try {
       const data = await chatAPI.listConversations();
-      setConversations(data);
+      setConversations(data.result || []);
     } catch (error) {
       console.error('Failed to fetch conversations:', error);
+      setConversations([]);
     } finally {
       setIsLoading(false);
     }

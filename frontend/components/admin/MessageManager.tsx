@@ -26,9 +26,10 @@ export function MessageManager() {
   const fetchPendingMessages = async () => {
     try {
       const data = await chatAPI.getPendingMessages();
-      setPendingMessages(data);
+      setPendingMessages(data.result || []);
     } catch (error) {
       console.error('Failed to fetch pending messages:', error);
+      setPendingMessages([]);
     }
   };
 

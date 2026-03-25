@@ -24,7 +24,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter.emitter import Emitter
 from beeai_framework.memory.unconstrained_memory import UnconstrainedMemory
 from beeai_framework.tools.tool import Tool
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field
 from service.server.application_manager import ApplicationManager
 from service.types import Conversation, Event
@@ -398,12 +398,14 @@ class BeeAIHostManager(ApplicationManager):
         self._agents: list[AgentCard] = []
         self._pending_message_ids: list[str] = []
 
-        self.api_key = api_key or os.getenv("GOOGLE_API_KEY", "")
+        self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
 
-        # Initialize the LangChain Google GenAI Model
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=self.api_key
+        # Initialize the LangChain Groq Model
+        self.llm = ChatGroq(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            api_key=self.api_key,
+            temperature=0.3,
+            max_tokens=4096
         )
         # Wrap it for BeeAI
         self.chat_model = LangChainChatModel(self.llm)

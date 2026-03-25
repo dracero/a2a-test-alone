@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from langchain_community.tools import TavilySearchResults
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from pydantic import BaseModel
 
 
@@ -64,11 +64,13 @@ class MedicalAgent:
     
     def __init__(self):
         """Inicializar el agente médico."""
-        # Modelo principal
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+        # Modelo principal - Usando Groq
+        from langchain_groq import ChatGroq
+        self.llm = ChatGroq(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             temperature=0.3,
-            max_output_tokens=4096,
+            max_tokens=4096,
+            api_key=os.getenv('GROQ_API_KEY')
         )
         
         # Herramienta de búsqueda

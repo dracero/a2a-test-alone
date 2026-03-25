@@ -19,5 +19,6 @@
   "files.trimTrailingWhitespace": false,
   "editor.rulers": [
     80
-  ]
+  ],
+  "kiroAgent.configureMCP": "Disabled"
 }

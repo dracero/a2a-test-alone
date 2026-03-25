@@ -6,6 +6,7 @@ run:
 import asyncio
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 import mesop as me
@@ -24,7 +25,10 @@ from service.server.server import ConversationServer
 from state import host_agent_service
 from state.state import AppState
 
-load_dotenv()
+# Load .env from project root (2 levels up: ui -> demo -> root)
+root_dir = Path(__file__).resolve().parents[2]
+env_path = root_dir / '.env'
+load_dotenv(dotenv_path=env_path, override=True)
 
 
 
@@ -42,7 +46,8 @@ def on_load(e: me.LoadEvent):  # pylint: disable=unused-argument
     uses_vertex_ai = (
         os.getenv('GOOGLE_GENAI_USE_VERTEXAI', '').upper() == 'TRUE'
     )
-    api_key = os.getenv('GOOGLE_API_KEY', '')
+    # Use GROQ_API_KEY for the orchestrator
+    api_key = os.getenv('GROQ_API_KEY', '')
 
     if uses_vertex_ai:
         state.uses_vertex_ai = True

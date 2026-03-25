@@ -9,6 +9,7 @@ dependencies = [
     "crewai[tools]>=0.165.1",
     "google-genai>=1.31.0",
     "langsmith>=0.3.45",
+    "litellm>=1.0.0",
     "python-dotenv>=1.1.1",
     "starlette>=0.47.2",
 ]
