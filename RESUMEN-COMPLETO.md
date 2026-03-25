@@ -155,6 +155,25 @@ Script para verificar que los agentes cargan correctamente el `.env`:
 
 ---
 
+## 7. Fix de Imágenes Base64 en Chat ✅
+
+### Problema
+Las imágenes generadas por los agentes se mostraban como strings base64 largos en lugar de renderizarse como imágenes.
+
+### Solución
+- ✅ Implementada detección automática de base64 en `normalizePart()`
+- ✅ Conversión automática de text parts con base64 a file parts
+- ✅ Soporte para data URLs (`data:image/...;base64,`) y base64 puro
+- ✅ Extracción automática de MIME type
+
+### Archivos Modificados
+- `frontend/components/chat/ChatInterface.tsx`
+
+### Documentación
+- `FIX-IMAGENES-BASE64.md`
+
+---
+
 ## Variables de Entorno Requeridas
 
 ```bash
