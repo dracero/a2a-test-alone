@@ -282,6 +282,34 @@ export function ChatInterface() {
 
     // 1. Ya está en la forma esperada
     if (p.kind === 'text' && p.text !== undefined) {
+      // 🔧 NUEVO: Detectar si el texto es realmente una imagen base64
+      const text = p.text;
+      if (typeof text === 'string' && text.length > 100 &&
+        (text.startsWith('data:image/') ||
+          (text.match(/^[A-Za-z0-9+/=]{100,}$/) && text.length > 1000))) {
+        console.log('🔧 Detected base64 image in text part, converting to file part');
+
+        let mimeType = 'image/png';
+        let bytes = text;
+
+        // Si tiene el prefijo data:image/...;base64,
+        if (text.startsWith('data:image/')) {
+          const match = text.match(/^data:(image\/[^;]+);base64,(.+)$/);
+          if (match) {
+            mimeType = match[1];
+            bytes = match[2];
+          }
+        }
+
+        return {
+          kind: 'file',
+          file: {
+            mime_type: mimeType,
+            bytes: bytes
+          }
+        };
+      }
+
       console.log('✅ Text part (already normalized)');
       return { kind: 'text', text: p.text };
     }
@@ -342,6 +370,34 @@ export function ChatInterface() {
 
       // root.text contiene el texto
       if (p.root.text !== undefined) {
+        // 🔧 NUEVO: Detectar si el texto es realmente una imagen base64
+        const text = p.root.text;
+        if (typeof text === 'string' && text.length > 100 &&
+          (text.startsWith('data:image/') ||
+            (text.match(/^[A-Za-z0-9+/=]{100,}$/) && text.length > 1000))) {
+          console.log('🔧 Detected base64 image in root.text, converting to file part');
+
+          let mimeType = 'image/png';
+          let bytes = text;
+
+          // Si tiene el prefijo data:image/...;base64,
+          if (text.startsWith('data:image/')) {
+            const match = text.match(/^data:(image\/[^;]+);base64,(.+)$/);
+            if (match) {
+              mimeType = match[1];
+              bytes = match[2];
+            }
+          }
+
+          return {
+            kind: 'file',
+            file: {
+              mime_type: mimeType,
+              bytes: bytes
+            }
+          };
+        }
+
         console.log('✅ Text part (from root.text)');
         return { kind: 'text', text: p.root.text };
       }
@@ -389,6 +445,34 @@ export function ChatInterface() {
 
     // 4. Tiene 'text' en el nivel superior sin 'kind'
     if (p.text !== undefined && !p.file && !p.root) {
+      // 🔧 NUEVO: Detectar si el texto es realmente una imagen base64
+      const text = p.text;
+      if (typeof text === 'string' && text.length > 100 &&
+        (text.startsWith('data:image/') ||
+          (text.match(/^[A-Za-z0-9+/=]{100,}$/) && text.length > 1000))) {
+        console.log('🔧 Detected base64 image in top-level text, converting to file part');
+
+        let mimeType = 'image/png';
+        let bytes = text;
+
+        // Si tiene el prefijo data:image/...;base64,
+        if (text.startsWith('data:image/')) {
+          const match = text.match(/^data:(image\/[^;]+);base64,(.+)$/);
+          if (match) {
+            mimeType = match[1];
+            bytes = match[2];
+          }
+        }
+
+        return {
+          kind: 'file',
+          file: {
+            mime_type: mimeType,
+            bytes: bytes
+          }
+        };
+      }
+
       console.log('✅ Text part (top level)');
       return { kind: 'text', text: p.text };
     }
