@@ -45,6 +45,63 @@
 
 This repository contains code samples and demos which use the [Agent2Agent (A2A) Protocol](https://goo.gle/a2a).
 
+## 🚀 Quick Start
+
+This repository has been configured to use **Groq (Llama 4)** for ultra-fast agent responses.
+
+### Prerequisites
+
+1. **Groq API Key** - Get one at [console.groq.com](https://console.groq.com)
+2. **Google API Key** (optional) - Only needed for image generation
+3. **Python 3.12+** with `uv` package manager
+4. **Node.js 18+** for the frontend
+
+### Setup
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/dracero/a2a-test-alone.git
+   cd a2a-test-alone
+   ```
+
+2. Copy `.env.example` to `.env` and add your API keys:
+   ```bash
+   cp .env.example .env
+   # Edit .env and add your GROQ_API_KEY
+   ```
+
+3. Start all services:
+   ```bash
+   ./restart-all.sh
+   ```
+
+4. Open your browser at [http://localhost:3000](http://localhost:3000)
+
+### Documentation
+
+- **[INICIO-RAPIDO.md](INICIO-RAPIDO.md)** - Quick start guide (Spanish)
+- **[RESUMEN-COMPLETO.md](RESUMEN-COMPLETO.md)** - Complete summary of changes
+- **[CAMBIO-A-GROQ.md](CAMBIO-A-GROQ.md)** - Groq migration details
+
+## Architecture
+
+This system includes:
+
+- **3 Specialized Agents**:
+  - Medical Images Agent (port 10001)
+  - Multimodal Physics Agent (port 10002)
+  - Image Generation Agent (port 10003)
+
+- **Backend Orchestrator** (port 12000):
+  - BeeAI workflow-based orchestrator
+  - Intelligent agent routing
+  - Uses Groq for fast classification
+
+- **Frontend** (port 3000):
+  - Next.js React application
+  - Admin dashboard
+  - Real-time chat interface
+
 ## Related Repositories
 
 -   [A2A](https://github.com/a2aproject/A2A) - A2A Specification and documentation.
