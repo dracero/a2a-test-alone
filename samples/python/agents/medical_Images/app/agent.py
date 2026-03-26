@@ -64,7 +64,7 @@ class MedicalAgent:
     
     def __init__(self):
         """Inicializar el agente médico."""
-        # Modelo principal - Usando Groq
+        # Modelo principal - Usando Groq Llama 4 Scout (con soporte de visión)
         from langchain_groq import ChatGroq
         self.llm = ChatGroq(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
@@ -124,7 +124,7 @@ class MedicalAgent:
     
     async def analyze_images(self, images: list[dict]) -> str:
         """
-        Analiza imágenes médicas con Gemini Vision.
+        Analiza imágenes médicas con Groq Llama 4 Scout (tiene capacidad multimodal).
         
         Args:
             images: Lista de diccionarios con:
@@ -137,7 +137,7 @@ class MedicalAgent:
         if not images:
             return "No se proporcionaron imágenes para análisis."
         
-        # Preparar contenido del mensaje
+        # Preparar contenido del mensaje en formato Groq
         content = [{
             "type": "text",
             "text": f"""Analiza estas {len(images)} imágenes médicas y proporciona una lista de HALLAZGOS CLAVES.
@@ -156,7 +156,7 @@ Enfócate en:
 Sé específico y objetivo. Evita diagnósticos definitivos."""
         }]
         
-        # Agregar imágenes
+        # Agregar imágenes en formato Groq
         for idx, img in enumerate(images):
             try:
                 # Manejar tanto bytes como base64 string
@@ -172,12 +172,15 @@ Sé específico y objetivo. Evita diagnósticos definitivos."""
                 
                 mime_type = self.get_mime_type(img.get('mime_type', 'image/png'))
                 
+                # Formato correcto para Groq
                 content.append({
                     "type": "image_url",
-                    "image_url": f"data:{mime_type};base64,{image_data_b64}"
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{image_data_b64}"
+                    }
                 })
                 
-                print(f"✅ Imagen {idx} agregada: {mime_type}")
+                print(f"✅ Imagen {idx} agregada para Groq: {mime_type}")
                 
             except Exception as e:
                 print(f"❌ Error procesando imagen {idx}: {e}")
@@ -186,8 +189,9 @@ Sé específico y objetivo. Evita diagnósticos definitivos."""
         message = HumanMessage(content=content)
         
         try:
+            # Usar llm (Groq Llama 4 Scout) para análisis de imágenes
             response = self.llm.invoke([message])
-            print(f"✅ Análisis de imágenes completado")
+            print(f"✅ Análisis de imágenes completado con Groq Llama 4 Scout")
             return response.content
         except Exception as e:
             error_msg = f"Error en análisis de imágenes: {str(e)}"

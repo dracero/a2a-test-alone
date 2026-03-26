@@ -35,16 +35,17 @@ class MissingAPIKeyError(Exception):
 def main(host, port):
     """Entry point for the A2A + CrewAI Image generation sample with LangSmith."""
     try:
-        # Check Groq API configuration
+        # Check Groq API configuration (for agent reasoning)
         if not os.getenv('GROQ_API_KEY'):
             raise MissingAPIKeyError(
                 'GROQ_API_KEY environment variable not set.'
             )
         
-        # También necesitamos Google API Key para generación de imágenes
-        if not os.getenv('GOOGLE_API_KEY'):
+        # Check Hugging Face API configuration (for image generation)
+        hf_token = os.getenv('HUGGINGFACEHUB_API_TOKEN') or os.getenv('HF_TOKEN')
+        if not hf_token:
             raise MissingAPIKeyError(
-                'GOOGLE_API_KEY environment variable not set (needed for image generation).'
+                'HUGGINGFACEHUB_API_TOKEN or HF_TOKEN environment variable not set (needed for image generation).'
             )
 
         # Display LangSmith status

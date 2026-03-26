@@ -14,6 +14,7 @@ from io import BytesIO
 from typing import Any
 from uuid import uuid4
 
+import requests
 from app.in_memory_cache import InMemoryCache
 # Import LangSmith configuration
 from app.langsmith_config import (LANGSMITH_ENABLED, get_langsmith_status,
@@ -23,8 +24,6 @@ from crewai.process import Process
 from crewai.tools import tool
 from dotenv import load_dotenv
 from pathlib import Path
-from google import genai
-from google.genai import types
 from PIL import Image
 from pydantic import BaseModel
 
@@ -77,7 +76,7 @@ def generate_image_tool(
 def _generate_image_internal(
     prompt: str, session_id: str, artifact_file_id: str = None
 ) -> str:
-    """Internal image generation logic with LangSmith tracing using Gemini 2.5 Flash Image."""
+    """Internal image generation logic with LangSmith tracing using Hugging Face Stable Diffusion."""
     if not prompt:
         raise ValueError('Prompt cannot be empty')
 
@@ -105,63 +104,80 @@ def _generate_image_internal(
     if artifact_file_id:
         print(f'⚠️ Reference image {artifact_file_id} - editing not yet implemented')
 
-    print('🆕 Generating new image with Gemini 2.5 Flash Image')
+    print('🆕 Generating new image with Hugging Face Stable Diffusion')
 
     try:
-        # Use Gemini 2.5 Flash Image for generation
-        # Model: gemini-2.5-flash-image
-        client = genai.Client(api_key=os.getenv('GOOGLE_API_KEY'))
+        # Use Hugging Face Inference API with Stable Diffusion
+        # Model: stabilityai/stable-diffusion-2-1
+        hf_token = os.getenv('HUGGINGFACEHUB_API_TOKEN') or os.getenv('HF_TOKEN')
         
-        # Enhanced prompt for better image quality
-        enhanced_prompt = (
-            f"{prompt}\n\n"
-            f"Style: High-quality, detailed, professional. "
-            f"NEVER include any text, watermarks, or overlays in the image."
-        )
-        
-        print(f'🚀 Calling Gemini 2.5 Flash Image API...')
-        
-        # Generate image using Gemini 2.5 Flash Image
-        response = client.models.generate_content(
-            model='gemini-2.5-flash-image',
-            contents=enhanced_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                response_modalities=['image'],  # Request image output
-            )
-        )
-        
-        print(f'✅ Response received from Gemini')
-        
-        # Extract image from response
-        # Gemini returns images in the response parts
-        image_data_bytes = None
-        
-        if response.candidates and len(response.candidates) > 0:
-            candidate = response.candidates[0]
-            if candidate.content and candidate.content.parts:
-                for part in candidate.content.parts:
-                    # Check if this part contains image data
-                    if hasattr(part, 'inline_data') and part.inline_data:
-                        image_data_bytes = part.inline_data.data
-                        print(f'✅ Image data extracted from inline_data')
-                        break
-                    elif hasattr(part, 'file_data') and part.file_data:
-                        # Handle file_data if present
-                        print(f'⚠️ Image in file_data format - not yet supported')
-                        continue
-        
-        if not image_data_bytes:
-            error_msg = 'No image data in Gemini response'
+        if not hf_token:
+            error_msg = 'HUGGINGFACEHUB_API_TOKEN or HF_TOKEN not set'
             logger.error(error_msg)
             print(f'❌ {error_msg}')
             return f"ERROR: {error_msg}"
         
+        # Enhanced prompt for better image quality
+        enhanced_prompt = (
+            f"{prompt}, "
+            f"high quality, detailed, professional, 4k, masterpiece"
+        )
+        
+        print(f'🚀 Calling Hugging Face Inference API...')
+        print(f'📝 Enhanced prompt: {enhanced_prompt}')
+        
+        # Hugging Face Inference API endpoint
+        api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1"
+        
+        headers = {
+            "Authorization": f"Bearer {hf_token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "inputs": enhanced_prompt,
+            "parameters": {
+                "num_inference_steps": 50,
+                "guidance_scale": 7.5,
+                "negative_prompt": "blurry, bad quality, watermark, text, signature, low resolution"
+            }
+        }
+        
+        # Make request to Hugging Face
+        import json
+        import requests
+        
+        response = requests.post(
+            api_url,
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
+        
+        print(f'📥 Response status: {response.status_code}')
+        
+        if response.status_code != 200:
+            error_msg = f"Hugging Face API error: {response.status_code} - {response.text}"
+            logger.error(error_msg)
+            print(f'❌ {error_msg}')
+            return f"ERROR: {error_msg}"
+        
+        # Get image bytes from response
+        image_data_bytes = response.content
+        
+        if not image_data_bytes or len(image_data_bytes) < 100:
+            error_msg = 'No valid image data in Hugging Face response'
+            logger.error(error_msg)
+            print(f'❌ {error_msg}')
+            return f"ERROR: {error_msg}"
+        
+        print(f'✅ Image data received: {len(image_data_bytes)} bytes')
+        
         # Store image in cache
         data = Imagedata(
             bytes=base64.b64encode(image_data_bytes).decode('utf-8'),
-            mime_type='image/jpeg',
-            name='generated_image.jpg',
+            mime_type='image/png',
+            name='generated_image.png',
             id=uuid4().hex,
         )
         
@@ -184,13 +200,19 @@ def _generate_image_internal(
                         "prompt": prompt,
                         "session_id": session_id,
                         "mime_type": data.mime_type,
-                        "model": "gemini-2.5-flash-image"
+                        "model": "stabilityai/stable-diffusion-2-1"
                     }
                 )
             except:
                 pass
 
         return data.id
+        
+    except requests.exceptions.Timeout:
+        error_msg = 'Hugging Face API timeout - model may be loading, try again in a minute'
+        logger.error(error_msg)
+        print(f'❌ {error_msg}')
+        return f"ERROR: {error_msg}"
         
     except Exception as e:
         error_msg = str(e)

@@ -1266,6 +1266,7 @@ dependencies = [
     { name = "langsmith" },
     { name = "litellm" },
     { name = "python-dotenv" },
+    { name = "requests" },
     { name = "starlette" },
 ]
 
@@ -1277,6 +1278,7 @@ requires-dist = [
     { name = "langsmith", specifier = ">=0.3.45" },
     { name = "litellm", specifier = ">=1.0.0" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
+    { name = "requests", specifier = ">=2.31.0" },
     { name = "starlette", specifier = ">=0.47.2" },
 ]
 

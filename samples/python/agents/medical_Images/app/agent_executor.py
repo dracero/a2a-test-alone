@@ -80,20 +80,12 @@ class MedicalAgentExecutor(AgentExecutor):
                             image_data = file_obj.bytes
                             mime_type = file_obj.mime_type
                             
-                            # CORRECCIÓN: Si es bytes, mantener como bytes crudos (NO codificar nuevamente)
-                            if isinstance(image_data, bytes):
-                                logger.info(f"✅ FilePart (bytes) extraída: {mime_type}, longitud datos: {len(image_data)} bytes")
-                            # Si es string, decodificar a bytes
-                            elif isinstance(image_data, str):
-                                try:
-                                    image_data = base64.b64decode(image_data)
-                                    logger.info(f"✅ FilePart (string) decodificada: {mime_type}, longitud datos: {len(image_data)} bytes")
-                                except Exception as e:
-                                    logger.warning(f"❌ Error decodificando base64: {e}")
-                                    continue
+                            # 🔧 FIX: NO decodificar - mantener formato original
+                            # agent.py maneja tanto bytes como string base64
+                            logger.info(f"✅ FilePart extraída: {mime_type}, tipo datos: {type(image_data).__name__}, longitud: {len(image_data)}")
                             
                             images.append({
-                                'data': image_data,  # ¡BYTES CRUDOS!
+                                'data': image_data,  # Mantener formato original (string base64 o bytes)
                                 'mime_type': mime_type
                             })
                             continue
