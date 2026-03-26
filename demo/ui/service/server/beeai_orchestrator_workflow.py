@@ -81,7 +81,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 f"- 'How are you?' → DIRECT\n"
                 f"- 'What can you do?' → DIRECT\n"
                 f"- 'Analyze this medical image' → Asistente Médico\n"
-                f"- 'Help me with physics homework' → Agente de Física - Problemas e Imágenes\n"
+                f"- 'Help me with physics homework' → Tutor Socrático de Física Multimodal\n"
                 f"- 'Generate an image of a cat' → Image Generator Agent\n\n"
                 f"IMPORTANT: Respond with ONLY ONE WORD - either 'DIRECT' or the exact agent name. Nothing else."
             )

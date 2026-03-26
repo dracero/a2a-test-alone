@@ -141,13 +141,14 @@ def main(host, port, pdf_dir):
             
             # Definir habilidad principal
             skill = AgentSkill(
-                id='physics_multimodal_analysis',
-                name='Análisis de Física Multimodal',
-                description='Asistente de Física I que analiza consultas, imágenes de experimentos y busca en documentos académicos para proporcionar explicaciones didácticas',
+                id='socratic_physics_tutor',
+                name='Tutor Socrático de Física Multimodal',
+                description='Tutor socrático de Física I que recibe texto e imágenes. Ante cada consulta, primero hace 3 preguntas guía para activar el pensamiento crítico del estudiante y luego proporciona la respuesta completa con ecuaciones y ejemplos.',
                 tags=[
                     'física', 
+                    'tutor socrático',
+                    'método socrático',
                     'análisis multimodal', 
-                    'búsqueda vectorial',
                     'imágenes científicas',
                     'educación universitaria',
                     'UBA'
@@ -157,14 +158,14 @@ def main(host, port, pdf_dir):
                     'Analiza este diagrama de un péndulo físico',
                     'Explica el principio de Bernoulli con ejemplos',
                     '¿Qué fenómeno físico se observa en esta imagen?',
-                    'Dame ejemplos de colisiones elásticas e inelásticas'
+                    'Ayudame a entender la segunda ley de Newton'
                 ],
             )
             
             # Crear tarjeta del agente
             agent_card = AgentCard(
-                name='Asistente de Física Multimodal',
-                description='Profesor virtual de Física I especializado en análisis multimodal (texto + imágenes), búsqueda en documentos académicos y memoria conversacional',
+                name='Tutor Socrático de Física Multimodal',
+                description='Tutor socrático de Física I que usa el método socrático: hace 3 preguntas guía y luego da la respuesta completa. Acepta texto e imágenes de experimentos, diagramas y problemas de física.',
                 url=f'http://{host}:{port}/',
                 version='1.0.0',
                 default_input_modes=PhysicsMultimodalAgent.SUPPORTED_CONTENT_TYPES,

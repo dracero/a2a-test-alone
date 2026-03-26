@@ -1,21 +1,21 @@
-# Physics Multimodal Agent
+# Tutor Socrático de Física Multimodal
 
-Virtual physics professor specialized in multimodal analysis (text + images) with vector search capabilities.
+Tutor socrático de Física I que usa el método socrático para guiar el aprendizaje. Recibe texto e imágenes, hace 3 preguntas guía y luego da la respuesta completa.
 
 ## Features
 
-- Physics concept explanations
-- Scientific image analysis
-- Vector search in academic documents (Qdrant)
-- PDF processing and indexing
-- Conversational memory
+- **Método socrático**: 3 preguntas guía antes de la respuesta completa
+- Análisis multimodal (texto + imágenes de experimentos/diagramas)
+- Búsqueda vectorial en documentos académicos (Qdrant)
+- Procesamiento e indexación de PDFs
+- Memoria conversacional
 - Streaming responses
-- UBA Physics I curriculum alignment
+- Alineado al temario de Física I - UBA
 
 ## Requirements
 
 - Python >= 3.13
-- Google API Key (Gemini)
+- Groq API Key (Llama 4)
 - Qdrant instance (cloud or local)
 - PyTorch with CUDA support
 
@@ -24,7 +24,7 @@ Virtual physics professor specialized in multimodal analysis (text + images) wit
 Set the following environment variables in the root `.env` file:
 
 ```bash
-GOOGLE_API_KEY=your_google_api_key
+GROQ_API_KEY=your_groq_api_key
 QDRANT_URL=your_qdrant_url
 QDRANT_KEY=your_qdrant_api_key
 PDF_DIR=/path/to/pdf/documents  # Optional, defaults to /content
@@ -45,14 +45,13 @@ npm run dev:agent:multimodal
 
 The agent will start on `http://localhost:10003`
 
-## Capabilities
+## How it works
 
-- Explain physics concepts (mechanics, thermodynamics, etc.)
-- Analyze experimental diagrams and scientific images
-- Search through academic PDF documents
-- Provide educational examples and explanations
-- Classify topics according to UBA curriculum
-- Process and index PDF documents automatically
+1. **El estudiante envía una consulta** (texto y/o imagen)
+2. **El orquestador** detecta que es una consulta de física y la delega al tutor
+3. **El tutor hace 3 preguntas socráticas** para guiar el pensamiento
+4. **El estudiante responde** cada pregunta
+5. **El tutor genera la respuesta completa** incorporando las respuestas del estudiante
 
 ## PDF Processing
 

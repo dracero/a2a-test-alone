@@ -191,9 +191,12 @@ class PhysicsMultimodalAgent:
     """Agente de física con procesamiento multimodal."""
     
     SYSTEM_INSTRUCTION = (
-        'Eres un profesor experto en Física I de la UBA. '
-        'Analizas consultas, imágenes de experimentos y proporciona '
-        'explicaciones claras y didácticas.'
+        'Eres un tutor socrático multimodal de Física I de la UBA. '
+        'Usas el método socrático: ante cada consulta (texto o imagen), '
+        'primero haces 3 preguntas guía para activar el pensamiento crítico '
+        'del estudiante y luego proporcionas la respuesta completa. '
+        'Analizas consultas de texto e imágenes de experimentos, diagramas '
+        'y problemas de física.'
     )
     
     SUPPORTED_CONTENT_TYPES = ['text', 'text/plain', 'image/jpeg', 'image/png', 'image/webp']
@@ -722,19 +725,31 @@ Explicación completa con todas las fórmulas en formato LaTeX."""
         self,
         original_query: str,
         question_number: int,
-        previous_answers: List[str]
+        previous_answers: List[str],
+        visual_findings: str = ""
     ) -> str:
         """Genera una pregunta socrática para guiar al estudiante."""
-        system_prompt = f"""Eres un profesor de Física I de la UBA que usa el método socrático.
+        visual_section = ""
+        if visual_findings:
+            visual_section = f"""\nHALLAZGOS VISUALES (de imágenes proporcionadas por el estudiante):
+{visual_findings}
+- Incorpora lo que se observa en las imágenes en tus preguntas.
+- Pregunta al estudiante qué fenómenos físicos identifica en la imagen.
+"""
+
+        system_prompt = f"""Eres un tutor socrático de Física I de la UBA.
 
 Tu objetivo es guiar al estudiante a descubrir la respuesta por sí mismo mediante preguntas.
+Recibís tanto texto como imágenes de experimentos, diagramas y problemas de física.
 
 TEMARIO:
 {self.temario}
+{visual_section}
 
 Reglas para las preguntas:
 - Pregunta {question_number + 1}/3
 - Haz preguntas que activen el pensamiento crítico
+- Si el estudiante envió una imagen, preguntá sobre lo que se observa en ella
 - Relaciona con conceptos fundamentales
 - Progresa desde lo básico a lo específico
 - Sé breve y directo
@@ -925,8 +940,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                         student_answers_summary
                     )
                     
-                    # Convertir fórmulas LaTeX a imágenes
-                    final_response = convert_latex_to_images_in_text(final_response)
+                    # Las fórmulas LaTeX se envían como texto (el frontend las renderiza)
                     
                     # Resetear modo socrático
                     memory.socratic_mode = False
@@ -943,11 +957,11 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                     next_question = await self.generate_socratic_question(
                         memory.original_query,
                         memory.socratic_questions_asked,
-                        memory.socratic_answers
+                        memory.socratic_answers,
+                        visual_findings=self.visual_findings.get(context_id, "")
                     )
                     
-                    # Convertir fórmulas LaTeX a imágenes
-                    next_question = convert_latex_to_images_in_text(next_question)
+                    # Las fórmulas LaTeX se envían como texto
                     
                     return next_question
             
@@ -976,11 +990,11 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
             
             # Generar primera pregunta socrática
             first_question = await self.generate_socratic_question(
-                query, 0, []
+                query, 0, [],
+                visual_findings=visual_findings
             )
             
-            # Convertir fórmulas LaTeX a imágenes
-            first_question = convert_latex_to_images_in_text(first_question)
+            # Las fórmulas LaTeX se envían como texto
             
             return first_question
             
@@ -1093,8 +1107,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                     student_answers_summary
                 )
                 
-                # Convertir fórmulas LaTeX a imágenes
-                final_response = convert_latex_to_images_in_text(final_response)
+                # Las fórmulas LaTeX se envían como texto
                 
                 # Resetear modo socrático
                 memory.socratic_mode = False
@@ -1123,15 +1136,16 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                 next_question = await self.generate_socratic_question(
                     memory.original_query,
                     memory.socratic_questions_asked,
-                    memory.socratic_answers
+                    memory.socratic_answers,
+                    visual_findings=self.visual_findings.get(context_id, "")
                 )
                 
-                # Convertir fórmulas LaTeX a imágenes
-                next_question = convert_latex_to_images_in_text(next_question)
+                # Las fórmulas LaTeX se envían como texto
                 
-                # CRÍTICO: require_user_input=True para indicar que esperamos respuesta
+                # CRÍTICO: is_task_complete=False + require_user_input=True
+                # para que el executor marque como input_required y mantenga la memoria
                 yield {
-                    'is_task_complete': True,
+                    'is_task_complete': False,
                     'require_user_input': True,
                     'content': next_question,
                     'status': 'socratic_question'
@@ -1182,15 +1196,16 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
             
             # Generar primera pregunta socrática
             first_question = await self.generate_socratic_question(
-                query, 0, []
+                query, 0, [],
+                visual_findings=visual_findings
             )
             
-            # Convertir fórmulas LaTeX a imágenes
-            first_question = convert_latex_to_images_in_text(first_question)
+            # Las fórmulas LaTeX se envían como texto
             
-            # CRÍTICO: require_user_input=True para indicar que esperamos respuesta
+            # CRÍTICO: is_task_complete=False + require_user_input=True
+            # para que el executor marque como input_required y mantenga la memoria
             yield {
-                'is_task_complete': True,
+                'is_task_complete': False,
                 'require_user_input': True,
                 'content': first_question,
                 'status': 'socratic_question'

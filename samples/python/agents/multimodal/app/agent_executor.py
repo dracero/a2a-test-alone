@@ -219,6 +219,7 @@ class PhysicsAgentExecutor(AgentExecutor):
         
         final_response = None
         has_error = False
+        handled_as_input_required = False
         
         try:
             logger.info("🔄 Iniciando streaming del agente...")
@@ -250,13 +251,11 @@ class PhysicsAgentExecutor(AgentExecutor):
                     logger.info(f"📦 Chunk {chunk_count}: status={status}, complete={is_complete}")
                     last_status = status
                 
-                if is_complete:
-                    final_response = content
-                    logger.info(f"🎉 RESPUESTA FINAL ({len(content)} caracteres)")
-                    break
-                    
-                elif require_input:
+                if require_input:
+                    # CRÍTICO: Procesar require_input ANTES que is_complete
+                    # para mantener la tarea viva (ej: preguntas socráticas)
                     logger.info("⏸️ Requiere input del usuario")
+                    handled_as_input_required = True
                     await updater.update_status(
                         TaskState.input_required,
                         new_agent_text_message(
@@ -266,6 +265,11 @@ class PhysicsAgentExecutor(AgentExecutor):
                         ),
                         final=True,
                     )
+                    break
+
+                elif is_complete:
+                    final_response = content
+                    logger.info(f"🎉 RESPUESTA FINAL ({len(content)} caracteres)")
                     break
                     
                 else:
@@ -280,7 +284,9 @@ class PhysicsAgentExecutor(AgentExecutor):
                             ),
                         )
             
-            if final_response:
+            if handled_as_input_required:
+                logger.info("✅ Tarea en espera de input del usuario (input_required)")
+            elif final_response:
                 logger.info("📤 Enviando respuesta final...")
                 
                 await updater.add_artifact(

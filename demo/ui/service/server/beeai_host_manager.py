@@ -127,9 +127,10 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
         parts.append(Part(root=TextPart(text=message_text)))
         
         # Create the A2A message
+        context_id = current_message.context_id if current_message else ""
         a2a_message = Message(
             message_id=str(uuid.uuid4()),
-            context_id=current_message.context_id if current_message else "",
+            context_id=context_id,
             role=Role.user,
             parts=parts
         )
@@ -207,10 +208,33 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
                                                 task_id = result['taskId']
                                                 print(f"📋 Task ID: {task_id}")
                                             
-                                            # Extract status updates
+                                            # Extract status updates and text from status messages
                                             if isinstance(result, dict) and 'status' in result:
                                                 status = result['status']
                                                 print(f"📊 Status: {status}")
+                                                
+                                                # Extract text from status message (ej: preguntas socráticas)
+                                                if isinstance(status, dict):
+                                                    state = status.get('state', '')
+                                                    status_msg = status.get('message')
+                                                    
+                                                    # Gestionar sesiones activas
+                                                    if state == 'input-required' and context_id:
+                                                        self.manager._active_sessions[context_id] = agent_name
+                                                        print(f"📌 Sesión activa guardada: {context_id[:8]}... → {agent_name}")
+                                                    elif state == 'completed' and context_id:
+                                                        if context_id in self.manager._active_sessions:
+                                                            del self.manager._active_sessions[context_id]
+                                                            print(f"🧹 Sesión activa limpiada: {context_id[:8]}...")
+                                                    
+                                                    if status_msg and isinstance(status_msg, dict):
+                                                        parts = status_msg.get('parts', [])
+                                                        for part in parts:
+                                                            if isinstance(part, dict) and part.get('kind') == 'text':
+                                                                text = part.get('text', '')
+                                                                if text:
+                                                                    full_response.append(text)
+                                                                    print(f"📝 Text from status message ({state}): {text[:100]}...")
                                             
                                             # Extract response parts from 'response' field
                                             if isinstance(result, dict) and 'response' in result:
@@ -343,10 +367,27 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
                     task_data = task_result['result']
                     status = task_data.get('status')
                     
+                    # status puede ser un dict {'state': '...', 'message': {...}} 
+                    # o un string directamente
+                    if isinstance(status, dict):
+                        state = status.get('state', '')
+                        status_message = status.get('message')
+                    else:
+                        state = str(status) if status else ''
+                        status_message = None
+                    
                     print(f"📊 Task status: {status} (attempt {attempt + 1}/{max_attempts})")
                     
-                    if status == 'completed':
-                        # Try to extract from 'response' field first
+                    if state == 'completed':
+                        # Try to extract from status message first
+                        if status_message and isinstance(status_message, dict):
+                            parts = status_message.get('parts', [])
+                            text_parts = [p.get('text', '') for p in parts 
+                                         if isinstance(p, dict) and p.get('kind') == 'text' and p.get('text')]
+                            if text_parts:
+                                return '\n'.join(text_parts)
+                        
+                        # Try to extract from 'response' field
                         response_message = task_data.get('response', {})
                         if isinstance(response_message, dict):
                             parts = response_message.get('parts', [])
@@ -363,7 +404,6 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
                         artifact = task_data.get('artifact', {})
                         if isinstance(artifact, dict):
                             if 'parts' in artifact:
-                                # artifact is a message with parts
                                 text_parts = []
                                 for part in artifact['parts']:
                                     if isinstance(part, dict) and part.get('kind') == 'text':
@@ -372,12 +412,34 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
                                 if text_parts:
                                     return '\n'.join(text_parts)
                             elif artifact.get('kind') == 'text':
-                                # artifact is directly a text part
                                 return artifact.get('text', '')
                         
                         return f"✅ Agent {agent_name} completed the task."
                     
-                    elif status == 'failed':
+                    elif state == 'input-required':
+                        # El agente necesita input del usuario (ej: pregunta socrática)
+                        # Extraer el mensaje y devolverlo como respuesta
+                        print(f"🎓 Agent {agent_name} requires user input (e.g. Socratic question)")
+                        
+                        if status_message and isinstance(status_message, dict):
+                            parts = status_message.get('parts', [])
+                            text_parts = [p.get('text', '') for p in parts 
+                                         if isinstance(p, dict) and p.get('kind') == 'text' and p.get('text')]
+                            if text_parts:
+                                return '\n'.join(text_parts)
+                        
+                        # Fallback: buscar en artifacts o response
+                        response_message = task_data.get('response', {})
+                        if isinstance(response_message, dict):
+                            parts = response_message.get('parts', [])
+                            text_parts = [p.get('text', '') for p in parts 
+                                         if isinstance(p, dict) and p.get('kind') == 'text' and p.get('text')]
+                            if text_parts:
+                                return '\n'.join(text_parts)
+                        
+                        return f"🎓 Agent {agent_name} is waiting for your response."
+                    
+                    elif state == 'failed':
                         error = task_data.get('error', 'Unknown error')
                         return f"❌ Agent {agent_name} failed: {error}"
         
@@ -397,6 +459,8 @@ class BeeAIHostManager(ApplicationManager):
         self._events: dict[str, Event] = {}
         self._agents: list[AgentCard] = []
         self._pending_message_ids: list[str] = []
+        # Mapeo context_id → agent_name para sesiones activas (ej: socrático)
+        self._active_sessions: dict[str, str] = {}
 
         self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
 
@@ -498,42 +562,61 @@ class BeeAIHostManager(ApplicationManager):
 
         # Use BeeAI Workflow pattern for Gemini compatibility
         try:
-            from service.server.beeai_orchestrator_workflow import (
-                OrchestratorState, create_orchestrator_workflow)
+            # Verificar si hay una sesión activa para este contexto
+            # (ej: sesión socrática en progreso)
+            active_agent = self._active_sessions.get(context_id)
             
-            print("🚀 Starting BeeAI Workflow orchestration...")
-            
-            # Create the workflow
-            workflow = await create_orchestrator_workflow(
-                manager=self,
-                list_tool=ListRemoteAgentsTool(self),
-                send_tool=SendMessageToAgentTool(self),
-                llm=self.llm  # Pass the raw LangChain LLM
-            )
-            
-            # Execute workflow with initial state
-            initial_state = OrchestratorState(
-                user_message=text_content,
-                has_images=has_images
-            )
-            
-            workflow_run = await workflow.run(initial_state)
-            
-            # Extract the final state from the workflow run
-            final_state = workflow_run.state
-            
-            # Extract response from final state
-            if final_state.error:
-                resp_text = f"Error: {final_state.error}"
-            elif final_state.agent_response:
-                resp_text = final_state.agent_response
+            if active_agent:
+                print(f"🔄 Sesión activa detectada para contexto {context_id[:8]}... → {active_agent}")
+                print(f"📤 Enviando directamente al agente (bypass del orquestador)")
+                
+                send_tool_instance = SendMessageToAgentTool(self)
+                send_input = SendMessageToAgentInput(
+                    agent_name=active_agent,
+                    message=text_content
+                )
+                resp_text = await send_tool_instance._run(send_input, None, None)
             else:
-                resp_text = "No response from agent."
+                from service.server.beeai_orchestrator_workflow import (
+                    OrchestratorState, create_orchestrator_workflow)
+                
+                print("🚀 Starting BeeAI Workflow orchestration...")
+                
+                # Create the workflow
+                workflow = await create_orchestrator_workflow(
+                    manager=self,
+                    list_tool=ListRemoteAgentsTool(self),
+                    send_tool=SendMessageToAgentTool(self),
+                    llm=self.llm  # Pass the raw LangChain LLM
+                )
+                
+                # Execute workflow with initial state
+                initial_state = OrchestratorState(
+                    user_message=text_content,
+                    has_images=has_images
+                )
+                
+                workflow_run = await workflow.run(initial_state)
+                
+                # Extract the final state from the workflow run
+                final_state = workflow_run.state
+                
+                # Extract response from final state
+                if final_state.error:
+                    resp_text = f"Error: {final_state.error}"
+                elif final_state.agent_response:
+                    resp_text = final_state.agent_response
+                else:
+                    resp_text = "No response from agent."
+                    
                 
         except Exception as e:
             import traceback
             traceback.print_exc()
             resp_text = f"An error occurred during orchestration: {e}"
+            # Limpiar sesión activa si hubo error
+            if context_id in self._active_sessions:
+                del self._active_sessions[context_id]
 
         response_msg = Message(
             message_id=str(uuid.uuid4()),
