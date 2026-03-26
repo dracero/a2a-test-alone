@@ -221,10 +221,12 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
                                                     # Gestionar sesiones activas
                                                     if state == 'input-required' and context_id:
                                                         self.manager._active_sessions[context_id] = agent_name
+                                                        self.manager._save_sessions()
                                                         print(f"📌 Sesión activa guardada: {context_id[:8]}... → {agent_name}")
                                                     elif state == 'completed' and context_id:
                                                         if context_id in self.manager._active_sessions:
                                                             del self.manager._active_sessions[context_id]
+                                                            self.manager._save_sessions()
                                                             print(f"🧹 Sesión activa limpiada: {context_id[:8]}...")
                                                     
                                                     if status_msg and isinstance(status_msg, dict):
@@ -463,6 +465,8 @@ class BeeAIHostManager(ApplicationManager):
         self._active_sessions: dict[str, str] = {}
 
         self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
+        self._sessions_file = "/tmp/beeai_active_sessions.json"
+        self._load_sessions()
 
         # Initialize the LangChain Groq Model
         self.llm = ChatGroq(
@@ -473,6 +477,27 @@ class BeeAIHostManager(ApplicationManager):
         )
         # Wrap it for BeeAI
         self.chat_model = LangChainChatModel(self.llm)
+
+    def _load_sessions(self):
+        """Carga las sesiones activas desde el disco."""
+        if os.path.exists(self._sessions_file):
+            try:
+                with open(self._sessions_file, 'r') as f:
+                    self._active_sessions = json.load(f)
+                print(f"📖 Sesiones cargadas: {len(self._active_sessions)}")
+            except Exception as e:
+                print(f"Error cargando sesiones: {e}")
+                self._active_sessions = {}
+        else:
+            self._active_sessions = {}
+
+    def _save_sessions(self):
+        """Guarda las sesiones activas en el disco."""
+        try:
+            with open(self._sessions_file, 'w') as f:
+                json.dump(self._active_sessions, f)
+        except Exception as e:
+            print(f"Error guardando sesiones: {e}")
 
     async def create_conversation(self) -> Conversation:
         conversation_id = str(uuid.uuid4())
@@ -617,6 +642,7 @@ class BeeAIHostManager(ApplicationManager):
             # Limpiar sesión activa si hubo error
             if context_id in self._active_sessions:
                 del self._active_sessions[context_id]
+                self._save_sessions()
 
         response_msg = Message(
             message_id=str(uuid.uuid4()),

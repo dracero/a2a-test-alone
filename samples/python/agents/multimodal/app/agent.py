@@ -6,6 +6,7 @@ import glob
 import io
 import os
 import re
+import json
 from collections.abc import AsyncIterable
 from io import BytesIO
 from pathlib import Path
@@ -111,14 +112,14 @@ def convert_latex_to_images_in_text(text: str) -> str:
         latex = match.group(1).strip()
         img_base64 = latex_to_image_base64(latex, fontsize=18)
         if img_base64:
-            return f'\n\n![formula](data:image/png;base64,{img_base64})\n\n'
+            return f'<div style="text-align:center;margin:8px 0;"><img src="data:image/png;base64,{img_base64}" style="max-width:100%;vertical-align:middle;" /></div>'
         return match.group(0)  # Si falla, mantener original
     
     def replace_inline(match):
         latex = match.group(1).strip()
         img_base64 = latex_to_image_base64(latex, fontsize=14)
         if img_base64:
-            return f'![formula](data:image/png;base64,{img_base64})'
+            return f'<img src="data:image/png;base64,{img_base64}" style="vertical-align:middle;height:1.2em;" />'
         return match.group(0)  # Si falla, mantener original
     
     # Primero reemplazar display ($$...$$) para evitar conflictos
@@ -143,6 +144,31 @@ class SemanticMemory:
         self.socratic_answers = []
         self.original_query = ""
     
+    def to_dict(self) -> dict:
+        """Serializa la memoria a un diccionario."""
+        return {
+            "conversations": self.conversations,
+            "summary": self.summary,
+            "direct_history": self.direct_history,
+            "socratic_mode": self.socratic_mode,
+            "socratic_questions_asked": self.socratic_questions_asked,
+            "socratic_answers": self.socratic_answers,
+            "original_query": self.original_query
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict, llm) -> 'SemanticMemory':
+        """Crea una instancia de SemanticMemory desde un diccionario."""
+        mem = cls(llm=llm)
+        mem.conversations = data.get("conversations", [])
+        mem.summary = data.get("summary", "")
+        mem.direct_history = data.get("direct_history", "")
+        mem.socratic_mode = data.get("socratic_mode", False)
+        mem.socratic_questions_asked = data.get("socratic_questions_asked", 0)
+        mem.socratic_answers = data.get("socratic_answers", [])
+        mem.original_query = data.get("original_query", "")
+        return mem
+
     def add_interaction(self, query: str, response: str):
         """Guardar interacción en memoria."""
         self.conversations.append({"query": query, "response": response})
@@ -226,6 +252,36 @@ class PhysicsMultimodalAgent:
         # Memoria conversacional
         self.memories = {}
         self.visual_findings = {}
+        self._memories_file = "/tmp/physics_agent_memories.json"
+        
+        self._load_memories()
+
+    def _save_memories(self):
+        """Guarda todas las memorias en el disco."""
+        try:
+            data = {
+                cid: mem.to_dict() 
+                for cid, mem in self.memories.items()
+            }
+            with open(self._memories_file, 'w') as f:
+                json.dump(data, f)
+        except Exception as e:
+            print(f"Error guardando memorias: {e}")
+
+    def _load_memories(self):
+        """Carga todas las memorias desde el disco."""
+        if os.path.exists(self._memories_file):
+            try:
+                with open(self._memories_file, 'r') as f:
+                    data = json.load(f)
+                for cid, mem_data in data.items():
+                    self.memories[cid] = SemanticMemory.from_dict(mem_data, self.llm)
+                print(f"📖 Memorias del agente cargadas: {len(self.memories)}")
+            except Exception as e:
+                print(f"Error cargando memorias del agente: {e}")
+                self.memories = {}
+        else:
+            self.memories = {}
         self.temario = ""
         
         print("✅ PhysicsMultimodalAgent inicializado")
@@ -477,8 +533,10 @@ Contenido:
         return memory.get_context()
     
     def _save_to_memory(self, context_id: str, query: str, response: str):
+        """Guardar interacción en memoria."""
         memory = self._get_or_create_memory(context_id)
         memory.add_interaction(query, response)
+        self._save_memories()
     
     def encode_image(self, image_data: bytes) -> str:
         return base64.b64encode(image_data).decode('utf-8')
@@ -940,8 +998,8 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                         student_answers_summary
                     )
                     
-                    # Las fórmulas LaTeX se envían como texto (el frontend las renderiza)
-                    
+                    # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
+                    final_response = convert_latex_to_images_in_text(final_response)
                     # Resetear modo socrático
                     memory.socratic_mode = False
                     memory.socratic_questions_asked = 0
@@ -961,8 +1019,8 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                         visual_findings=self.visual_findings.get(context_id, "")
                     )
                     
-                    # Las fórmulas LaTeX se envían como texto
-                    
+                    # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
+                    final_response = convert_latex_to_images_in_text(final_response)
                     return next_question
             
             # Modo normal: iniciar modo socrático
@@ -994,8 +1052,8 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                 visual_findings=visual_findings
             )
             
-            # Las fórmulas LaTeX se envían como texto
-            
+            # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
+            first_question = convert_latex_to_images_in_text(first_question)
             return first_question
             
         except Exception as e:
@@ -1107,8 +1165,8 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                     student_answers_summary
                 )
                 
-                # Las fórmulas LaTeX se envían como texto
-                
+                # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
+                final_response = convert_latex_to_images_in_text(final_response)
                 # Resetear modo socrático
                 memory.socratic_mode = False
                 memory.socratic_questions_asked = 0
@@ -1140,8 +1198,8 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                     visual_findings=self.visual_findings.get(context_id, "")
                 )
                 
-                # Las fórmulas LaTeX se envían como texto
-                
+                # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
+                next_question = convert_latex_to_images_in_text(next_question)
                 # CRÍTICO: is_task_complete=False + require_user_input=True
                 # para que el executor marque como input_required y mantenga la memoria
                 yield {
@@ -1200,8 +1258,8 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                 visual_findings=visual_findings
             )
             
-            # Las fórmulas LaTeX se envían como texto
-            
+            # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
+            first_question = convert_latex_to_images_in_text(first_question)
             # CRÍTICO: is_task_complete=False + require_user_input=True
             # para que el executor marque como input_required y mantenga la memoria
             yield {
@@ -1215,9 +1273,10 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
         """Limpia la memoria de un contexto específico."""
         if context_id in self.memories:
             self.memories[context_id].clear()
-            del self.memories[context_id]
+            # self.memories[context_id] = SemanticMemory(llm=self.llm) No borrar la entrada, solo limpiar
         if context_id in self.visual_findings:
             del self.visual_findings[context_id]
+        self._save_memories()
         print(f"🧹 Memoria limpiada para contexto: {context_id}")
 
     async def get_memory_summary(self, context_id: str) -> str:

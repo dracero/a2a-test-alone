@@ -2,6 +2,7 @@
 
 import { Message, Part } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { hasLatex, renderLatex } from '@/lib/latex';
 import { User, Bot } from 'lucide-react';
 import Image from 'next/image';
 import { useState } from 'react';
@@ -55,7 +56,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
 function MessagePart({ part, isUser }: { part: Part; isUser: boolean }) {
   const [imageError, setImageError] = useState(false);
-  
+
   // Guard clause
   if (!part || typeof part.kind === 'undefined') {
     console.warn('⚠️ Invalid part in MessagePart:', part);
@@ -64,9 +65,52 @@ function MessagePart({ part, isUser }: { part: Part; isUser: boolean }) {
 
   // Texto
   if (part.kind === 'text') {
+    const text = part.text;
+
+    // 🔧 PRIORIDAD 1: Detectar y renderizar fórmulas LaTeX
+    if (typeof text === 'string' && hasLatex(text)) {
+      console.log('🔧 Detected LaTeX formulas, rendering...');
+      const renderedLatex = renderLatex(text);
+
+      return (
+        <div
+          className="text-sm leading-relaxed break-words"
+          dangerouslySetInnerHTML={{ __html: renderedLatex }}
+        />
+      );
+    }
+
+    // 🔧 PRIORIDAD 2: Detectar y parsear HTML con imágenes embebidas
+    if (typeof text === 'string' && text.includes('<img') && text.includes('data:image/')) {
+      console.log('🔧 Detected HTML with embedded images, parsing...');
+
+      // Limpiar y mejorar el HTML para mejor visualización
+      let cleanedHtml = text;
+
+      // Agregar estilos a las imágenes inline para que se vean mejor
+      cleanedHtml = cleanedHtml.replace(
+        /<img([^>]*?)style="([^"]*?)"([^>]*?)>/g,
+        '<img$1style="$2; max-width: 100%; height: auto; display: inline-block; margin: 0 4px;"$3>'
+      );
+
+      // Si no tienen style, agregarlo
+      cleanedHtml = cleanedHtml.replace(
+        /<img(?![^>]*style=)([^>]*?)>/g,
+        '<img$1 style="max-width: 100%; height: auto; display: inline-block; margin: 0 4px; vertical-align: middle;">'
+      );
+
+      // Parsear el HTML y renderizarlo de forma segura
+      return (
+        <div
+          className="text-sm leading-relaxed break-words"
+          dangerouslySetInnerHTML={{ __html: cleanedHtml }}
+        />
+      );
+    }
+
     return (
       <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
-        {part.text}
+        {text}
       </p>
     );
   }
@@ -94,7 +138,7 @@ function MessagePart({ part, isUser }: { part: Part; isUser: boolean }) {
     });
 
     const isImage = part.file.mime_type?.startsWith('image/');
-    
+
     console.log('🔍 isImage check:', {
       isImage,
       mime_type: part.file.mime_type,
@@ -117,7 +161,7 @@ function MessagePart({ part, isUser }: { part: Part; isUser: boolean }) {
       if (file.uri) {
         imageSrc = file.uri;
         console.log('✅ Using URI for image:', imageSrc);
-      } 
+      }
       // Prioridad 2: Bytes (base64 directo)
       else if (file.bytes) {
         let bytesStr = file.bytes as string;
@@ -214,10 +258,10 @@ function MessagePart({ part, isUser }: { part: Part; isUser: boolean }) {
       <div className={cn('text-sm px-3 py-2 rounded-lg', isUser ? 'bg-blue-700' : 'bg-slate-200')}>
         📎 File: {part.file.mime_type}
         {part.file.uri && (
-          <a 
-            href={part.file.uri} 
-            target="_blank" 
-            rel="noopener noreferrer" 
+          <a
+            href={part.file.uri}
+            target="_blank"
+            rel="noopener noreferrer"
             className="ml-2 underline hover:opacity-80"
           >
             Download

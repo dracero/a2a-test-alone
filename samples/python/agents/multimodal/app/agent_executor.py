@@ -284,6 +284,8 @@ class PhysicsAgentExecutor(AgentExecutor):
                             ),
                         )
             
+            logger.info(f"📊 Loop finalizado. chunk_count={chunk_count}, handled_as_input_required={handled_as_input_required}, bool(final_response)={bool(final_response)}")
+            
             if handled_as_input_required:
                 logger.info("✅ Tarea en espera de input del usuario (input_required)")
             elif final_response:

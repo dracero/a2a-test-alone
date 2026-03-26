@@ -37,6 +37,32 @@ def page_scaffold():
     async_poller(action=action, trigger_event=refresh_app_state)
 
     sidenav('')
+    # Inject MathJax for LaTeX rendering
+    me.html(
+        """
+        <script>
+        window.MathJax = {
+          tex: {
+            inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+            displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
+            processEscapes: true
+          },
+          options: {
+            enableMenu: false
+          }
+        };
+        </script>
+        <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script>
+        // Periodic re-typeset to handle streaming messages in Mesop
+        setInterval(() => {
+          if (window.MathJax && window.MathJax.typeset) {
+            window.MathJax.typeset();
+          }
+        }, 1000);
+        </script>
+        """
+    )
 
     with me.box(
         style=me.Style(
