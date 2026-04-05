@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "a2a-sdk>=0.3.2",
-    "click>=8.2.1",
+    "click>=8.1.7,<8.2",
     "httpx>=0.28.1",
     "langchain-core>=0.3.74",
     "langchain-groq>=0.2.0",
@@ -23,7 +23,6 @@ dependencies = [
     "torchvision==0.21.0",
     "transformers>=4.46.3",
     "uvicorn>=0.35.0",
-    "dspy>=3.0.0",
 ]
 
 [[tool.uv.index]]
