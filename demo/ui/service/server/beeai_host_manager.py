@@ -585,6 +585,8 @@ class BeeAIHostManager(ApplicationManager):
         # Check if there are any images
         has_images = any(p.root.kind == 'file' for p in message.parts)
 
+ 
+
         # Use BeeAI Workflow pattern for Gemini compatibility
         try:
             # Verificar si hay una sesión activa para este contexto
@@ -596,6 +598,7 @@ class BeeAIHostManager(ApplicationManager):
                 print(f"📤 Enviando directamente al agente (bypass del orquestador)")
                 
                 send_tool_instance = SendMessageToAgentTool(self)
+                
                 send_input = SendMessageToAgentInput(
                     agent_name=active_agent,
                     message=text_content
@@ -643,6 +646,8 @@ class BeeAIHostManager(ApplicationManager):
             if context_id in self._active_sessions:
                 del self._active_sessions[context_id]
                 self._save_sessions()
+
+ 
 
         response_msg = Message(
             message_id=str(uuid.uuid4()),

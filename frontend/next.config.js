@@ -14,32 +14,32 @@ const nextConfig = {
     return [
       {
         source: '/conversation/:path*',
-        destination: 'http://localhost:12000/conversation/:path*',
+        destination: 'http://127.0.0.1:12000/conversation/:path*',
       },
       {
         source: '/message/:path*',
-        destination: 'http://localhost:12000/message/:path*',
+        destination: 'http://127.0.0.1:12000/message/:path*',
       },
       {
         // Configuración específica para archivos
         source: '/message/file/:id',
-        destination: 'http://localhost:12000/message/file/:id',
+        destination: 'http://127.0.0.1:12000/message/file/:id',
       },
       {
         source: '/events/:path*',
-        destination: 'http://localhost:12000/events/:path*',
+        destination: 'http://127.0.0.1:12000/events/:path*',
       },
       {
         source: '/task/:path*',
-        destination: 'http://localhost:12000/task/:path*',
+        destination: 'http://127.0.0.1:12000/task/:path*',
       },
       {
         source: '/agent/:path*',
-        destination: 'http://localhost:12000/agent/:path*',
+        destination: 'http://127.0.0.1:12000/agent/:path*',
       },
       {
         source: '/api_key/:path*',
-        destination: 'http://localhost:12000/api_key/:path*',
+        destination: 'http://127.0.0.1:12000/api_key/:path*',
       },
     ];
   },

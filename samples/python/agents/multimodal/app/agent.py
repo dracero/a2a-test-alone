@@ -50,6 +50,9 @@ def latex_to_image_base64(latex_formula: str, fontsize: int = 16) -> str:
         fig = plt.figure(figsize=(0.01, 0.01), dpi=150)
         fig.patch.set_alpha(0)
         
+        # Limpiar \tag{} ya que matplotlib/mathtext no lo soporta
+        latex_formula = re.sub(r'\\tag\{.*?\}', '', latex_formula)
+        
         # Renderizar LaTeX
         text = fig.text(
             0, 0, 
@@ -216,7 +219,8 @@ class SemanticMemory:
 class PhysicsMultimodalAgent:
     """Agente de física con procesamiento multimodal."""
     
-    SYSTEM_INSTRUCTION = (
+    # Default prompts (fallback when no optimized prompts are available)
+    _DEFAULT_SYSTEM_INSTRUCTION = (
         'Eres un tutor socrático multimodal de Física I de la UBA. '
         'Usas el método socrático: ante cada consulta (texto o imagen), '
         'primero haces 3 preguntas guía para activar el pensamiento crítico '
@@ -227,6 +231,12 @@ class PhysicsMultimodalAgent:
     
     SUPPORTED_CONTENT_TYPES = ['text', 'text/plain', 'image/jpeg', 'image/png', 'image/webp']
     
+    # Path to DSPy-optimized prompts (relative to this file's directory)
+    _OPTIMIZED_PROMPTS_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "optimized_prompts.json"
+    )
+    
     def __init__(self, qdrant_url: str = None, qdrant_api_key: str = None):
         """Inicializar el agente de física."""
         from langchain_groq import ChatGroq
@@ -235,6 +245,12 @@ class PhysicsMultimodalAgent:
             temperature=0.3,
             max_tokens=4096,
             api_key=os.getenv('GROQ_API_KEY')
+        )
+        
+        # Cargar prompts optimizados (si existen)
+        self._optimized_prompts = self._load_optimized_prompts()
+        self.SYSTEM_INSTRUCTION = self._get_prompt(
+            "system_instruction", self._DEFAULT_SYSTEM_INSTRUCTION
         )
         
         # Qdrant
@@ -285,6 +301,68 @@ class PhysicsMultimodalAgent:
         self.temario = ""
         
         print("✅ PhysicsMultimodalAgent inicializado")
+    
+    def _load_optimized_prompts(self) -> dict:
+        """Carga prompts optimizados por DSPy desde JSON.
+        
+        Returns:
+            dict con prompts optimizados, o dict vacío si no existe el archivo.
+        """
+        path = self._OPTIMIZED_PROMPTS_PATH
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                prompts = data.get("prompts", {})
+                meta = data.get("metadata", {})
+                print(f"🧠 Prompts optimizados cargados desde {Path(path).name}")
+                print(f"   Modelo de optimización: {meta.get('model', 'desconocido')}")
+                print(f"   Prompts disponibles: {list(prompts.keys())}")
+                return prompts
+            except Exception as e:
+                print(f"⚠️ Error cargando prompts optimizados: {e}")
+                return {}
+        else:
+            print("ℹ️ No se encontró optimized_prompts.json, usando prompts por defecto")
+            return {}
+    
+    def _get_prompt(self, key: str, default: str) -> str:
+        """Obtiene un prompt optimizado o devuelve el default.
+        
+        Args:
+            key: Clave del prompt en optimized_prompts.json
+            default: Valor por defecto si no existe el prompt optimizado
+        
+        Returns:
+            El prompt optimizado si existe, o el default.
+        """
+        if key in self._optimized_prompts:
+            instruction = self._optimized_prompts[key].get("instruction", "")
+            if instruction:
+                return instruction
+        return default
+    
+    def _get_demos(self, key: str) -> str:
+        """Obtiene los few-shot demos como texto formateado.
+        
+        Args:
+            key: Clave del prompt en optimized_prompts.json
+        
+        Returns:
+            String con los demos formateados, o string vacío.
+        """
+        if key in self._optimized_prompts:
+            demos = self._optimized_prompts[key].get("demos", [])
+            if demos:
+                demo_texts = []
+                for i, demo in enumerate(demos, 1):
+                    parts = [f"\n--- Ejemplo {i} ---"]
+                    for k, v in demo.items():
+                        if k != "rationale":  # Skip chain-of-thought internals
+                            parts.append(f"{k}: {v}")
+                    demo_texts.append("\n".join(parts))
+                return "\n\nEJEMPLOS DE REFERENCIA:\n" + "\n".join(demo_texts)
+        return ""
     
     # ==================== MÉTODOS DE PROCESAMIENTO DE PDFs ====================
     # (Copiar todos los métodos de procesamiento del archivo original)
@@ -720,7 +798,7 @@ Genera consulta optimizada."""
         image_context: str
     ) -> str:
         """Genera respuesta final."""
-        system_prompt = f"""Profesor de Física I UBA.
+        _default_direct = f"""Profesor de Física I UBA.
 
 TEMARIO:
 {self.temario}
@@ -747,6 +825,11 @@ Reglas:
 - NUNCA uses texto plano para fórmulas (NO escribas "F = m*a" o "E = 1/2*m*v^2")
 - Usa notación matemática correcta: vectores con \\vec{{}}, fracciones con \\frac{{}}{{}}, subíndices con _, superíndices con ^
 """
+        system_prompt = self._get_prompt("direct_response", _default_direct)
+        # Append few-shot demos if available
+        demos = self._get_demos("direct_response")
+        if demos:
+            system_prompt += demos
         
         user_prompt = f"""
 CONSULTA:
@@ -795,7 +878,7 @@ Explicación completa con todas las fórmulas en formato LaTeX."""
 - Pregunta al estudiante qué fenómenos físicos identifica en la imagen.
 """
 
-        system_prompt = f"""Eres un tutor socrático de Física I de la UBA.
+        _default_socratic = f"""Eres un tutor socrático de Física I de la UBA.
 
 Tu objetivo es guiar al estudiante a descubrir la respuesta por sí mismo mediante preguntas.
 Recibís tanto texto como imágenes de experimentos, diagramas y problemas de física.
@@ -821,6 +904,11 @@ Formato de respuesta:
 
 💡 *Piensa en los conceptos fundamentales antes de responder.*
 """
+        system_prompt = self._get_prompt("socratic_question", _default_socratic)
+        # Append few-shot demos if available
+        demos = self._get_demos("socratic_question")
+        if demos:
+            system_prompt += demos
         
         previous_context = ""
         if previous_answers:
@@ -857,7 +945,7 @@ Genera la pregunta socrática número {question_number + 1} para guiar al estudi
         student_answers: str
     ) -> str:
         """Genera respuesta final después del diálogo socrático."""
-        system_prompt = f"""Profesor de Física I UBA que usa el método socrático.
+        _default_post_socratic = f"""Profesor de Física I UBA que usa el método socrático.
 
 Has guiado al estudiante con 3 preguntas socráticas. Ahora proporciona la respuesta completa.
 
@@ -894,6 +982,11 @@ Reglas:
 - NUNCA uses texto plano para fórmulas
 - Usa notación matemática correcta: \\vec{{}}, \\frac{{}}{{}}, \\Delta, \\theta, etc.
 """
+        system_prompt = self._get_prompt("post_socratic_response", _default_post_socratic)
+        # Append few-shot demos if available
+        demos = self._get_demos("post_socratic_response")
+        if demos:
+            system_prompt += demos
         
         user_prompt = f"""
 CONSULTA ORIGINAL:
@@ -1020,7 +1113,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                     )
                     
                     # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
-                    final_response = convert_latex_to_images_in_text(final_response)
+                    next_question = convert_latex_to_images_in_text(next_question)
                     return next_question
             
             # Modo normal: iniciar modo socrático
