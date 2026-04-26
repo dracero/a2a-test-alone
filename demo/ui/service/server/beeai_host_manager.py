@@ -582,10 +582,23 @@ class BeeAIHostManager(ApplicationManager):
         # Extract text from message parts
         text_content = " ".join([p.root.text for p in message.parts if p.root.kind == 'text'])
         
-        # Check if there are any images
+        # Check if there are any images and extract their data for visual classification
         has_images = any(p.root.kind == 'file' for p in message.parts)
-
- 
+        image_data_list = []
+        if has_images:
+            for p in message.parts:
+                if p.root.kind == 'file':
+                    file_obj = p.root.file
+                    mime_type = getattr(file_obj, 'mime_type', 'image/png') or 'image/png'
+                    bytes_b64 = ""
+                    if isinstance(file_obj, FileWithBytes) and file_obj.bytes:
+                        bytes_b64 = file_obj.bytes
+                    if bytes_b64:
+                        image_data_list.append({
+                            "mime_type": mime_type,
+                            "bytes_b64": bytes_b64
+                        })
+            print(f"🖼️ Extracted {len(image_data_list)} image(s) for visual classification")
 
         # Use BeeAI Workflow pattern for Gemini compatibility
         try:
@@ -618,10 +631,11 @@ class BeeAIHostManager(ApplicationManager):
                     llm=self.llm  # Pass the raw LangChain LLM
                 )
                 
-                # Execute workflow with initial state
+                # Execute workflow with initial state (including image data for visual classification)
                 initial_state = OrchestratorState(
                     user_message=text_content,
-                    has_images=has_images
+                    has_images=has_images,
+                    image_data_list=image_data_list
                 )
                 
                 workflow_run = await workflow.run(initial_state)

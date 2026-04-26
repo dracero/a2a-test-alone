@@ -15,6 +15,7 @@ class OrchestratorState(BaseModel):
     """State for the orchestration workflow"""
     user_message: str
     has_images: bool
+    image_data_list: list[dict] = []  # Lista de {mime_type, bytes_b64} para clasificación visual
     available_agents: list[dict] = []
     chosen_agent: str = ""
     agent_response: str = ""
@@ -49,7 +50,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
     
     # Step 2: Use Groq to classify and choose the best agent
     async def classify_and_choose(state: OrchestratorState) -> str:
-        """Use Groq to analyze the request and choose the best agent or respond directly"""
+        """Use multimodal LLM to analyze the request (including images) and choose the best agent"""
         print("🤔 Step 2: Classifying request and choosing agent...")
         
         if not state.available_agents:
@@ -63,34 +64,56 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 for i, agent in enumerate(state.available_agents)
             ])
             
-            # Create a classification prompt for Groq
-            classification_prompt = (
-                f"You are a routing system. Analyze the user's request and decide if it needs a specialized agent or if you should respond directly.\n\n"
+            # Create a classification prompt
+            classification_text = (
+                f"You are a routing system. Analyze the user's request and decide which specialized agent should handle it, or if you should respond directly.\n\n"
                 f"Available specialized agents:\n{agents_description}\n\n"
-                f"User request: \"{state.user_message}\"\n"
-                f"Request includes images: {state.has_images}\n\n"
-                f"RULES:\n"
-                f"1. If the request is a simple greeting (hello, hi, hola, hey, etc.), respond with: DIRECT\n"
-                f"2. If the request is small talk or general conversation, respond with: DIRECT\n"
-                f"3. If the request asks what you can do or who you are, respond with: DIRECT\n"
-                f"4. If the request needs specialized knowledge or analysis, respond with the EXACT agent name.\n\n"
-                f"Examples:\n"
-                f"- 'Hola' → DIRECT\n"
-                f"- 'Hello' → DIRECT\n"
-                f"- 'Hi there' → DIRECT\n"
-                f"- 'How are you?' → DIRECT\n"
-                f"- 'What can you do?' → DIRECT\n"
-                f"- 'Analyze this medical image' → Asistente Médico\n"
-                f"- 'Help me with physics homework' → Tutor Socrático de Física Multimodal\n"
-                f"- 'Generate an image of a cat' → Image Generator Agent\n\n"
-                f"IMPORTANT: Respond with ONLY ONE WORD - either 'DIRECT' or the exact agent name. Nothing else."
+                f"User request: \"{state.user_message}\"\n\n"
             )
             
-            # Use Groq to classify
+            # If images are present, add visual analysis instructions
+            if state.has_images and state.image_data_list:
+                classification_text += (
+                    f"The user has also attached {len(state.image_data_list)} image(s). "
+                    f"LOOK AT THE IMAGE(S) CAREFULLY and determine what they contain. "
+                    f"Based on the visual content of the images AND the text, choose the right agent.\n\n"
+                )
+            
+            classification_text += (
+                f"RULES:\n"
+                f"1. If the request is a simple greeting (hello, hi, hola, hey, etc.) with NO images, respond with: DIRECT\n"
+                f"2. If the request is small talk or general conversation with NO images, respond with: DIRECT\n"
+                f"3. If the request asks what you can do or who you are, respond with: DIRECT\n"
+                f"4. For ANY request with images or that needs specialized knowledge, respond with the EXACT agent name.\n"
+                f"5. Look at the actual content of any attached images to decide the best agent.\n\n"
+                f"IMPORTANT: Respond with ONLY the exact agent name or 'DIRECT'. Nothing else."
+            )
+            
+            # Build the message content - multimodal if images are present
             from langchain_core.messages import HumanMessage
             
-            print(f"🔍 Sending classification prompt to Groq...")
-            llm_response = await llm.ainvoke([HumanMessage(content=classification_prompt)])
+            if state.has_images and state.image_data_list:
+                # Multimodal classification: send images + text to the LLM
+                content = [{"type": "text", "text": classification_text}]
+                
+                for idx, img in enumerate(state.image_data_list):
+                    mime_type = img.get("mime_type", "image/png")
+                    bytes_b64 = img.get("bytes_b64", "")
+                    if bytes_b64:
+                        content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{bytes_b64}"
+                            }
+                        })
+                        print(f"🖼️ Image {idx} included for visual classification: {mime_type}")
+                
+                print(f"🔍 Sending MULTIMODAL classification prompt to Groq ({len(state.image_data_list)} images)...")
+                llm_response = await llm.ainvoke([HumanMessage(content=content)])
+            else:
+                # Text-only classification
+                print(f"🔍 Sending text-only classification prompt to Groq...")
+                llm_response = await llm.ainvoke([HumanMessage(content=classification_text)])
             
             print(f"📥 Groq response type: {type(llm_response)}")
             print(f"📥 Groq response content: {llm_response.content}")

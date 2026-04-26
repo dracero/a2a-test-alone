@@ -1091,8 +1091,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                         student_answers_summary
                     )
                     
-                    # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
-                    final_response = convert_latex_to_images_in_text(final_response)
+                    # LaTeX rendering is handled by KaTeX in the frontend
                     # Resetear modo socrático
                     memory.socratic_mode = False
                     memory.socratic_questions_asked = 0
@@ -1112,8 +1111,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                         visual_findings=self.visual_findings.get(context_id, "")
                     )
                     
-                    # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
-                    next_question = convert_latex_to_images_in_text(next_question)
+                    # LaTeX rendering is handled by KaTeX in the frontend
                     return next_question
             
             # Modo normal: iniciar modo socrático
@@ -1146,7 +1144,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
             )
             
             # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
-            first_question = convert_latex_to_images_in_text(first_question)
+            # LaTeX rendering is handled by KaTeX in the frontend
             return first_question
             
         except Exception as e:
@@ -1259,7 +1257,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                 )
                 
                 # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
-                final_response = convert_latex_to_images_in_text(final_response)
+                # LaTeX rendering is handled by KaTeX in the frontend
                 # Resetear modo socrático
                 memory.socratic_mode = False
                 memory.socratic_questions_asked = 0
@@ -1292,7 +1290,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                 )
                 
                 # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
-                next_question = convert_latex_to_images_in_text(next_question)
+                # LaTeX rendering is handled by KaTeX in the frontend
                 # CRÍTICO: is_task_complete=False + require_user_input=True
                 # para que el executor marque como input_required y mantenga la memoria
                 yield {
@@ -1352,7 +1350,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
             )
             
             # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
-            first_question = convert_latex_to_images_in_text(first_question)
+            # LaTeX rendering is handled by KaTeX in the frontend
             # CRÍTICO: is_task_complete=False + require_user_input=True
             # para que el executor marque como input_required y mantenga la memoria
             yield {
