@@ -1,0 +1,4 @@
+# Ignore all PDF files but keep the folder
+*.pdf
+# Keep extracted images folder out of git
+extracted_images/

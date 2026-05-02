@@ -118,148 +118,82 @@ class ConversationServer:
         return CreateConversationResponse(result=c)
 
     def parse_message_from_dict(self, data: dict[str, Any]) -> Message:
-        """
-        🔧 NUEVO: Parsea un diccionario del frontend a un objeto Message válido.
-        Maneja los diferentes formatos de Part que puede enviar el frontend.
-        """
-        print(f"\n{'='*60}")
-        print(f"🔍 PARSING MESSAGE FROM FRONTEND")
-        print(f"Raw data keys: {data.keys()}")
-        print(f"Raw data: {data}")
-        print(f"{'='*60}\n")
-        
+        """Parsea un diccionario del frontend a un objeto Message válido."""
         parts: list[Part] = []
         
-        for i, part_data in enumerate(data.get('parts', [])):
-            print(f"📦 Part {i}: {part_data}")
-            
+        for part_data in data.get('parts', []):
             kind = part_data.get('kind')
             
             if kind == 'text':
-                # Texto simple
                 parts.append(Part(root=TextPart(text=part_data.get('text', ''))))
-                print(f"  ✅ Text part added")
                 
             elif kind == 'file':
-                # Archivo (imagen u otro)
                 file_data = part_data.get('file', {})
                 mime_type = file_data.get('mime_type', 'application/octet-stream')
                 
                 if 'bytes' in file_data:
-                    # FileWithBytes (nuevo del frontend)
-                    bytes_data = file_data['bytes']
-                    print(f"  ✅ File part (bytes) added: {mime_type}, {len(bytes_data)} chars")
                     parts.append(
-                        Part(
-                            root=FilePart(
-                                file=FileWithBytes(
-                                    bytes=bytes_data,
-                                    mime_type=mime_type,
-                                    name=file_data.get('name')
-                                )
+                        Part(root=FilePart(
+                            file=FileWithBytes(
+                                bytes=file_data['bytes'],
+                                mime_type=mime_type,
+                                name=file_data.get('name')
                             )
-                        )
+                        ))
                     )
                 elif 'uri' in file_data:
-                    # FileWithUri (del cache)
-                    print(f"  ✅ File part (URI) added: {file_data['uri']}")
                     parts.append(
-                        Part(
-                            root=FilePart(
-                                file=FileWithUri(
-                                    uri=file_data['uri'],
-                                    mime_type=mime_type
-                                )
-                            )
-                        )
+                        Part(root=FilePart(
+                            file=FileWithUri(uri=file_data['uri'], mime_type=mime_type)
+                        ))
                     )
-                else:
-                    print(f"  ⚠️ File part without bytes or URI")
-            else:
-                print(f"  ⚠️ Unknown part kind: {kind}")
         
-        # 🔧 CORRECCIÓN: Normalizar el role a string sin 'Role.' prefix
         role_value = data.get('role', 'user')
         if isinstance(role_value, str):
-            # Limpiar si viene como 'Role.user' o 'user'
             role_value = role_value.replace('Role.', '').lower()
         
-        # 🔧 CORRECCIÓN: Asegurar que context_id sea string
         context_id_value = data.get('context_id', '')
         if isinstance(context_id_value, dict):
-            # Si es un dict, intentar extraer un ID o usar string vacío
             context_id_value = context_id_value.get('id', '') or context_id_value.get('conversation_id', '') or ''
         elif not isinstance(context_id_value, str):
             context_id_value = str(context_id_value) if context_id_value else ''
         
-        # Construir el mensaje usando model_validate para que Pydantic maneje la conversión
         message_dict = {
             'message_id': data.get('message_id', str(uuid.uuid4())),
             'context_id': context_id_value,
             'role': role_value,
             'parts': parts,
         }
-        
-        # Agregar campos opcionales solo si existen
         if 'recipient' in data:
             message_dict['recipient'] = data['recipient']
         if 'metadata' in data:
             message_dict['metadata'] = data['metadata']
         
-        message = Message(**message_dict)
-        
-        print(f"\n✅ Message parsed successfully:")
-        print(f"  • message_id: {message.message_id}")
-        print(f"  • context_id: {message.context_id}")
-        print(f"  • role: {message.role}")
-        print(f"  • parts count: {len(message.parts)}")
-        print(f"{'='*60}\n")
-        
-        return message
+        return Message(**message_dict)
 
     def restore_files_from_cache(self, message: Message) -> Message:
-        """
-        🔧 CORREGIDO: Maneja tanto archivos nuevos (FileWithBytes) como cacheados (FileWithUri).
-        - FileWithBytes (nuevo del frontend): Se mantiene tal cual
-        - FileWithUri (del cache): Se restaura desde el cache
-        """
+        """Restaura FileWithBytes desde cache para FileWithUri, mantiene FileWithBytes intactos."""
         message_copy = copy.deepcopy(message)
         restored_parts: list[Part] = []
         
-        for i, part in enumerate(message_copy.parts):
+        for part in message_copy.parts:
             p = part.root
-            
-            # Si NO es un archivo, mantenerlo tal cual
             if p.kind != 'file':
                 restored_parts.append(part)
                 continue
             
-            # Si es FileWithBytes (mensaje nuevo del frontend), mantenerlo
             if isinstance(p.file, FileWithBytes):
-                print(f"✅ Keeping new FileWithBytes: {p.file.mime_type}, {len(p.file.bytes)} chars")
                 restored_parts.append(part)
                 continue
             
-            # Si es FileWithUri (mensaje del cache), restaurar desde cache
             if isinstance(p.file, FileWithUri):
-                # Extraer el cache_id de la URI (formato: /message/file/{cache_id})
                 uri_parts = p.file.uri.split('/')
                 if len(uri_parts) >= 3 and uri_parts[-2] == 'file':
                     cache_id = uri_parts[-1]
-                    
-                    # Buscar en el cache
                     if cache_id in self._file_cache:
-                        cached_part = self._file_cache[cache_id]
-                        print(f"✅ Restored file from cache: {cache_id}")
-                        restored_parts.append(Part(root=cached_part))
+                        restored_parts.append(Part(root=self._file_cache[cache_id]))
                         continue
-                    else:
-                        print(f"⚠️ Cache ID not found: {cache_id}")
-                
-                # Si no se pudo restaurar, mantener la URI
-                print(f"⚠️ Keeping FileWithUri (not in cache): {p.file.uri}")
                 restored_parts.append(part)
-                continue
         
         message_copy.parts = restored_parts
         return message_copy
@@ -267,30 +201,9 @@ class ConversationServer:
     async def _send_message(
         self, body: SendMessageBody, background_tasks: BackgroundTasks
     ):
-        # 🔧 CORRECCIÓN CRÍTICA: Parsear el dict a Message manualmente
         message = self.parse_message_from_dict(body.params)
-        
         message = self.manager.sanitize_message(message)
-        
-        # Restaurar archivos desde cache (solo para URIs)
-        # Los FileWithBytes nuevos se mantienen intactos
         message = self.restore_files_from_cache(message)
-        
-        print(f"\n{'='*60}")
-        print(f"📤 SEND MESSAGE - Parts after restore:")
-        for i, part in enumerate(message.parts):
-            p = part.root
-            if p.kind == 'file':
-                if isinstance(p.file, FileWithBytes):
-                    print(f"  Part {i}: FileWithBytes - {p.file.mime_type}, {len(p.file.bytes)} chars base64")
-                elif isinstance(p.file, FileWithUri):
-                    print(f"  Part {i}: FileWithUri - {p.file.uri}")
-            elif p.kind == 'text':
-                print(f"  Part {i}: Text - {p.text[:50]}...")
-            else:
-                print(f"  Part {i}: {p.kind}")
-        print(f"{'='*60}\n")
-        
         background_tasks.add_task(self.manager.process_message, message)
         return SendMessageResponse(
             result=MessageInfo(
@@ -300,8 +213,6 @@ class ConversationServer:
         )
 
     async def _list_messages(self, body: ListMessagesBody):
-        print(f"📋 LIST MESSAGES - Received body: {body}")
-        print(f"📋 Conversation ID: {body.params}")
         conversation_id = body.params
         conversation = self.manager.get_conversation(conversation_id)
         if conversation:
@@ -344,7 +255,6 @@ class ConversationServer:
                     # Solo cachear si no existe
                     if cache_id not in self._file_cache:
                         self._file_cache[cache_id] = part
-                        print(f"💾 File cached: {cache_id} ({part.file.mime_type})")
 
                 # Reemplazar con URI para la UI
                 new_parts.append(

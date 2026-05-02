@@ -173,7 +173,7 @@ export function AgentsManager() {
                       Registered:
                     </p>
                     <p className="text-xs text-slate-500">
-                      {new Date(agent.created_at).toLocaleString()}
+                      {agent.created_at ? new Date(agent.created_at).toLocaleString() : 'N/A'}
                     </p>
                   </div>
                 </div>

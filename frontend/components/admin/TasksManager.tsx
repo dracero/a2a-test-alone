@@ -90,10 +90,10 @@ export function TasksManager() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-slate-900">
-                        {task.name}
+                        {task.name || task.title || task.id}
                       </p>
                       <p className="text-xs text-slate-500">
-                        Created: {new Date(task.created_at).toLocaleString()}
+                        Created: {task.created_at ? new Date(task.created_at).toLocaleString() : 'N/A'}
                       </p>
                     </div>
                     <span
@@ -117,7 +117,7 @@ export function TasksManager() {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-slate-600">Name:</p>
-                    <p className="text-xs text-slate-500">{task.name}</p>
+                    <p className="text-xs text-slate-500">{task.name || task.title || task.id}</p>
                   </div>
                   <div>
                     <p className="text-sm font-medium text-slate-600">Status:</p>
@@ -132,7 +132,7 @@ export function TasksManager() {
                       Created:
                     </p>
                     <p className="text-xs text-slate-500">
-                      {new Date(task.created_at).toLocaleString()}
+                      {task.created_at ? new Date(task.created_at).toLocaleString() : 'N/A'}
                     </p>
                   </div>
                 </div>

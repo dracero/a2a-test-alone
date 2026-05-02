@@ -69,7 +69,10 @@ async def inicializar_agente_con_pdfs(qdrant_url: str, qdrant_api_key: str, pdf_
     if not colecciones_existen:
         # Obtener directorio de PDFs
         if pdf_dir is None:
-            pdf_dir = os.getenv('PDF_DIR', '/content')  # Default Colab
+            # Default: carpeta PDF/ relativa al directorio del agente
+            agent_dir = Path(__file__).resolve().parents[1]
+            pdf_dir = str(agent_dir / 'PDF')
+            logger.info(f"📂 Usando carpeta PDF por defecto: {pdf_dir}")
         
         pdf_path = Path(pdf_dir)
         logger.info(f"📂 Buscando PDFs en: {pdf_path.absolute()}")
@@ -188,8 +191,8 @@ def main(host, port, pdf_dir):
             # 🔧 CORRECCIÓN CRÍTICA: Usar QDRANT_API_KEY consistentemente
             real_executor = await inicializar_agente_con_pdfs(
                 qdrant_url=os.getenv('QDRANT_URL'),
-                qdrant_api_key=os.getenv('QDRANT_KEY'),  # ← CORREGIDO
-                pdf_dir=pdf_dir or os.getenv('PDF_DIR')
+                qdrant_api_key=os.getenv('QDRANT_KEY'),
+                pdf_dir=pdf_dir or os.getenv('PDF_DIR', str(Path(__file__).resolve().parents[1] / 'PDF'))
             )
             
             logger.info("✅ Agente inicializado correctamente")

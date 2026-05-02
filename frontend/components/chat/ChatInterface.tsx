@@ -72,7 +72,7 @@ export function ChatInterface() {
     try {
       const response = await chatAPI.listConversations();
       const convs = response.result || [];
-      const filtered = convs.filter((conv) => conv && conv.conversation_id).reverse();
+      const filtered = (convs as Conversation[]).filter((conv) => conv && conv.conversation_id).reverse();
       setAllConversations(filtered);
       return filtered;
     } catch (error) {
@@ -234,252 +234,62 @@ export function ChatInterface() {
     startPolling(convId);
   };
 
-  // ✅ NORMALIZACIÓN MEJORADA
   function normalizeMessages(msgs: Message[] | undefined): Message[] {
     if (!msgs) return [];
-    return msgs.map((m) => {
-      const normalized = {
-        ...m,
-        parts: (m.parts || []).map(normalizePart).filter(Boolean)
-      };
-
-      console.log('📥 Normalized message:', {
-        messageId: m.message_id,
-        role: m.role,
-        originalPartsCount: m.parts?.length || 0,
-        normalizedPartsCount: normalized.parts.length,
-        parts: normalized.parts.map(p => ({
-          kind: p.kind,
-          hasBytes: p.kind === 'file' ? !!p.file?.bytes : undefined,
-          hasUri: p.kind === 'file' ? !!p.file?.uri : undefined,
-          hasText: p.kind === 'text' ? !!p.text : undefined
-        }))
-      });
-
-      return normalized;
-    });
+    return msgs.map((m) => ({
+      ...m,
+      parts: (m.parts || []).map(normalizePart).filter((p): p is Part => p !== null),
+    }));
   }
 
   function normalizePart(p: any): Part | null {
-    if (!p) {
-      console.warn('⚠️ Null part received');
+    if (!p) return null;
+
+    // Helper: detect base64 image string
+    function asImagePart(text: string): Part | null {
+      if (text.startsWith('data:image/')) {
+        const match = text.match(/^data:(image\/[^;]+);base64,(.+)$/);
+        if (match) return { kind: 'file', file: { mime_type: match[1], bytes: match[2] } };
+      }
+      if (text.length > 1000 && /^[A-Za-z0-9+/=]+$/.test(text)) {
+        return { kind: 'file', file: { mime_type: 'image/png', bytes: text } };
+      }
       return null;
     }
 
-    console.log('🔄 Normalizing part - RAW:', {
-      raw: p,
-      hasKind: !!p.kind,
-      kind: p.kind,
-      hasRoot: !!p.root,
-      hasFile: !!p.file,
-      hasText: p.text !== undefined,
-      structure: Object.keys(p),
-      // Ver TODOS los campos del file si existe
-      fileKeys: p.file ? Object.keys(p.file) : null,
-      // Ver qué hay en root si existe
-      rootKeys: p.root ? Object.keys(p.root) : null
-    });
-
-    // 1. Ya está en la forma esperada
+    // Already normalized
     if (p.kind === 'text' && p.text !== undefined) {
-      // 🔧 NUEVO: Detectar si el texto es realmente una imagen base64
-      const text = p.text;
-      if (typeof text === 'string' && text.length > 100 &&
-        (text.startsWith('data:image/') ||
-          (text.match(/^[A-Za-z0-9+/=]{100,}$/) && text.length > 1000))) {
-        console.log('🔧 Detected base64 image in text part, converting to file part');
-
-        let mimeType = 'image/png';
-        let bytes = text;
-
-        // Si tiene el prefijo data:image/...;base64,
-        if (text.startsWith('data:image/')) {
-          const match = text.match(/^data:(image\/[^;]+);base64,(.+)$/);
-          if (match) {
-            mimeType = match[1];
-            bytes = match[2];
-          }
-        }
-
-        return {
-          kind: 'file',
-          file: {
-            mime_type: mimeType,
-            bytes: bytes
-          }
-        };
-      }
-
-      console.log('✅ Text part (already normalized)');
-      return { kind: 'text', text: p.text };
+      return asImagePart(p.text) ?? { kind: 'text', text: p.text };
     }
-
     if (p.kind === 'file' && p.file) {
-      // CRÍTICO: Verificar todas las posibles ubicaciones del mime_type
-      const mimeType = p.file.mime_type || p.file.mimeType || p.mime_type || p.mimeType;
-
-      console.log('✅ File part (already normalized):', {
-        mimeType: mimeType,
-        file_mime_type: p.file.mime_type,
-        file_mimeType: p.file.mimeType,
-        p_mime_type: p.mime_type,
-        p_mimeType: p.mimeType,
-        hasBytes: !!p.file.bytes,
-        hasUri: !!p.file.uri,
-        bytesLength: p.file.bytes?.length || 0,
-        allFileKeys: Object.keys(p.file),
-        allPKeys: Object.keys(p)
-      });
-
-      return {
-        kind: 'file',
-        file: {
-          mime_type: mimeType,
-          bytes: p.file.bytes,
-          uri: p.file.uri
-        }
-      };
+      const mime = p.file.mime_type || p.file.mimeType || p.mime_type || 'application/octet-stream';
+      return { kind: 'file', file: { mime_type: mime, bytes: p.file.bytes, uri: p.file.uri } };
     }
 
-    // 2. Formato con 'root' (del backend después de cache_content)
+    // Backend 'root' wrapper
     if (p.root) {
-      // root.file contiene el archivo
       if (p.root.file) {
-        const mimeType = p.root.file.mime_type || p.root.file.mimeType || p.root.mime_type || p.mime_type;
-
-        console.log('✅ File part (from root.file):', {
-          mimeType: mimeType,
-          root_file_mime_type: p.root.file.mime_type,
-          root_file_mimeType: p.root.file.mimeType,
-          root_mime_type: p.root.mime_type,
-          hasBytes: !!p.root.file.bytes,
-          hasUri: !!p.root.file.uri,
-          rootFileKeys: Object.keys(p.root.file),
-          rootKeys: Object.keys(p.root)
-        });
-
-        return {
-          kind: 'file',
-          file: {
-            mime_type: mimeType,
-            bytes: p.root.file.bytes,
-            uri: p.root.file.uri
-          }
-        };
+        const mime = p.root.file.mime_type || p.root.file.mimeType || 'application/octet-stream';
+        return { kind: 'file', file: { mime_type: mime, bytes: p.root.file.bytes, uri: p.root.file.uri } };
       }
-
-      // root.text contiene el texto
       if (p.root.text !== undefined) {
-        // 🔧 NUEVO: Detectar si el texto es realmente una imagen base64
-        const text = p.root.text;
-        if (typeof text === 'string' && text.length > 100 &&
-          (text.startsWith('data:image/') ||
-            (text.match(/^[A-Za-z0-9+/=]{100,}$/) && text.length > 1000))) {
-          console.log('🔧 Detected base64 image in root.text, converting to file part');
-
-          let mimeType = 'image/png';
-          let bytes = text;
-
-          // Si tiene el prefijo data:image/...;base64,
-          if (text.startsWith('data:image/')) {
-            const match = text.match(/^data:(image\/[^;]+);base64,(.+)$/);
-            if (match) {
-              mimeType = match[1];
-              bytes = match[2];
-            }
-          }
-
-          return {
-            kind: 'file',
-            file: {
-              mime_type: mimeType,
-              bytes: bytes
-            }
-          };
-        }
-
-        console.log('✅ Text part (from root.text)');
-        return { kind: 'text', text: p.root.text };
+        return asImagePart(p.root.text) ?? { kind: 'text', text: p.root.text };
       }
-
-      // root es directamente el file (con mime_type, bytes o uri)
-      if (p.root.mime_type || p.root.mimeType || p.root.bytes || p.root.uri) {
-        const mimeType = p.root.mime_type || p.root.mimeType;
-
-        console.log('✅ File part (root is file):', {
-          mimeType: mimeType,
-          hasBytes: !!p.root.bytes,
-          hasUri: !!p.root.uri
-        });
-
-        return {
-          kind: 'file',
-          file: {
-            mime_type: mimeType,
-            bytes: p.root.bytes,
-            uri: p.root.uri
-          }
-        };
+      if (p.root.mime_type || p.root.bytes || p.root.uri) {
+        return { kind: 'file', file: { mime_type: p.root.mime_type, bytes: p.root.bytes, uri: p.root.uri } };
       }
     }
 
-    // 3. Tiene 'file' en el nivel superior sin 'kind'
-    if (p.file && (p.file.mime_type || p.file.mimeType || p.file.bytes || p.file.uri)) {
-      const mimeType = p.file.mime_type || p.file.mimeType || p.mime_type || p.mimeType;
-
-      console.log('✅ File part (top level):', {
-        mimeType: mimeType,
-        hasBytes: !!p.file.bytes,
-        hasUri: !!p.file.uri
-      });
-
-      return {
-        kind: 'file',
-        file: {
-          mime_type: mimeType,
-          bytes: p.file.bytes,
-          uri: p.file.uri
-        }
-      };
+    // Top-level file/text without kind
+    if (p.file) {
+      const mime = p.file.mime_type || p.file.mimeType || 'application/octet-stream';
+      return { kind: 'file', file: { mime_type: mime, bytes: p.file.bytes, uri: p.file.uri } };
+    }
+    if (p.text !== undefined) {
+      return asImagePart(p.text) ?? { kind: 'text', text: p.text };
     }
 
-    // 4. Tiene 'text' en el nivel superior sin 'kind'
-    if (p.text !== undefined && !p.file && !p.root) {
-      // 🔧 NUEVO: Detectar si el texto es realmente una imagen base64
-      const text = p.text;
-      if (typeof text === 'string' && text.length > 100 &&
-        (text.startsWith('data:image/') ||
-          (text.match(/^[A-Za-z0-9+/=]{100,}$/) && text.length > 1000))) {
-        console.log('🔧 Detected base64 image in top-level text, converting to file part');
-
-        let mimeType = 'image/png';
-        let bytes = text;
-
-        // Si tiene el prefijo data:image/...;base64,
-        if (text.startsWith('data:image/')) {
-          const match = text.match(/^data:(image\/[^;]+);base64,(.+)$/);
-          if (match) {
-            mimeType = match[1];
-            bytes = match[2];
-          }
-        }
-
-        return {
-          kind: 'file',
-          file: {
-            mime_type: mimeType,
-            bytes: bytes
-          }
-        };
-      }
-
-      console.log('✅ Text part (top level)');
-      return { kind: 'text', text: p.text };
-    }
-
-    // Fallback
-    console.error('❌ Could not normalize part:', p);
-    return { kind: 'text', text: `[Error: Could not parse content: ${JSON.stringify(p)}]` };
+    return { kind: 'text', text: '[Unrecognized content]' };
   }
 
   if (isLoading) {

@@ -1,5 +1,7 @@
 # Agent2Agent (A2A) Samples
 
+Welcome to the A2A Samples repository! Here you will find code samples and demos using the Agent2Agent protocol.
+
 <a href="https://studio.firebase.google.com/new?template=https%3A%2F%2Fgithub.com%2Fa2aproject%2Fa2a-samples%2Ftree%2Fmain%2F.firebase-studio">
   <picture>
     <source

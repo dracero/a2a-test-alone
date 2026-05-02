@@ -1,22 +1,19 @@
-# samples/python/agents/multimodal/app/agent.py (CORREGIDO)
+# samples/python/agents/multimodal/app/agent.py
 
 import asyncio
 import base64
 import glob
-import io
-import os
-import re
 import json
+import os
 from collections.abc import AsyncIterable
 from io import BytesIO
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Optional
 
-# Importar matplotlib para renderizar LaTeX
-import matplotlib
 import torch
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
+from langsmith import traceable
 from PIL import Image
 from pydantic import BaseModel
 from PyPDF2 import PdfReader
@@ -24,113 +21,9 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 from transformers import CLIPModel, CLIPProcessor
 
-matplotlib.use('Agg')  # Backend sin GUI
-import matplotlib.pyplot as plt
-from matplotlib import mathtext
-
 # ==================== CONFIGURACIÓN ====================
 
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
-
-# ==================== UTILIDADES PARA RENDERIZAR LATEX ====================
-
-def latex_to_image_base64(latex_formula: str, fontsize: int = 16) -> str:
-    """
-    Convierte una fórmula LaTeX a imagen PNG en base64.
-    
-    Args:
-        latex_formula: Fórmula LaTeX (sin delimitadores $ o $$)
-        fontsize: Tamaño de fuente
-    
-    Returns:
-        String base64 de la imagen PNG
-    """
-    try:
-        # Crear figura con fondo transparente
-        fig = plt.figure(figsize=(0.01, 0.01), dpi=150)
-        fig.patch.set_alpha(0)
-        
-        # Limpiar \tag{} ya que matplotlib/mathtext no lo soporta
-        latex_formula = re.sub(r'\\tag\{.*?\}', '', latex_formula)
-        
-        # Renderizar LaTeX
-        text = fig.text(
-            0, 0, 
-            f'${latex_formula}$',
-            fontsize=fontsize,
-            color='black'
-        )
-        
-        # Ajustar tamaño de figura al texto
-        fig.canvas.draw()
-        bbox = text.get_window_extent(fig.canvas.get_renderer())
-        width, height = bbox.width / fig.dpi, bbox.height / fig.dpi
-        fig.set_size_inches(width * 1.2, height * 1.2)
-        
-        # Reposicionar texto centrado
-        text.set_position((0.5, 0.5))
-        text.set_horizontalalignment('center')
-        text.set_verticalalignment('center')
-        
-        # Guardar en buffer
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', 
-                   pad_inches=0.1, transparent=True, dpi=150)
-        plt.close(fig)
-        
-        # Convertir a base64
-        buf.seek(0)
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        buf.close()
-        
-        return img_base64
-    except Exception as e:
-        print(f"❌ Error renderizando LaTeX '{latex_formula}': {e}")
-        return None
-
-
-def convert_latex_to_images_in_text(text: str) -> str:
-    """
-    Convierte todas las fórmulas LaTeX en un texto a imágenes embebidas en markdown.
-    
-    Busca patrones:
-    - $formula$ (inline)
-    - $$formula$$ (display)
-    
-    Y los reemplaza con:
-    ![formula](data:image/png;base64,...)
-    
-    Args:
-        text: Texto con fórmulas LaTeX
-    
-    Returns:
-        Texto con fórmulas convertidas a imágenes
-    """
-    # Patrón para display math ($$...$$)
-    display_pattern = r'\$\$(.*?)\$\$'
-    # Patrón para inline math ($...$)
-    inline_pattern = r'\$([^\$]+?)\$'
-    
-    def replace_display(match):
-        latex = match.group(1).strip()
-        img_base64 = latex_to_image_base64(latex, fontsize=18)
-        if img_base64:
-            return f'<div style="text-align:center;margin:8px 0;"><img src="data:image/png;base64,{img_base64}" style="max-width:100%;vertical-align:middle;" /></div>'
-        return match.group(0)  # Si falla, mantener original
-    
-    def replace_inline(match):
-        latex = match.group(1).strip()
-        img_base64 = latex_to_image_base64(latex, fontsize=14)
-        if img_base64:
-            return f'<img src="data:image/png;base64,{img_base64}" style="vertical-align:middle;height:1.2em;" />'
-        return match.group(0)  # Si falla, mantener original
-    
-    # Primero reemplazar display ($$...$$) para evitar conflictos
-    text = re.sub(display_pattern, replace_display, text, flags=re.DOTALL)
-    # Luego reemplazar inline ($...$)
-    text = re.sub(inline_pattern, replace_inline, text)
-    
-    return text
 
 class SemanticMemory:
     """Memoria conversacional simplificada sin dependencias deprecadas."""
@@ -627,6 +520,7 @@ Contenido:
         }
         return mapping.get(content_type, 'image/png')
     
+    @traceable(name="search_qdrant", run_type="retriever")
     async def search_multimodal(
         self, 
         query: str = None, 
@@ -676,6 +570,7 @@ Contenido:
             print(f"❌ Error: {e}")
             return results
     
+    @traceable(name="analyze_physics_image", run_type="llm")
     async def analyze_physics_image(self, images: List[dict]) -> str:
         """Analiza imágenes de física."""
         if not images:
@@ -717,6 +612,7 @@ Sé técnico y preciso."""
         except Exception as e:
             return f"Error: {str(e)}"
     
+    @traceable(name="classify_query", run_type="llm")
     async def classify_query(self, query: str, context: str, visual_findings: str) -> str:
         """Clasifica la consulta."""
         system_prompt = f"""Profesor de Física I.
@@ -759,6 +655,7 @@ Clasifica según el temario."""
         except Exception as e:
             return f"Error: {str(e)}"
     
+    @traceable(name="generate_search_query", run_type="llm")
     async def generate_search_query(self, classification: str, visual_findings: str, 
                                    original_query: str) -> str:
         """Genera consulta de búsqueda."""
@@ -788,6 +685,7 @@ Genera consulta optimizada."""
         except Exception as e:
             return f"Error: {str(e)}"
     
+    @traceable(name="generate_physics_response", run_type="llm")
     async def generate_physics_response(
         self, 
         query: str, 
@@ -862,6 +760,7 @@ Explicación completa con todas las fórmulas en formato LaTeX."""
         except Exception as e:
             return f"Error: {str(e)}"
     
+    @traceable(name="generate_socratic_question", run_type="llm")
     async def generate_socratic_question(
         self,
         original_query: str,
@@ -934,6 +833,7 @@ Genera la pregunta socrática número {question_number + 1} para guiar al estudi
         except Exception as e:
             return f"Error: {str(e)}"
     
+    @traceable(name="generate_physics_response_with_socratic", run_type="llm")
     async def generate_physics_response_with_socratic(
         self,
         query: str,
@@ -1024,6 +924,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
     
     # ==================== MÉTODOS PRINCIPALES ====================
     
+    @traceable(name="PhysicsMultimodalAgent.invoke", run_type="chain")
     async def invoke(self, query: str, context_id: str, 
                     images: List[dict] = None) -> str:
         """Procesa consulta completa con modo socrático."""
@@ -1153,6 +1054,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
             traceback.print_exc()
             return f"ERROR: {str(e)}"
     
+    @traceable(name="PhysicsMultimodalAgent.stream", run_type="chain")
     async def stream(self, query: str, context_id: str, 
                     images: List[dict] = None) -> AsyncIterable[dict[str, Any]]:
         """
