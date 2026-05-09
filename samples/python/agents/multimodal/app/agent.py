@@ -26,35 +26,45 @@ from transformers import CLIPModel, CLIPProcessor
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 class SemanticMemory:
-    """Memoria conversacional simplificada sin dependencias deprecadas."""
+    """Memoria conversacional con historial de chat real."""
     
     def __init__(self, llm, max_entries: int = 10):
-        self.conversations = []
+        self.conversations = []       # lista de {query, response} para serializar
+        self.chat_history = []        # lista de LangChain messages (HumanMessage/AIMessage)
         self.max_entries = max_entries
         self.summary = ""
-        self.direct_history = ""
+        self.direct_history = ""      # solo para compatibilidad con get_context()
         self.llm = llm
         # Modo socrático
         self.socratic_mode = False
         self.socratic_questions_asked = 0
         self.socratic_answers = []
         self.original_query = ""
+        self.socratic_disabled = False
     
     def to_dict(self) -> dict:
         """Serializa la memoria a un diccionario."""
+        # Serializar chat_history como lista de {role, content}
+        serialized_history = []
+        for msg in self.chat_history:
+            role = "human" if msg.__class__.__name__ == "HumanMessage" else "ai"
+            serialized_history.append({"role": role, "content": msg.content})
         return {
             "conversations": self.conversations,
+            "chat_history": serialized_history,
             "summary": self.summary,
             "direct_history": self.direct_history,
             "socratic_mode": self.socratic_mode,
             "socratic_questions_asked": self.socratic_questions_asked,
             "socratic_answers": self.socratic_answers,
-            "original_query": self.original_query
+            "original_query": self.original_query,
+            "socratic_disabled": getattr(self, 'socratic_disabled', False)
         }
 
     @classmethod
     def from_dict(cls, data: dict, llm) -> 'SemanticMemory':
         """Crea una instancia de SemanticMemory desde un diccionario."""
+        from langchain_core.messages import HumanMessage as HM, AIMessage
         mem = cls(llm=llm)
         mem.conversations = data.get("conversations", [])
         mem.summary = data.get("summary", "")
@@ -63,27 +73,45 @@ class SemanticMemory:
         mem.socratic_questions_asked = data.get("socratic_questions_asked", 0)
         mem.socratic_answers = data.get("socratic_answers", [])
         mem.original_query = data.get("original_query", "")
+        mem.socratic_disabled = data.get("socratic_disabled", False)
+        # Reconstruir chat_history desde la lista serializada
+        for entry in data.get("chat_history", []):
+            if entry["role"] == "human":
+                mem.chat_history.append(HM(content=entry["content"]))
+            else:
+                mem.chat_history.append(AIMessage(content=entry["content"]))
         return mem
 
     def add_interaction(self, query: str, response: str):
-        """Guardar interacción en memoria."""
-        self.conversations.append({"query": query, "response": response})
+        """Guardar interacción en memoria (histórico + chat real)."""
+        from langchain_core.messages import HumanMessage as HM, AIMessage
         
+        self.conversations.append({"query": query, "response": response})
         if len(self.conversations) > self.max_entries:
             self.conversations.pop(0)
         
-        # Mantener solo las últimas 3 conversaciones en el historial directo
-        if len(self.conversations) > 3:
-            recent = self.conversations[-3:]
-            self.direct_history = ""
-            for conv in recent:
-                self.direct_history += f"\nUsuario: {conv['query']}\nAsistente: {conv['response']}\n"
-        else:
-            self.direct_history = ""
-            for conv in self.conversations:
-                self.direct_history += f"\nUsuario: {conv['query']}\nAsistente: {conv['response']}\n"
+        # Agregar al historial real de chat
+        self.chat_history.append(HM(content=query))
+        self.chat_history.append(AIMessage(content=response))
+        # Mantener solo las últimas 10 rondas (20 mensajes) para no exceder tokens
+        if len(self.chat_history) > 20:
+            self.chat_history = self.chat_history[-20:]
+        
+        # Mantener historial de texto (compatibilidad)
+        recent = self.conversations[-3:]
+        self.direct_history = ""
+        for conv in recent:
+            self.direct_history += f"\nUsuario: {conv['query']}\nAsistente: {conv['response']}\n"
         
         self.update_summary()
+    
+    def add_socratic_exchange(self, question: str, answer: str):
+        """Registra en el historial de chat una pregunta socrática y su respuesta."""
+        from langchain_core.messages import HumanMessage as HM, AIMessage
+        self.chat_history.append(AIMessage(content=question))   # el tutor preguntó
+        self.chat_history.append(HM(content=answer))            # el alumno respondió
+        if len(self.chat_history) > 20:
+            self.chat_history = self.chat_history[-20:]
     
     def update_summary(self):
         """Actualizar resumen."""
@@ -95,18 +123,20 @@ class SemanticMemory:
             self.summary = f"Resumen:\n{recent_context}"
     
     def get_context(self) -> str:
-        """Obtener contexto completo."""
+        """Obtener contexto textual (compatibilidad)."""
         return f"{self.summary}\n\nHistorial:\n{self.direct_history}"
     
     def clear(self):
         """Limpiar memoria."""
         self.conversations = []
+        self.chat_history = []
         self.summary = ""
         self.direct_history = ""
         self.socratic_mode = False
         self.socratic_questions_asked = 0
         self.socratic_answers = []
         self.original_query = ""
+        self.socratic_disabled = False
 
 
 class PhysicsMultimodalAgent:
@@ -693,72 +723,84 @@ Genera consulta optimizada."""
         classification: str, 
         visual_findings: str,
         document_context: str,
-        image_context: str
+        image_context: str,
+        chat_history: list = None
     ) -> str:
-        """Genera respuesta final."""
-        _default_direct = f"""Profesor de Física I UBA.
+        """Genera respuesta final usando historial real de chat."""
+        _default_direct = f"""Eres un Profesor de Física I UBA en modo de diálogo directo con el estudiante.
+Debes responder la consulta actual teniendo en cuenta TODO el historial de la conversación.
 
 TEMARIO:
 {self.temario}
 
-Estructura:
+Estructura de respuesta:
 1. CONTEXTO DEL TEMA
-2. EXPLICACIÓN TEÓRICA
-3. ANÁLISIS DE IMÁGENES
+2. EXPLICACIÓN TEÓRICA (detallada, sin omitir pasos)
+3. ANÁLISIS DE IMÁGENES (si hay)
 4. ECUACIONES
 5. EJEMPLOS
 6. RESUMEN
 
 Reglas:
-- Técnico pero claro
-- Relacionar con temario
-- Conectar imágenes con teoría
+- NUNCA repitas lo que ya explicaste antes. Avanza en la conversación.
+- Técnico pero claro. Conecta con lo que el estudiante ya dijo.
 - **IMPORTANTE: Todas las fórmulas y ecuaciones DEBEN estar en formato LaTeX**
-  - Usa `$formula$` para fórmulas inline (en línea con el texto)
-  - Usa `$$formula$$` para fórmulas display (en bloque separado)
-  - Ejemplos:
-    * Inline: La energía cinética es $E_k = \\frac{{1}}{{2}}mv^2$
-    * Display: $$F = ma$$
-    * Display complejo: $$\\vec{{F}} = m\\vec{{a}}$$
-- NUNCA uses texto plano para fórmulas (NO escribas "F = m*a" o "E = 1/2*m*v^2")
-- Usa notación matemática correcta: vectores con \\vec{{}}, fracciones con \\frac{{}}{{}}, subíndices con _, superíndices con ^
+  - Usa `$formula$` para fórmulas inline
+  - Usa `$$formula$$` para fórmulas display
+- NUNCA uses texto plano para fórmulas
+- Usa notación matemática correcta: vectores con \\vec{{}}, fracciones con \\frac{{}}{{}}
 """
         system_prompt = self._get_prompt("direct_response", _default_direct)
-        # Append few-shot demos if available
         demos = self._get_demos("direct_response")
         if demos:
             system_prompt += demos
         
-        user_prompt = f"""
-CONSULTA:
-{query}
-
-CONTEXTO:
-{context}
-
-CLASIFICACIÓN:
-{classification}
-
-HALLAZGOS:
-{visual_findings}
-
-DOCUMENTOS:
-{document_context}
-
-IMÁGENES:
-{image_context}
-
-Explicación completa con todas las fórmulas en formato LaTeX."""
+        # Agregar contexto de documentos al system prompt
+        if document_context and document_context.strip():
+            system_prompt += f"\n\nDOCUMENTOS DE REFERENCIA:\n{document_context[:3000]}"
+        if image_context and image_context.strip():
+            system_prompt += f"\n\nIMÁGENES RELACIONADAS:\n{image_context[:1000]}"
+        if visual_findings and visual_findings.strip() and visual_findings != "No hay imágenes.":
+            system_prompt += f"\n\nHALLAZGOS VISUALES:\n{visual_findings[:1000]}"
+        if classification and classification.strip():
+            system_prompt += f"\n\nCLASIFICACIÓN DEL TEMA:\n{classification[:500]}"
         
         try:
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_prompt)
-            ]
+            messages = [SystemMessage(content=system_prompt)]
+            
+            # Añadir el historial real de chat (lo que se habló antes)
+            if chat_history:
+                messages.extend(chat_history)
+            
+            # El mensaje actual del usuario
+            messages.append(HumanMessage(content=query))
+            
             response = self.llm.invoke(messages)
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
+    
+    @traceable(name="check_socratic_intent", run_type="llm")
+    async def check_socratic_intent(self, query: str) -> str:
+        """Verifica si el usuario quiere cambiar de modo (salir o entrar al modo socrático)."""
+        prompt = f"""Analiza la intención del usuario en el siguiente mensaje.
+El usuario está interactuando con un tutor de física. 
+Determina si el usuario explícitamente pide:
+1. SALIR: Salir del modo socrático, dejar de recibir preguntas, que le den la respuesta directa, o dialogar normalmente.
+2. ENTRAR: Volver al modo socrático, pedir que le hagan preguntas para pensar, o reiniciar el método socrático.
+3. CONTINUAR: Ninguna de las anteriores. Simplemente está respondiendo a una pregunta o haciendo una consulta de física normal.
+
+Mensaje del usuario: "{query}"
+
+Responde SOLO con una de estas palabras: SALIR, ENTRAR, CONTINUAR."""
+        try:
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            content = response.content.upper()
+            if "SALIR" in content: return "SALIR"
+            if "ENTRAR" in content: return "ENTRAR"
+            return "CONTINUAR"
+        except Exception:
+            return "CONTINUAR"
     
     @traceable(name="generate_socratic_question", run_type="llm")
     async def generate_socratic_question(
@@ -938,6 +980,25 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
             memory = self._get_or_create_memory(context_id)
             memory_context = self._get_memory_context(context_id)
             
+            intent = await self.check_socratic_intent(query)
+            if intent == "SALIR":
+                print("🚪 El usuario decidió salir del modo socrático para entablar un diálogo.")
+                memory.socratic_disabled = True
+                
+                # Si sale en medio de las preguntas, queremos que recuerde qué estaba preguntando
+                if memory.socratic_mode and memory.original_query:
+                    query_for_generation = f"{memory.original_query} (El usuario también añade: {query})"
+                else:
+                    query_for_generation = query
+                
+                memory.socratic_mode = False
+            elif intent == "ENTRAR":
+                print("🎓 El usuario decidió volver al modo socrático.")
+                memory.socratic_disabled = False
+                query_for_generation = query
+            else:
+                query_for_generation = query
+
             # Verificar si estamos en modo socrático
             if memory.socratic_mode:
                 # Guardar respuesta del estudiante
@@ -1015,6 +1076,61 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                     # LaTeX rendering is handled by KaTeX in the frontend
                     return next_question
             
+            # Si el modo socrático está deshabilitado, entablar diálogo normal
+            if memory.socratic_disabled:
+                print(f"💬 Entablando diálogo normal sin socrático...")
+                
+                # Analizar imágenes si las hay
+                visual_findings = ""
+                image_embedding = None
+                
+                if images and len(images) > 0:
+                    print(f"🖼️ Analizando imágenes para diálogo...")
+                    visual_findings = await self.analyze_physics_image(images)
+                    self.visual_findings[context_id] = visual_findings
+                    
+                    first_image_data = images[0].get('data') or images[0].get('bytes')
+                    if isinstance(first_image_data, str):
+                        first_image_data = base64.b64decode(first_image_data)
+                    image_embedding = self.generate_image_embedding(first_image_data)
+                else:
+                    visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
+                
+                # Clasificar
+                classification = await self.classify_query(
+                    query_for_generation, memory_context, visual_findings
+                )
+                
+                # Buscar
+                search_query = await self.generate_search_query(
+                    classification, visual_findings, query_for_generation
+                )
+                search_results = await self.search_multimodal(
+                    query=search_query,
+                    image_embedding=image_embedding,
+                    top_k=5
+                )
+                
+                # Contexto
+                document_context = "\n".join([
+                    f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
+                    for i, r in enumerate(search_results.get('text', []))
+                ])
+                
+                image_context = "\n".join([
+                    f"--- Imagen {i+1} ---\nPDF: {r['payload'].get('pdf_name', 'N/A')}"
+                    for i, r in enumerate(search_results.get('image', []))
+                ])
+                
+                final_response = await self.generate_physics_response(
+                    query_for_generation, memory_context, classification, 
+                    visual_findings, document_context, image_context,
+                    chat_history=memory.chat_history
+                )
+                self._save_to_memory(context_id, query, final_response)
+                print(f"✅ Diálogo completado\n")
+                return final_response
+
             # Modo normal: iniciar modo socrático
             print(f"🎓 Iniciando modo socrático...")
             
@@ -1075,6 +1191,25 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
         memory = self._get_or_create_memory(context_id)
         memory_context = self._get_memory_context(context_id)
         
+        intent = await self.check_socratic_intent(query)
+        if intent == "SALIR":
+            print("🚪 El usuario decidió salir del modo socrático para entablar un diálogo.")
+            memory.socratic_disabled = True
+            
+            # Si sale en medio de las preguntas, recordamos qué estaba preguntando
+            if memory.socratic_mode and memory.original_query:
+                query_for_generation = f"{memory.original_query} (El usuario también añade: {query})"
+            else:
+                query_for_generation = query
+            
+            memory.socratic_mode = False
+        elif intent == "ENTRAR":
+            print("🎓 El usuario decidió volver al modo socrático.")
+            memory.socratic_disabled = False
+            query_for_generation = query
+        else:
+            query_for_generation = query
+
         # Verificar si estamos en modo socrático
         if memory.socratic_mode:
             # Guardar respuesta del estudiante
@@ -1191,7 +1326,10 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                     visual_findings=self.visual_findings.get(context_id, "")
                 )
                 
-                # Convertir fórmulas LaTeX a imágenes PNG embebidas (HTML <img>)
+                # Guardar el intercambio socrático en el chat_history real
+                last_answer = memory.socratic_answers[-1] if memory.socratic_answers else ""
+                memory.add_socratic_exchange(next_question, last_answer)
+                
                 # LaTeX rendering is handled by KaTeX in the frontend
                 # CRÍTICO: is_task_complete=False + require_user_input=True
                 # para que el executor marque como input_required y mantenga la memoria
@@ -1202,43 +1340,142 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                     'status': 'socratic_question'
                 }
         else:
-            # Modo normal: iniciar modo socrático
-            print(f"🎓 Iniciando modo socrático...")
-            
-            # Analizar imágenes
-            visual_findings = ""
-            image_embedding = None
-            
-            if images and len(images) > 0:
+            # Si el modo socrático está deshabilitado, entablar diálogo normal
+            if memory.socratic_disabled:
                 yield {
                     'is_task_complete': False,
                     'require_user_input': False,
-                    'content': f'🖼️ Analizando {len(images)} imagen(es)...',
-                    'status': 'analyzing_images'
+                    'content': f'💬 Entablando diálogo normal sin socrático...',
+                    'status': 'normal_dialogue'
                 }
                 
-                visual_findings = await self.analyze_physics_image(images)
-                self.visual_findings[context_id] = visual_findings
+                # Analizar imágenes si las hay
+                visual_findings = ""
+                image_embedding = None
                 
-                first_image_data = images[0].get('data') or images[0].get('bytes')
-                if isinstance(first_image_data, str):
-                    first_image_data = base64.b64decode(first_image_data)
-                image_embedding = self.generate_image_embedding(first_image_data)
+                if images and len(images) > 0:
+                    yield {
+                        'is_task_complete': False,
+                        'require_user_input': False,
+                        'content': f'🖼️ Analizando {len(images)} imagen(es) para diálogo...',
+                        'status': 'analyzing_images'
+                    }
+                    
+                    visual_findings = await self.analyze_physics_image(images)
+                    self.visual_findings[context_id] = visual_findings
+                    
+                    first_image_data = images[0].get('data') or images[0].get('bytes')
+                    if isinstance(first_image_data, str):
+                        first_image_data = base64.b64decode(first_image_data)
+                    image_embedding = self.generate_image_embedding(first_image_data)
+                    
+                    yield {
+                        'is_task_complete': False,
+                        'require_user_input': False,
+                        'content': '✅ Fenómenos físicos identificados.',
+                        'status': 'analyzing_images'
+                    }
+                else:
+                    visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
                 
+                # Clasificar
                 yield {
                     'is_task_complete': False,
                     'require_user_input': False,
-                    'content': '✅ Fenómenos físicos identificados.',
-                    'status': 'analyzing_images'
+                    'content': '📚 Analizando consulta...',
+                    'status': 'classifying'
                 }
-            
-            # Activar modo socrático
-            yield {
-                'is_task_complete': False,
-                'require_user_input': False,
-                'content': '🎓 Iniciando método socrático: te haré 3 preguntas para guiar tu aprendizaje...',
-                'status': 'socratic_init'
-            }
+                classification = await self.classify_query(
+                    query_for_generation, memory_context, visual_findings
+                )
+                
+                # Buscar
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': False,
+                    'content': '🔎 Buscando información complementaria...',
+                    'status': 'searching_documents'
+                }
+                search_query = await self.generate_search_query(
+                    classification, visual_findings, query_for_generation
+                )
+                search_results = await self.search_multimodal(
+                    query=search_query,
+                    image_embedding=image_embedding,
+                    top_k=5
+                )
+                
+                # Contexto
+                document_context = "\n".join([
+                    f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
+                    for i, r in enumerate(search_results.get('text', []))
+                ])
+                
+                image_context = "\n".join([
+                    f"--- Imagen {i+1} ---\nPDF: {r['payload'].get('pdf_name', 'N/A')}"
+                    for i, r in enumerate(search_results.get('image', []))
+                ])
+                
+                # Respuesta
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': False,
+                    'content': '📝 Generando respuesta...',
+                    'status': 'generating_response'
+                }
+                
+                final_response = await self.generate_physics_response(
+                    query_for_generation, memory_context, classification, 
+                    visual_findings, document_context, image_context,
+                    chat_history=memory.chat_history
+                )
+                self._save_to_memory(context_id, query, final_response)
+                
+                yield {
+                    'is_task_complete': True,
+                    'require_user_input': False,
+                    'content': final_response,
+                    'status': 'completed'
+                }
+
+            else:
+                # Modo normal: iniciar modo socrático
+                print(f"🎓 Iniciando modo socrático...")
+                
+                # Analizar imágenes
+                visual_findings = ""
+                image_embedding = None
+                
+                if images and len(images) > 0:
+                    yield {
+                        'is_task_complete': False,
+                        'require_user_input': False,
+                        'content': f'🖼️ Analizando {len(images)} imagen(es)...',
+                        'status': 'analyzing_images'
+                    }
+                    
+                    visual_findings = await self.analyze_physics_image(images)
+                    self.visual_findings[context_id] = visual_findings
+                    
+                    first_image_data = images[0].get('data') or images[0].get('bytes')
+                    if isinstance(first_image_data, str):
+                        first_image_data = base64.b64decode(first_image_data)
+                    image_embedding = self.generate_image_embedding(first_image_data)
+                    
+                    yield {
+                        'is_task_complete': False,
+                        'require_user_input': False,
+                        'content': '✅ Fenómenos físicos identificados.',
+                        'status': 'analyzing_images'
+                    }
+                
+                # Activar modo socrático
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': False,
+                    'content': '🎓 Iniciando método socrático: te haré 3 preguntas para guiar tu aprendizaje...',
+                    'status': 'socratic_init'
+                }
             
             memory.socratic_mode = True
             memory.original_query = query
