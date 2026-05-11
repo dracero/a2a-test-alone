@@ -381,7 +381,11 @@ export function ChatInterface() {
         ) : (
           <div className="max-w-4xl mx-auto">
             {messages.map((message) => (
-              <MessageBubble key={message.message_id} message={message} />
+              <MessageBubble 
+                key={message.message_id} 
+                message={message} 
+                onSend={handleSendMessage} 
+              />
             ))}
             {isSending && (
               <div className="flex items-start gap-3 mb-4">

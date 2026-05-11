@@ -14,7 +14,7 @@ from io import BytesIO
 from typing import Any
 from uuid import uuid4
 
-import requests
+
 from app.in_memory_cache import InMemoryCache
 # Import LangSmith configuration
 from app.langsmith_config import (LANGSMITH_ENABLED, get_langsmith_status,
@@ -107,8 +107,8 @@ def _generate_image_internal(
     print('🆕 Generating new image with Hugging Face Stable Diffusion')
 
     try:
-        # Use Hugging Face Inference API with Stable Diffusion
-        # Model: stabilityai/stable-diffusion-2-1
+        # Use Hugging Face Inference API with Stable Diffusion XL
+        # Model: stabilityai/stable-diffusion-xl-base-1.0
         hf_token = os.getenv('HUGGINGFACEHUB_API_TOKEN') or os.getenv('HF_TOKEN')
         
         if not hf_token:
@@ -126,44 +126,23 @@ def _generate_image_internal(
         print(f'🚀 Calling Hugging Face Inference API...')
         print(f'📝 Enhanced prompt: {enhanced_prompt}')
         
-        # Hugging Face Inference API endpoint
-        api_url = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1"
+        from huggingface_hub import InferenceClient
         
-        headers = {
-            "Authorization": f"Bearer {hf_token}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "inputs": enhanced_prompt,
-            "parameters": {
-                "num_inference_steps": 50,
-                "guidance_scale": 7.5,
-                "negative_prompt": "blurry, bad quality, watermark, text, signature, low resolution"
-            }
-        }
+        client = InferenceClient(token=hf_token)
+        model_id = "stabilityai/stable-diffusion-xl-base-1.0"
         
         # Make request to Hugging Face
-        import json
-        import requests
-        
-        response = requests.post(
-            api_url,
-            headers=headers,
-            json=payload,
-            timeout=60
+        image = client.text_to_image(
+            prompt=enhanced_prompt,
+            model=model_id,
+            num_inference_steps=50,
+            guidance_scale=7.5,
+            negative_prompt="blurry, bad quality, watermark, text, signature, low resolution"
         )
         
-        print(f'📥 Response status: {response.status_code}')
-        
-        if response.status_code != 200:
-            error_msg = f"Hugging Face API error: {response.status_code} - {response.text}"
-            logger.error(error_msg)
-            print(f'❌ {error_msg}')
-            return f"ERROR: {error_msg}"
-        
-        # Get image bytes from response
-        image_data_bytes = response.content
+        img_byte_arr = BytesIO()
+        image.save(img_byte_arr, format='PNG')
+        image_data_bytes = img_byte_arr.getvalue()
         
         if not image_data_bytes or len(image_data_bytes) < 100:
             error_msg = 'No valid image data in Hugging Face response'
@@ -200,7 +179,7 @@ def _generate_image_internal(
                         "prompt": prompt,
                         "session_id": session_id,
                         "mime_type": data.mime_type,
-                        "model": "stabilityai/stable-diffusion-2-1"
+                        "model": "stabilityai/stable-diffusion-xl-base-1.0"
                     }
                 )
             except:
@@ -208,14 +187,11 @@ def _generate_image_internal(
 
         return data.id
         
-    except requests.exceptions.Timeout:
-        error_msg = 'Hugging Face API timeout - model may be loading, try again in a minute'
-        logger.error(error_msg)
-        print(f'❌ {error_msg}')
-        return f"ERROR: {error_msg}"
-        
-    except Exception as e:
-        error_msg = str(e)
+    except (TimeoutError, Exception) as e:
+        if isinstance(e, TimeoutError):
+            error_msg = 'Hugging Face API timeout - model may be loading, try again in a minute'
+        else:
+            error_msg = str(e)
         logger.error(f'Error generating image: {error_msg}')
         print(f'❌ Generation error: {error_msg}')
         

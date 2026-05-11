@@ -61,6 +61,13 @@ async def inicializar_agente_con_pdfs(qdrant_url: str, qdrant_api_key: str, pdf_
         await client.get_collection(executor.agent.text_collection)
         colecciones_existen = True
         logger.info("✅ Colecciones ya existen en Qdrant, saltando procesamiento de PDFs")
+        # Intentar cargar temario desde disco
+        if Path("temario.txt").exists():
+            with open("temario.txt", "r", encoding="utf-8") as f:
+                executor.agent.temario = f.read()
+            logger.info("✅ Temario cargado desde disco")
+        else:
+            logger.warning("⚠️ No se encontró temario.txt. El agente podría no tener contexto del temario.")
     except Exception as e:
         logger.info(f"⚠️ Colecciones no encontradas: {e}")
         logger.info("🔄 Se procesarán los PDFs")

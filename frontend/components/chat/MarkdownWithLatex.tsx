@@ -11,7 +11,38 @@ interface MarkdownWithLatexProps {
   className?: string;
 }
 
+/**
+ * Preprocess content to normalize LaTeX delimiters.
+ * LLMs may use various delimiter styles:
+ *  - \( ... \) for inline → convert to $...$
+ *  - \[ ... \] for display → convert to $$...$$
+ *  - Escaped backslashes from JSON: \\( → \( first
+ */
+function preprocessLatex(content: string): string {
+  if (!content) return content;
+  
+  let processed = content;
+  
+  // Fix double-escaped backslashes from JSON serialization
+  // e.g., \\\\vec → \\vec, \\\\frac → \\frac
+  processed = processed.replace(/\\\\\\\\([a-zA-Z])/g, '\\\\$1');
+  
+  // Convert \( ... \) to $ ... $ (inline math)
+  processed = processed.replace(/\\\((.+?)\\\)/gs, (_, math) => `$${math.trim()}$`);
+  
+  // Convert \[ ... \] to $$ ... $$ (display math)
+  processed = processed.replace(/\\\[(.+?)\\\]/gs, (_, math) => `$$${math.trim()}$$`);
+  
+  // Ensure $$ blocks are on their own lines (remark-math requires this)
+  processed = processed.replace(/([^\n])\$\$/g, '$1\n$$');
+  processed = processed.replace(/\$\$([^\n])/g, '$$\n$1');
+  
+  return processed;
+}
+
 export function MarkdownWithLatex({ content, className }: MarkdownWithLatexProps) {
+  const processedContent = preprocessLatex(content);
+  
   return (
     <div className={cn('prose prose-sm max-w-none dark:prose-invert', className)}>
       <ReactMarkdown
@@ -61,7 +92,7 @@ export function MarkdownWithLatex({ content, className }: MarkdownWithLatexProps
           em: ({ children }: any) => <em className="italic">{children}</em>,
         }}
       >
-        {content}
+        {processedContent}
       </ReactMarkdown>
     </div>
   );

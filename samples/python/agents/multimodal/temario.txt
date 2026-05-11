@@ -1,0 +1,65 @@
+TEMA 1: Magnitudes escalares y vectoriales
+- Subtema 1.1: Definición de magnitudes escalares y vectoriales
+
+TEMA 2: Cinemática de la partícula
+- Subtema 2.1: Posición de una partícula “P” respecto del observador “O”
+- Subtema 2.2: Sistema de referencia. Encuadre empírico del movimiento
+- Subtema 2.3: Sistemas de coordenadas: cartesianas, polares e intrínsecas
+- Subtema 2.4: Cambio de posición de un punto “P” respecto de un observador fijo “O”
+- Subtema 2.5: Velocidad instantánea de un punto “P” respecto de un observador fijo “O”
+- Subtema 2.6: Vector velocidad en coordenadas polares y transformación a coordenadas cartesianas en 2D
+- Subtema 2.7: Variación del vector velocidad
+- Subtema 2.8: Aceleración instantánea de un punto “P” respecto de un observador fijo “O”
+- Subtema 2.9: Circunferencia osculatriz o círculo osculador
+
+TEMA 3: Sistema de partículas
+- Subtema 3.1: Modelo sistema de partículas
+- Subtema 3.2: Sistema de referencia laboratorio
+- Subtema 3.3: Centro de masa de un sistema de partículas
+- Subtema 3.4: Velocidad del CM de un sistema de partículas
+- Subtema 3.5: Aceleración del CM de un sistema de partículas
+- Subtema 3.6: Dinámica de un sistema de partículas
+
+TEMA 4: Dinámica de la partícula
+- Subtema 4.1: Introducción
+- Subtema 4.2: Primera ley: el Principio de Inercia
+- Subtema 4.3: Segunda ley: el Principio de Masa
+- Subtema 4.4: Tercera ley: el Principio de Interacción
+
+TEMA 5: Trabajo y Energía
+- Subtema 5.1: Introducción
+- Subtema 5.2: Potencia
+- Subtema 5.3: Energía potencial y fuerzas conservativas
+
+TEMA 6: Cinemática del Cuerpo Rígido
+- Subtema 6.1: Introducción
+- Subtema 6.2: Determinación del Centro de Masa (CM) del cuerpo rígido
+- Subtema 6.3: Estudio de los posibles movimientos de un Cuerpo Rígido (CR) en un plano perpendicular a su eje de simetría
+
+TEMA 7: Dinámica del Cuerpo Rígido
+- Subtema 7.1: Introducción
+- Subtema 7.2: Resultado de trasladar una fuerza al CM
+- Subtema 7.3: Cupla o par de fuerzas
+
+TEMA 8: Dinámica Impulsiva del Cuerpo Rígido
+- Subtema 8.1: Introducción
+- Subtema 8.2: Centro de percusión
+
+TEMA 9: Ondas Mecánicas
+- Subtema 9.1: Introducción
+- Subtema 9.2: Características del movimiento ondulatorio
+
+TEMA 10: Hidrodinámica
+- Subtema 10.1: Discusión de conceptos previos
+- Subtema 10.2: Flujo del fluido ideal
+
+TEMA 11: Óptica Física
+- Subtema 11.1: Principio de Huygens
+- Subtema 11.2: El concepto de coherencia
+
+TEMA 12: Óptica Geométrica
+- Subtema 12.1: Óptica geométrica
+- Subtema 12.2: Leyes o principio fundamentales de la óptica geométrica
+
+TEMA 13: Sistemas de Referencia No Inerciales
+- Subtema 13.1: Introducción

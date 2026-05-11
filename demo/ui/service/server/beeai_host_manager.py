@@ -272,6 +272,11 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
                                         elif 'error' in chunk_data:
                                             error_msg = chunk_data['error'].get('message', str(chunk_data['error']))
                                             print(f"❌ Error in chunk: {error_msg}")
+                                            # If the agent doesn't support streaming, fall back to message/send
+                                            if 'not supported' in error_msg.lower() or 'unsupported' in error_msg.lower():
+                                                print(f"⚠️ Agent doesn't support streaming, will fall back")
+                                                streaming_failed = True
+                                                break
                                             return f"❌ Agent error: {error_msg}"
                                             
                                     except json.JSONDecodeError as e:
@@ -313,23 +318,47 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
                     
                     # Use the base URL for JSON-RPC (not /message/send)
                     response = await client.post(card.url, json=jsonrpc_payload)
-                    print(f"📥 Non-streaming response status: {response.status_code}")
-                    
                     if response.status_code == 200:
                         result = response.json()
-                        print(f"✅ Non-streaming response: {json.dumps(result, indent=2)[:500]}...")
+                        print(f"✅ Non-streaming full response: {json.dumps(result, indent=2)[:2000]}")
                         
                         if 'error' in result:
                             error_msg = result['error'].get('message', str(result['error']))
                             return f"❌ Agent error: {error_msg}"
                         elif 'result' in result:
                             rpc_result = result['result']
-                            if isinstance(rpc_result, dict) and 'taskId' in rpc_result:
-                                task_id = rpc_result['taskId']
-                                print(f"📋 Task ID: {task_id}, polling for result...")
-                                return await self._poll_task_result(client, card.url, task_id, agent_name)
-                            else:
-                                return f"✅ Message sent to {agent_name} successfully."
+                            print(f"🔑 rpc_result keys: {list(rpc_result.keys()) if isinstance(rpc_result, dict) else type(rpc_result)}")
+                            
+                            # Case 1: has a taskId → poll for result
+                            task_id_key = rpc_result.get('taskId') or rpc_result.get('id') if isinstance(rpc_result, dict) else None
+                            if task_id_key and isinstance(rpc_result, dict) and 'status' not in rpc_result:
+                                print(f"📋 Task ID (polling): {task_id_key}")
+                                return await self._poll_task_result(client, card.url, task_id_key, agent_name)
+                            
+                            # Case 2: result contains artifacts directly
+                            if isinstance(rpc_result, dict) and 'artifacts' in rpc_result:
+                                all_parts = []
+                                for artifact in (rpc_result['artifacts'] or []):
+                                    if isinstance(artifact, dict):
+                                        all_parts.extend(artifact.get('parts', []))
+                                text_parts, image_parts = self._extract_parts(all_parts)
+                                print(f"📦 Artifact parts — text: {len(text_parts)}, images: {len(image_parts)}")
+                                result_str = self._parts_to_marker(text_parts, image_parts)
+                                if result_str:
+                                    return result_str
+                            
+                            # Case 3: result contains status.message parts
+                            if isinstance(rpc_result, dict) and 'status' in rpc_result:
+                                status = rpc_result['status']
+                                if isinstance(status, dict):
+                                    status_msg = status.get('message')
+                                    if isinstance(status_msg, dict):
+                                        text_parts, image_parts = self._extract_parts(status_msg.get('parts', []))
+                                        result_str = self._parts_to_marker(text_parts, image_parts)
+                                        if result_str:
+                                            return result_str
+                            
+                            return f"✅ Message sent to {agent_name} successfully."
                         else:
                             return f"✅ Message sent to {agent_name}."
                     else:
@@ -346,6 +375,44 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
             import traceback
             traceback.print_exc()
             return f"❌ Error communicating with agent {agent_name}: {str(e)}"
+    
+    def _extract_parts(self, raw_parts: list) -> tuple[list[str], list[dict]]:
+        """Extract text and image parts from A2A artifact parts.
+        
+        Handles both plain parts {'kind': 'file', 'file': {...}}
+        and A2A root-wrapped parts {'root': {'kind': 'file', 'file': {...}}}.
+        Returns (text_parts, image_parts) where image_parts are dicts with mime_type and bytes.
+        """
+        text_parts = []
+        image_parts = []
+        for raw in raw_parts:
+            if not isinstance(raw, dict):
+                continue
+            # Unwrap 'root' if present (A2A SDK serialization)
+            part = raw.get('root', raw)
+            kind = part.get('kind', '')
+            if kind == 'text':
+                txt = part.get('text', '')
+                if txt:
+                    text_parts.append(txt)
+            elif kind == 'file':
+                file_data = part.get('file', {})
+                if file_data.get('bytes'):
+                    image_parts.append({
+                        'mime_type': file_data.get('mime_type', 'image/png'),
+                        'bytes': file_data['bytes']
+                    })
+        return text_parts, image_parts
+    
+    def _parts_to_marker(self, text_parts: list[str], image_parts: list[dict]) -> str | None:
+        """Convert extracted parts into a response string (with __IMAGE_PARTS__ marker if needed)."""
+        if image_parts:
+            import json as _json
+            text_prefix = '\n'.join(text_parts) if text_parts else 'Image generated successfully'
+            return f"{text_prefix}\n__IMAGE_PARTS__:{_json.dumps(image_parts)}"
+        if text_parts:
+            return '\n'.join(text_parts)
+        return None
     
     async def _poll_task_result(self, client, agent_url, task_id, agent_name):
         """Poll for task result when streaming doesn't provide it"""
@@ -381,40 +448,35 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
                     print(f"📊 Task status: {status} (attempt {attempt + 1}/{max_attempts})")
                     
                     if state == 'completed':
-                        # Try to extract from status message first
+                        # Priority 1: status message parts
                         if status_message and isinstance(status_message, dict):
-                            parts = status_message.get('parts', [])
-                            text_parts = [p.get('text', '') for p in parts 
-                                         if isinstance(p, dict) and p.get('kind') == 'text' and p.get('text')]
-                            if text_parts:
-                                return '\n'.join(text_parts)
+                            t, i = self._extract_parts(status_message.get('parts', []))
+                            r = self._parts_to_marker(t, i)
+                            if r:
+                                return r
                         
-                        # Try to extract from 'response' field
+                        # Priority 2: response field parts
                         response_message = task_data.get('response', {})
                         if isinstance(response_message, dict):
-                            parts = response_message.get('parts', [])
-                            if parts:
-                                text_parts = []
-                                for part in parts:
-                                    if isinstance(part, dict) and part.get('kind') == 'text':
-                                        text_parts.append(part.get('text', ''))
-                                
-                                if text_parts:
-                                    return '\n'.join(text_parts)
+                            t, i = self._extract_parts(response_message.get('parts', []))
+                            r = self._parts_to_marker(t, i)
+                            if r:
+                                return r
                         
-                        # Try to extract from 'artifact' field
-                        artifact = task_data.get('artifact', {})
-                        if isinstance(artifact, dict):
-                            if 'parts' in artifact:
-                                text_parts = []
-                                for part in artifact['parts']:
-                                    if isinstance(part, dict) and part.get('kind') == 'text':
-                                        text_parts.append(part.get('text', ''))
-                                
-                                if text_parts:
-                                    return '\n'.join(text_parts)
-                            elif artifact.get('kind') == 'text':
-                                return artifact.get('text', '')
+                        # Priority 3: artifacts (singular and plural)
+                        all_parts = []
+                        for art_key in ('artifact', 'artifacts'):
+                            val = task_data.get(art_key)
+                            if val:
+                                art_list = val if isinstance(val, list) else [val]
+                                for art in art_list:
+                                    if isinstance(art, dict):
+                                        all_parts.extend(art.get('parts', []))
+                        if all_parts:
+                            t, i = self._extract_parts(all_parts)
+                            r = self._parts_to_marker(t, i)
+                            if r:
+                                return r
                         
                         return f"✅ Agent {agent_name} completed the task."
                     
@@ -498,6 +560,60 @@ class BeeAIHostManager(ApplicationManager):
                 json.dump(self._active_sessions, f)
         except Exception as e:
             print(f"Error guardando sesiones: {e}")
+
+    async def _should_continue_active_session(self, user_message: str, active_agent: str) -> bool:
+        """Determina si el mensaje del usuario debe ir al agente activo o al orquestador.
+        
+        Returns True si el mensaje es una respuesta/continuación de la sesión activa.
+        Returns False si el usuario quiere hacer algo diferente.
+        """
+        # Frases que claramente rompen la sesión activa
+        break_keywords = [
+            "genera una imagen", "generá una imagen", "generar imagen",
+            "dibuja", "dibujá", "crear imagen", "creá una imagen",
+            "cambiar de tema", "otro tema", "hablemos de otra cosa",
+            "quiero hablar con otro", "otro agente",
+        ]
+        msg_lower = user_message.lower().strip()
+        if any(kw in msg_lower for kw in break_keywords):
+            return False
+        
+        # Frases que claramente son continuación (respuestas de física, confusión, etc.)
+        continue_keywords = [
+            "no sé", "no se", "creo que", "la respuesta es", "sería",
+            "no entiendo", "me parece", "pienso que", "puede ser",
+        ]
+        if any(kw in msg_lower for kw in continue_keywords):
+            return True
+        
+        # Usar LLM para casos ambiguos
+        try:
+            from langchain_core.messages import HumanMessage
+            
+            prompt = f"""Eres un clasificador de intención. Un estudiante está en una sesión activa 
+con el agente "{active_agent}" (un tutor de física que hace preguntas socráticas).
+
+Determina si el siguiente mensaje del estudiante es:
+- CONTINUAR: Es una respuesta a una pregunta de física, una duda, confusión, o cualquier 
+  interacción relacionada con la sesión de tutoría actual. Incluye también pedidos de 
+  "salir del modo socrático" o "dame la respuesta directa" (el agente de física maneja eso).
+- CAMBIAR: El estudiante quiere hacer algo COMPLETAMENTE diferente, como generar una imagen,
+  hablar de otro tema no relacionado con física, o usar otro servicio.
+
+EN CASO DE DUDA, responde CONTINUAR.
+
+Mensaje del estudiante: "{user_message}"
+
+Responde SOLO: CONTINUAR o CAMBIAR"""
+            
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            result = response.content.strip().upper()
+            print(f"🧠 Intención de sesión activa: '{user_message[:50]}...' → {result}")
+            
+            return "CAMBIAR" not in result
+        except Exception as e:
+            print(f"⚠️ Error detectando intención de sesión: {e}")
+            return True  # En caso de error, continuar con la sesión activa
 
     async def create_conversation(self) -> Conversation:
         conversation_id = str(uuid.uuid4())
@@ -608,16 +724,26 @@ class BeeAIHostManager(ApplicationManager):
             
             if active_agent:
                 print(f"🔄 Sesión activa detectada para contexto {context_id[:8]}... → {active_agent}")
-                print(f"📤 Enviando directamente al agente (bypass del orquestador)")
                 
-                send_tool_instance = SendMessageToAgentTool(self)
+                # Verificar si el usuario quiere salir de la sesión activa
+                # o hacer algo completamente diferente
+                should_bypass = await self._should_continue_active_session(text_content, active_agent)
                 
-                send_input = SendMessageToAgentInput(
-                    agent_name=active_agent,
-                    message=text_content
-                )
-                resp_text = await send_tool_instance._run(send_input, None, None)
-            else:
+                if should_bypass:
+                    print(f"📤 Continuando sesión activa con {active_agent}")
+                    send_tool_instance = SendMessageToAgentTool(self)
+                    send_input = SendMessageToAgentInput(
+                        agent_name=active_agent,
+                        message=text_content
+                    )
+                    resp_text = await send_tool_instance._run(send_input, None, None)
+                else:
+                    print(f"🔀 Usuario quiere cambiar de tema/agente. Limpiando sesión activa.")
+                    del self._active_sessions[context_id]
+                    self._save_sessions()
+                    active_agent = None  # Caer al flujo del orquestador abajo
+            
+            if not active_agent:
                 from service.server.beeai_orchestrator_workflow import (
                     OrchestratorState, create_orchestrator_workflow)
                 
@@ -663,11 +789,41 @@ class BeeAIHostManager(ApplicationManager):
 
  
 
+        # Build response parts — detect image marker from image agent
+        import json as _json
+        response_parts: list[Part] = []
+        IMAGE_MARKER = "__IMAGE_PARTS__:"
+        if IMAGE_MARKER in resp_text:
+            lines = resp_text.split('\n')
+            non_image_lines = []
+            for line in lines:
+                if line.startswith(IMAGE_MARKER):
+                    try:
+                        image_parts_data = _json.loads(line[len(IMAGE_MARKER):])
+                        for img in image_parts_data:
+                            fp = FilePart(
+                                file=FileWithBytes(
+                                    bytes=img['bytes'],
+                                    mime_type=img.get('mime_type', 'image/png'),
+                                    name='generated_image.png'
+                                )
+                            )
+                            response_parts.append(Part(root=fp))
+                    except Exception as e:
+                        print(f"⚠️ Could not parse image marker: {e}")
+                else:
+                    non_image_lines.append(line)
+            text_without_marker = '\n'.join(non_image_lines).strip()
+            if text_without_marker:
+                response_parts.insert(0, Part(root=TextPart(text=text_without_marker)))
+        else:
+            response_parts = [Part(root=TextPart(text=resp_text))]
+
         response_msg = Message(
             message_id=str(uuid.uuid4()),
             context_id=context_id,
             role=Role.agent,
-            parts=[Part(root=TextPart(text=resp_text))]
+            parts=response_parts
         )
         self._messages.append(response_msg)
         conversation.messages.append(response_msg)

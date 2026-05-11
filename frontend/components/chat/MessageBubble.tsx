@@ -6,12 +6,15 @@ import { MarkdownWithLatex } from './MarkdownWithLatex';
 import { User, Bot } from 'lucide-react';
 import Image from 'next/image';
 import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { GraduationCap, BookOpen, XCircle } from 'lucide-react';
 
 interface MessageBubbleProps {
   message: Message;
+  onSend?: (text: string) => Promise<void>;
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onSend }: MessageBubbleProps) {
   const isUser = message.role === 'user';
 
   return (
@@ -44,7 +47,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       >
         {message.parts && message.parts.length > 0 ? (
           message.parts.map((part, index) => (
-            <MessagePart key={index} part={part} isUser={isUser} />
+            <MessagePart key={index} part={part} isUser={isUser} onSend={onSend} />
           ))
         ) : (
           <p className="text-sm text-red-500">No content</p>
@@ -54,14 +57,22 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   );
 }
 
-function MessagePart({ part, isUser }: { part: Part; isUser: boolean }) {
+function MessagePart({ part, isUser, onSend }: { part: Part; isUser: boolean; onSend?: (text: string) => Promise<void> }) {
   const [imageError, setImageError] = useState(false);
 
   if (!part || typeof part.kind === 'undefined') return null;
 
   // ── TEXT ──────────────────────────────────────────────────────────────────
   if (part.kind === 'text') {
-    const text = part.text ?? '';
+    let text = part.text ?? '';
+
+    // Detectar marcadores socráticos
+    const hasSocraticChoice = text.includes('<!-- SOCRATIC_CHOICE -->');
+    const hasSocraticExit = text.includes('<!-- SOCRATIC_EXIT -->');
+    
+    // Limpiar marcadores para no renderizarlos
+    if (hasSocraticChoice) text = text.replace('<!-- SOCRATIC_CHOICE -->', '');
+    if (hasSocraticExit) text = text.replace('<!-- SOCRATIC_EXIT -->', '');
 
     // User messages: plain text, no markdown needed
     if (isUser) {
@@ -74,10 +85,50 @@ function MessagePart({ part, isUser }: { part: Part; isUser: boolean }) {
 
     // Agent messages: full Markdown + LaTeX via react-markdown + rehype-katex
     return (
-      <MarkdownWithLatex
-        content={text}
-        className="text-sm text-slate-900"
-      />
+      <div className="flex flex-col gap-4 w-full">
+        <MarkdownWithLatex
+          content={text}
+          className="text-sm text-slate-900"
+        />
+        
+        {/* Renderizar botones de elección inicial */}
+        {hasSocraticChoice && onSend && (
+          <div className="flex flex-wrap gap-2 mt-2 pt-2 border-t border-slate-200">
+            <Button 
+              onClick={() => onSend("[SOCRATIC]")} 
+              className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+              size="sm"
+            >
+              <GraduationCap className="h-4 w-4" />
+              Modo Socrático (Guía Paso a Paso)
+            </Button>
+            <Button 
+              onClick={() => onSend("[DIRECTO]")} 
+              variant="outline" 
+              className="gap-2"
+              size="sm"
+            >
+              <BookOpen className="h-4 w-4" />
+              Explicación Directa
+            </Button>
+          </div>
+        )}
+
+        {/* Renderizar botón de salida durante el modo socrático */}
+        {hasSocraticExit && onSend && (
+          <div className="flex justify-end mt-1">
+            <Button 
+              onClick={() => onSend("[DIRECTO]")} 
+              variant="ghost" 
+              size="sm"
+              className="text-slate-500 hover:text-red-600 hover:bg-red-50 gap-1 text-xs"
+            >
+              <XCircle className="h-3 w-3" />
+              Salir del modo socrático
+            </Button>
+          </div>
+        )}
+      </div>
     );
   }
 
