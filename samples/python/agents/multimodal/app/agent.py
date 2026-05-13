@@ -19,7 +19,8 @@ from pydantic import BaseModel
 from PyPDF2 import PdfReader
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
-from transformers import CLIPModel, CLIPProcessor
+from transformers import CLIPModel, CLIPProcessor, AutoTokenizer, AutoModel
+import torch.nn.functional as F
 
 # ==================== CONFIGURACIÓN ====================
 
@@ -40,7 +41,7 @@ class SemanticMemory:
         self.socratic_questions_asked = 0
         self.socratic_answers = []
         self.original_query = ""
-        self.socratic_disabled = False
+        self.socratic_disabled = True
     
     def to_dict(self) -> dict:
         """Serializa la memoria a un diccionario."""
@@ -58,7 +59,7 @@ class SemanticMemory:
             "socratic_questions_asked": self.socratic_questions_asked,
             "socratic_answers": self.socratic_answers,
             "original_query": self.original_query,
-            "socratic_disabled": getattr(self, 'socratic_disabled', False)
+            "socratic_disabled": getattr(self, 'socratic_disabled', True)
         }
 
     @classmethod
@@ -73,7 +74,7 @@ class SemanticMemory:
         mem.socratic_questions_asked = data.get("socratic_questions_asked", 0)
         mem.socratic_answers = data.get("socratic_answers", [])
         mem.original_query = data.get("original_query", "")
-        mem.socratic_disabled = data.get("socratic_disabled", False)
+        mem.socratic_disabled = data.get("socratic_disabled", True)
         # Reconstruir chat_history desde la lista serializada
         for entry in data.get("chat_history", []):
             if entry["role"] == "human":
@@ -136,7 +137,7 @@ class SemanticMemory:
         self.socratic_questions_asked = 0
         self.socratic_answers = []
         self.original_query = ""
-        self.socratic_disabled = False
+        self.socratic_disabled = True
 
 
 class PhysicsMultimodalAgent:
@@ -179,14 +180,20 @@ class PhysicsMultimodalAgent:
         # Qdrant
         self.qdrant_url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
         self.qdrant_api_key = qdrant_api_key or os.getenv("QDRANT_KEY", "")
-        self.text_collection = "documentos_pdf_texto"
+        self.text_collection = "documentos_pdf_texto_hf"  # Nombre cambiado para evitar mismatch de dimensiones
         self.image_collection = "documentos_pdf_imagenes"
         self.multimodal_collection = "documentos_multimodal"
         
-        # Modelo CLIP
+        # Modelo CLIP (para imágenes y búsqueda de imágenes con texto)
         device = "cuda" if torch.cuda.is_available() else "cpu"
         self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
         self.clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        
+        # Modelo HuggingFace (para texto)
+        self.hf_model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        self.hf_tokenizer = AutoTokenizer.from_pretrained(self.hf_model_name)
+        self.hf_model = AutoModel.from_pretrained(self.hf_model_name).to(device)
+        self.hf_vector_size = 384  # Dimensión de salida de MiniLM-L12
         
         # Memoria conversacional
         self.memories = {}
@@ -325,8 +332,8 @@ class PhysicsMultimodalAgent:
             print(f"❌ Error extrayendo imágenes: {e}")
             return []
     
-    def split_text(self, text: str, chunk_words: int = 50, overlap: int = 10) -> List[str]:
-        """Dividir texto en chunks de palabras (máx 77 tokens para CLIP)."""
+    def split_text(self, text: str, chunk_words: int = 350, overlap: int = 50) -> List[str]:
+        """Dividir texto en chunks de palabras (máx 512 tokens para modelo HF)."""
         words = text.split()
         chunks = []
         for i in range(0, len(words), chunk_words - overlap):
@@ -336,28 +343,30 @@ class PhysicsMultimodalAgent:
                 break
         return chunks
     
-    def generate_text_embeddings_batch(self, chunks: List[str], batch_size: int = 32) -> List[List[float]]:
-        """Generar embeddings de texto en batch."""
+    def generate_hf_text_embeddings_batch(self, chunks: List[str], batch_size: int = 16) -> List[List[float]]:
+        """Generar embeddings de texto en batch usando HuggingFace."""
         embeddings = []
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i+batch_size]
-            inputs = self.clip_processor(
-                text=batch,
+            inputs = self.hf_tokenizer(
+                batch,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=77
-            ).to(self.clip_model.device)
+                max_length=512
+            ).to(self.hf_model.device)
             
             with torch.no_grad():
-                outputs = self.clip_model.get_text_features(**inputs)
-                # Extraer el tensor del output (puede ser un objeto BaseModelOutputWithPooling)
-                if hasattr(outputs, 'pooler_output'):
-                    text_features = outputs.pooler_output
-                elif hasattr(outputs, 'last_hidden_state'):
-                    text_features = outputs.last_hidden_state[:, 0]  # CLS token
-                else:
-                    text_features = outputs  # Ya es un tensor
+                outputs = self.hf_model(**inputs)
+            
+            attention_mask = inputs['attention_mask']
+            token_embeddings = outputs.last_hidden_state
+            input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+            sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
+            sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+            text_features = sum_embeddings / sum_mask
+            text_features = F.normalize(text_features, p=2, dim=1)
+            
             embeddings.extend(text_features.cpu().numpy().tolist())
         return embeddings
     
@@ -380,8 +389,8 @@ class PhysicsMultimodalAgent:
             print(f"❌ Error generando embedding: {e}")
             return None
     
-    def generate_text_embedding(self, text: str) -> Optional[List[float]]:
-        """Generar embedding de texto."""
+    def generate_clip_text_embedding(self, text: str) -> Optional[List[float]]:
+        """Generar embedding de texto usando CLIP (para buscar en la colección de imágenes)."""
         try:
             inputs = self.clip_processor(
                 text=[text],
@@ -392,7 +401,6 @@ class PhysicsMultimodalAgent:
             ).to(self.clip_model.device)
             with torch.no_grad():
                 outputs = self.clip_model.get_text_features(**inputs)
-                # Extraer el tensor del output
                 if hasattr(outputs, 'pooler_output'):
                     text_features = outputs.pooler_output
                 elif hasattr(outputs, 'last_hidden_state'):
@@ -401,10 +409,36 @@ class PhysicsMultimodalAgent:
                     text_features = outputs
             return text_features.cpu().numpy().flatten().tolist()
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"❌ Error CLIP text embedding: {e}")
+            return None
+
+    def generate_hf_text_embedding(self, text: str) -> Optional[List[float]]:
+        """Generar embedding de texto usando HuggingFace."""
+        try:
+            inputs = self.hf_tokenizer(
+                text,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512
+            ).to(self.hf_model.device)
+            with torch.no_grad():
+                outputs = self.hf_model(**inputs)
+            
+            attention_mask = inputs['attention_mask']
+            token_embeddings = outputs.last_hidden_state
+            input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+            sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
+            sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+            text_features = sum_embeddings / sum_mask
+            text_features = F.normalize(text_features, p=2, dim=1)
+            
+            return text_features.cpu().numpy().flatten().tolist()
+        except Exception as e:
+            print(f"❌ Error HF text embedding: {e}")
             return None
     
-    async def store_in_qdrant(self, points: List[Any], collection_name: str):
+    async def store_in_qdrant(self, points: List[Any], collection_name: str, vector_size: int = 512):
         """Almacenar puntos en Qdrant."""
         client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, timeout=60.0)
         try:
@@ -413,9 +447,9 @@ class PhysicsMultimodalAgent:
         except Exception:
             await client.create_collection(
                 collection_name=collection_name,
-                vectors_config=VectorParams(size=512, distance=Distance.COSINE)
+                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
             )
-            print(f"✨ Colección '{collection_name}' creada")
+            print(f"✨ Colección '{collection_name}' creada con dimensión {vector_size}")
             
         batch_size = 50
         for i in range(0, len(points), batch_size):
@@ -483,7 +517,7 @@ Contenido:
                 contenido_para_temario += f"\n--- Documento: {Path(pdf_file).name} ---\n{text[:2500]}\n"
                 chunks = self.split_text(text)
                 print(f"   📝 {len(chunks)} chunks")
-                embeddings = self.generate_text_embeddings_batch(chunks)
+                embeddings = self.generate_hf_text_embeddings_batch(chunks)
                 
                 for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
                     text_points.append(PointStruct(
@@ -528,9 +562,9 @@ Contenido:
         
         # Almacenar
         if text_points:
-            await self.store_in_qdrant(text_points, self.text_collection)
+            await self.store_in_qdrant(text_points, self.text_collection, vector_size=self.hf_vector_size)
         if image_points:
-            await self.store_in_qdrant(image_points, self.image_collection)
+            await self.store_in_qdrant(image_points, self.image_collection, vector_size=512)
         
         print("\n✅ PROCESAMIENTO COMPLETADO")
         print(f"   📝 Texto: {len(text_points)} chunks")
@@ -580,28 +614,41 @@ Contenido:
         
         try:
             if query and image_embedding:
-                collections = [self.text_collection, self.image_collection]
-                search_embedding = self.generate_text_embedding(query)
+                # Si hay imagen y query, buscamos en ambas. 
+                # El text collection se busca con el HF embedding.
+                # El image collection se busca con CLIP embedding del texto o image_embedding? 
+                # Lo mejor es buscar en texto con HF y en imágenes con el image_embedding o el CLIP de texto.
+                # Como el input nos da ambos, lo tratamos por separado.
+                search_embedding_hf = self.generate_hf_text_embedding(query)
+                search_embedding_clip = self.generate_clip_text_embedding(query)
+                search_ops = [
+                    (self.text_collection, search_embedding_hf),
+                    (self.image_collection, search_embedding_clip) # o image_embedding, pero usar texto suele encontrar el concepto de imagen
+                ]
             elif query:
-                collections = [self.text_collection]
-                search_embedding = self.generate_text_embedding(query)
+                search_embedding_hf = self.generate_hf_text_embedding(query)
+                search_embedding_clip = self.generate_clip_text_embedding(query)
+                search_ops = [
+                    (self.text_collection, search_embedding_hf),
+                    (self.image_collection, search_embedding_clip)
+                ]
             elif image_embedding:
-                collections = [self.image_collection]
-                search_embedding = image_embedding
+                search_ops = [
+                    (self.image_collection, image_embedding)
+                ]
             else:
                 return results
             
-            if not search_embedding:
-                return results
-            
-            for collection in collections:
+            for collection, s_embedding in search_ops:
+                if not s_embedding:
+                    continue
                 try:
                     search_results = await client.query_points(
                         collection_name=collection,
-                        query=search_embedding,
+                        query=s_embedding,
                         limit=top_k
                     )
-                    col_type = collection.split("_")[-1]
+                    col_type = "text" if "texto" in collection else "image"
                     # query_points returns a QueryResponse object with a 'points' attribute
                     points = search_results.points if hasattr(search_results, 'points') else search_results
                     results[col_type] = [{
@@ -1602,8 +1649,8 @@ Responde SOLO: SALIR o CONTINUAR"""
             }
 
         else:
-            # === Primer contacto: presentar opciones al estudiante ===
-            print(f"🎓 Primera consulta. Presentando opciones...")
+            # === Activar modo socrático directamente ===
+            print(f"🎓 Iniciando modo socrático...")
             
             visual_findings = ""
             image_embedding = None
@@ -1631,17 +1678,28 @@ Responde SOLO: SALIR o CONTINUAR"""
                     'status': 'analyzing_images'
                 }
             
-            # Guardar query original por si elige socrático
+            memory.socratic_mode = True
             memory.original_query = query
+            memory.socratic_questions_asked = 0
+            memory.socratic_answers = []
             
-            # Enviar mensaje con marcador para que el frontend muestre botones
-            choice_message = "📚 **Tu consulta:** *" + query + "*\n\n¿Cómo preferís aprender este tema?\n\n<!-- SOCRATIC_CHOICE -->"
+            yield {
+                'is_task_complete': False,
+                'require_user_input': False,
+                'content': '🎓 Iniciando método socrático: te haré 3 preguntas para guiar tu aprendizaje...',
+                'status': 'socratic_init'
+            }
+            
+            first_question = await self.generate_socratic_question(
+                query, 0, [],
+                visual_findings=self.visual_findings.get(context_id, "")
+            )
             
             yield {
                 'is_task_complete': False,
                 'require_user_input': True,
-                'content': choice_message,
-                'status': 'awaiting_choice'
+                'content': first_question + "\n\n<!-- SOCRATIC_EXIT -->",
+                'status': 'socratic_question'
             }
 
     async def clear_memory(self, context_id: str):

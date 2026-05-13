@@ -1,65 +1,154 @@
-TEMA 1: Magnitudes escalares y vectoriales
-- Subtema 1.1: Definición de magnitudes escalares y vectoriales
+Aquí te presento el temario estructurado de Física I:
 
-TEMA 2: Cinemática de la partícula
-- Subtema 2.1: Posición de una partícula “P” respecto del observador “O”
-- Subtema 2.2: Sistema de referencia. Encuadre empírico del movimiento
-- Subtema 2.3: Sistemas de coordenadas: cartesianas, polares e intrínsecas
-- Subtema 2.4: Cambio de posición de un punto “P” respecto de un observador fijo “O”
-- Subtema 2.5: Velocidad instantánea de un punto “P” respecto de un observador fijo “O”
-- Subtema 2.6: Vector velocidad en coordenadas polares y transformación a coordenadas cartesianas en 2D
-- Subtema 2.7: Variación del vector velocidad
-- Subtema 2.8: Aceleración instantánea de un punto “P” respecto de un observador fijo “O”
-- Subtema 2.9: Circunferencia osculatriz o círculo osculador
+**TEMA 1: Cinemática de la partícula**
+- 1.1: Magnitudes escalares y vectoriales
+- 1.2: Componentes de un vector
+- 1.3: Cinemática: análisis del movimiento en 3D
+- 1.4: Posición de una partícula “P” respecto del observador “O”
+- 1.5: Sistema de referencia. Encuadre empírico del movimiento.
+- 1.6: Sistemas de coordenadas: cartesianas, polares e intrínsecas.
+- 1.7: Cambio de posición de un punto “P” respecto de un observador fijo “O”.
+- 1.8: Velocidad instantánea de un punto “P” respecto de un observador fijo “O”
+- 1.9: Vector velocidad en coordenadas polares y transformación a coordenadas cartesianas en 2D.
+- 1.10: Variación del vector velocidad.
+- 1.11: Aceleración instantánea de un punto “P” respecto de un observador fijo “O”
+- 1.12: Circunferencia osculatriz o círculo osculador: centro de curvatura local y radio de curvatura local de una trayectoria.
 
-TEMA 3: Sistema de partículas
-- Subtema 3.1: Modelo sistema de partículas
-- Subtema 3.2: Sistema de referencia laboratorio
-- Subtema 3.3: Centro de masa de un sistema de partículas
-- Subtema 3.4: Velocidad del CM de un sistema de partículas
-- Subtema 3.5: Aceleración del CM de un sistema de partículas
-- Subtema 3.6: Dinámica de un sistema de partículas
+**TEMA 2: Óptica Geométrica**
+- 2.1: Óptica geométrica
+- 2.2: Leyes o principio fundamentales de la óptica geométrica
+- 2.3: Algunas definiciones
+- 2.4: Fenómeno de reflexión: espejos
+- 2.5: Espejos planos: formación de imágenes
+- 2.6: Campo del espejo
+- 2.7: Reflexión en espejos esféricos
+- 2.8: Formula de los espejos esféricos
+- 2.9: Focos
+- 2.10: Agrandamiento lateral
+- 2.11: Formación de imágenes en espejos esféricos
+- 2.12: Reflexión total ángulo limite
+- 2.13: Fenómeno de refracción: dioptras esféricas
+- 2.14: Formula de Descartes para las dioptras esféricas
+- 2.15: Aumento o agrandamiento lateral
+- 2.16: Lentes gruesas
+- 2.17: Problema propuesto
+- 2.18: Lentes delgadas
+- 2.19: Ecuación del constructor de lentes
+- 2.20: Resumen
+- 2.21: Aumento lateral en lentes delgadas
+- 2.22: Formación de imágenes en lentes
+- 2.23: Potencia de las lentes delgadas
+- 2.24: Revisando conceptos
+- 2.25: Problema
 
-TEMA 4: Dinámica de la partícula
-- Subtema 4.1: Introducción
-- Subtema 4.2: Primera ley: el Principio de Inercia
-- Subtema 4.3: Segunda ley: el Principio de Masa
-- Subtema 4.4: Tercera ley: el Principio de Interacción
+**TEMA 3: Cinemática del Cuerpo Rígido**
+- 3.1: Introducción
+- 3.2: Determinación del Centro de Masa (CM) del cuerpo rígido
+- 3.3: Estudio de los posibles movimientos de un Cuerpo Rígido (CR) en un plano perpendicular a su eje de simetría
+- 3.4: Condición de rigidez
+- 3.5: Casos particulares de movimientos de CR
+- 3.6: Diagramas vectoriales
+- 3.7: Centro instantáneo de rotación (CIR)
+- 3.8: Problemas resueltos
 
-TEMA 5: Trabajo y Energía
-- Subtema 5.1: Introducción
-- Subtema 5.2: Potencia
-- Subtema 5.3: Energía potencial y fuerzas conservativas
+**TEMA 4: Dinámica de la partícula**
+- 4.1: Introducción
+- 4.2: Primera ley: el Principio de Inercia
+- 4.3: Segunda ley: el Principio de Masa
+- 4.4: Tercera ley: el Principio de Interacción
+- 4.5: La interacción gravitatoria
+- 4.6: Fuerzas derivadas de interacciones eléctricas: la fuerza elástica
+- 4.7: Fuerzas derivadas de interacciones eléctricas: la fuerza de rozamiento
+- 4.8: Fuerzas derivadas de interacciones eléctricas: la tensión
 
-TEMA 6: Cinemática del Cuerpo Rígido
-- Subtema 6.1: Introducción
-- Subtema 6.2: Determinación del Centro de Masa (CM) del cuerpo rígido
-- Subtema 6.3: Estudio de los posibles movimientos de un Cuerpo Rígido (CR) en un plano perpendicular a su eje de simetría
+**TEMA 5: Trabajo y Energía**
+- 5.1: Introducción
+- 5.2: Potencia
+- 5.3: Energía potencial y fuerzas conservativas
+- 5.4: Fuerzas centrales
+- 5.5: La energía cinética
 
-TEMA 7: Dinámica del Cuerpo Rígido
-- Subtema 7.1: Introducción
-- Subtema 7.2: Resultado de trasladar una fuerza al CM
-- Subtema 7.3: Cupla o par de fuerzas
+**TEMA 6: Sistema de partículas**
+- 6.1: Modelo sistema de partículas
+- 6.2: Sistema de referencia laboratorio
+- 6.3: Centro de masa de un sistema de partículas
+- 6.4: Velocidad del CM de un sistema de partículas
+- 6.5: Aceleración del CM de un sistema de partículas
+- 6.6: Dinámica de un sistema de partículas
+- 6.7: Segunda ecuación universal para un sistema de partículas
+- 6.8: Impulso y cantidad de movimiento del sistema de partículas
+- 6.9: Momento angular y torque para un sistema de partículas
+- 6.10: Momento angular o cinético para un SP referido al CM y momento cinético total
+- 6.11: Trabajo y energía en un sistema de partículas
+- 6.12: Energía potencial gravitatoria de un sistema de partículas
+- 6.13: Energía cinética de un sistema de partículas
+- 6.14: Ecuaciones universales de la dinámica de un SP
+- 6.15: Dinámica impulsiva del sistema de partículas
+- 6.16: Ecuaciones universales de la dinámica impulsiva de un SP
+- 6.17: Colisiones o choques mecánicos
+- 6.18: ¿Qué pasa con la energía en una colisión?
+- 6.19: Coeficiente de restitución
 
-TEMA 8: Dinámica Impulsiva del Cuerpo Rígido
-- Subtema 8.1: Introducción
-- Subtema 8.2: Centro de percusión
+**TEMA 7: Dinámica del Cuerpo Rígido**
+- 7.1: Introducción
+- 7.2: Resultado de trasladar una fuerza al CM
+- 7.3: Cupla o par de fuerzas
+- 7.4: Resultante de un sistema de fuerzas y torques aplicados a un CR
+- 7.5: Momento cinético de un CR en rotación
+- 7.6: Cálculo del momento de inercia baricéntrico de un cilindro respecto de un eje perpendicular a su eje de simetría
+- 7.7: Teorema de Steiner o de los ejes paralelos
+- 7.8: Cálculo del momento cinético respecto a un eje cualquiera. Expresión del torque respecto al CM
+- 7.9: Momento cinético relativo al CIR. Expresión del torque respecto al CIR
+- 7.10: Los momentos de inercia son aditivos y sustractivos
+- 7.11: Momentos de inercia baricéntricos de cuerpos no homogéneos y/o no simétricos
+- 7.12: Péndulo físico
+- 7.13: Energía en el CR
+- 7.14: Trabajo y energía para el CR
+- 7.15: Ecuaciones fundamentales de la dinámica del CR
+- 7.16: Acerca de la fuerza de rozamiento
+- 7.17: Aplicaciones de dinámica del CR
+- 7.18: Situación problemática de integración metodológica
 
-TEMA 9: Ondas Mecánicas
-- Subtema 9.1: Introducción
-- Subtema 9.2: Características del movimiento ondulatorio
+**TEMA 8: Ondas Mecánicas**
+- 8.1: Introducción
+- 8.2: Características del movimiento ondulatorio
+- 8.3: Clasificación de las ondas
+- 8.4: La ecuación general del movimiento ondulatorio
+- 8.5: Soluciones de la ecuación de onda
+- 8.6: Ondas transversales en una cuerda
+- 8.7: Ondas longitudinales en una varilla
+- 8.8: Energía de las ondas: energía cinética y energía elástica
+- 8.9: Introducción - Superposición de ondas
+- 8.10: Casos elementales de superposición con interpretación física
+- 8.11: Energía de las ondas estacionarias
+- 8.12: Resonancia
+- 8.13: Efecto Doppler
 
-TEMA 10: Hidrodinámica
-- Subtema 10.1: Discusión de conceptos previos
-- Subtema 10.2: Flujo del fluido ideal
+**TEMA 9: Hidrodinámica**
+- 9.1: Discusión de conceptos previos
+- 9.2: Flujo del fluido ideal
+- 9.3: Caudal y caudal másico
+- 9.4: Teorema de continuidad
+- 9.5: Integración de la ecuación de Euler
+- 9.6: Tubo de Pitot
 
-TEMA 11: Óptica Física
-- Subtema 11.1: Principio de Huygens
-- Subtema 11.2: El concepto de coherencia
+**TEMA 10: Sistemas de Referencia No Inerciales**
+- 10.1: Introducción
+- 10.2: Sistemas de referencia no inerciales
 
-TEMA 12: Óptica Geométrica
-- Subtema 12.1: Óptica geométrica
-- Subtema 12.2: Leyes o principio fundamentales de la óptica geométrica
+**TEMA 11: Dinámica Impulsiva del Cuerpo Rígido**
+- 11.1: Introducción
+- 11.2: Centro de percusión
+- 11.3: Centro de percusión de cuerpos suspendidos
+- 11.4: Radio de giro baricéntrico
+- 11.5: Aplicaciones de centro de percusión
 
-TEMA 13: Sistemas de Referencia No Inerciales
-- Subtema 13.1: Introducción
+**TEMA 12: Medición, incertezas y cifras significativas**
+- 12.1: Introducción
+- 12.2: Medición
+- 12.3: Incertezas
+
+**TEMA 13: Óptica Física**
+- No disponible
+
+Espero que esta estructura te sea de ayuda. Si necesitas algo más, no dudes en preguntar.
