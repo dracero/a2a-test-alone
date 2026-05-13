@@ -41,7 +41,7 @@ class SemanticMemory:
         self.socratic_questions_asked = 0
         self.socratic_answers = []
         self.original_query = ""
-        self.socratic_disabled = True
+        self.socratic_disabled = False
     
     def to_dict(self) -> dict:
         """Serializa la memoria a un diccionario."""
@@ -137,7 +137,7 @@ class SemanticMemory:
         self.socratic_questions_asked = 0
         self.socratic_answers = []
         self.original_query = ""
-        self.socratic_disabled = True
+        self.socratic_disabled = False
 
 
 class PhysicsMultimodalAgent:
@@ -693,9 +693,15 @@ Sé técnico y preciso."""
                     continue
                 
                 mime_type = self.get_mime_type(img.get('mime_type', 'image/png'))
+                # Groq limita base64 a 4MB
+                b64_size_mb = len(image_data_b64) / (1024 * 1024)
+                print(f"🖼️ Imagen {idx}: {mime_type}, {b64_size_mb:.2f} MB (base64)")
+                if b64_size_mb > 4.0:
+                    print(f"⚠️ Imagen {idx} excede 4MB (límite Groq), omitiendo")
+                    continue
                 content.append({
                     "type": "image_url",
-                    "image_url": f"data:{mime_type};base64,{image_data_b64}"
+                    "image_url": {"url": f"data:{mime_type};base64,{image_data_b64}"}
                 })
             except Exception as e:
                 print(f"❌ Error imagen {idx}: {e}")
@@ -1061,6 +1067,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
             "basta de preguntas", "ya no quiero preguntas",
             "solo explicame", "solo explícame", "solo respondeme",
             "respondeme directo", "responde directo",
+            "[directo]",
         ]
         
         if any(kw in query_lower for kw in exit_keywords):
@@ -1145,9 +1152,15 @@ Responde SOLO: SALIR o CONTINUAR"""
             
             # === CASO 1: Estamos en modo socrático (respondiendo preguntas) ===
             if memory.socratic_mode:
-                # Detección unificada: keywords rápidos + LLM fallback
-                intent = await self._detect_socratic_intent(query, is_in_socratic_mode=True)
-                wants_exit = (intent == "SALIR")
+                # Primero: detectar comando de botón [DIRECTO] del frontend
+                query_stripped = query.strip()
+                if query_stripped == "[DIRECTO]":
+                    print("🚪 Salida del modo socrático via botón [DIRECTO]")
+                    wants_exit = True
+                else:
+                    # Detección unificada: keywords rápidos + LLM fallback
+                    intent = await self._detect_socratic_intent(query, is_in_socratic_mode=True)
+                    wants_exit = (intent == "SALIR")
                 
                 if wants_exit:
                     print("🚪 Salida del modo socrático detectada.")
@@ -1292,6 +1305,8 @@ Responde SOLO: SALIR o CONTINUAR"""
                     chat_history=memory.chat_history
                 )
                 self._save_to_memory(context_id, query, final_response)
+                # Resetear para que la próxima pregunta vuelva al modo socrático
+                memory.socratic_disabled = False
                 print(f"✅ Diálogo completado\n")
                 return final_response
 
@@ -1361,9 +1376,16 @@ Responde SOLO: SALIR o CONTINUAR"""
         if memory.socratic_mode:
             print(f"🔍 [SOCRATIC] Query: '{query}'")
             
-            # Detección unificada: keywords rápidos + LLM fallback
-            intent = await self._detect_socratic_intent(query, is_in_socratic_mode=True)
-            wants_exit = (intent == "SALIR")
+            # Primero: detectar comando de botón [DIRECTO] del frontend
+            query_stripped = query.strip()
+            if query_stripped == "[DIRECTO]":
+                print("🚪 Salida del modo socrático via botón [DIRECTO]")
+                wants_exit = True
+                intent = "SALIR"
+            else:
+                # Detección unificada: keywords rápidos + LLM fallback
+                intent = await self._detect_socratic_intent(query, is_in_socratic_mode=True)
+                wants_exit = (intent == "SALIR")
             print(f"🔍 [SOCRATIC] Intent: {intent}, wants_exit: {wants_exit}")
             
             if wants_exit:
@@ -1507,49 +1529,51 @@ Responde SOLO: SALIR o CONTINUAR"""
         print(f"🔍 [CASO2] query_for_generation='{query_for_generation[:80]}'")
         
         # === Detectar comandos de botón del frontend ===
-        query_stripped = query.strip()
-        
-        if query_stripped == "[SOCRATIC]":
-            # El estudiante eligió modo socrático via botón
-            print("🎓 Estudiante eligió SOCRÁTICO via botón")
-            original_q = memory.original_query if memory.original_query else query
+        # SOLO si NO venimos del CASO 1 con exit (ya procesado arriba)
+        if not exiting_socratic:
+            query_stripped = query.strip()
             
-            memory.socratic_mode = True
-            memory.socratic_questions_asked = 0
-            memory.socratic_answers = []
-            memory.socratic_disabled = False
+            if query_stripped == "[SOCRATIC]":
+                # El estudiante eligió modo socrático via botón
+                print("🎓 Estudiante eligió SOCRÁTICO via botón")
+                original_q = memory.original_query if memory.original_query else query
+                
+                memory.socratic_mode = True
+                memory.socratic_questions_asked = 0
+                memory.socratic_answers = []
+                memory.socratic_disabled = False
+                
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': False,
+                    'content': '🎓 Iniciando método socrático: te haré 3 preguntas para guiar tu aprendizaje...',
+                    'status': 'socratic_init'
+                }
+                
+                first_question = await self.generate_socratic_question(
+                    original_q, 0, [],
+                    visual_findings=self.visual_findings.get(context_id, "")
+                )
+                
+                yield {
+                    'is_task_complete': False,
+                    'require_user_input': True,
+                    'content': first_question + "\n\n<!-- SOCRATIC_EXIT -->",
+                    'status': 'socratic_question'
+                }
+                return
             
-            yield {
-                'is_task_complete': False,
-                'require_user_input': False,
-                'content': '🎓 Iniciando método socrático: te haré 3 preguntas para guiar tu aprendizaje...',
-                'status': 'socratic_init'
-            }
-            
-            first_question = await self.generate_socratic_question(
-                original_q, 0, [],
-                visual_findings=self.visual_findings.get(context_id, "")
-            )
-            
-            yield {
-                'is_task_complete': False,
-                'require_user_input': True,
-                'content': first_question + "\n\n<!-- SOCRATIC_EXIT -->",
-                'status': 'socratic_question'
-            }
-            return
-        
-        if query_stripped == "[DIRECTO]":
-            # El estudiante eligió explicación directa via botón
-            print("📖 Estudiante eligió DIRECTO via botón")
-            memory.socratic_disabled = True
-            memory.socratic_mode = False
-            query_for_generation = memory.original_query if memory.original_query else query
-            # Continuar al flujo de respuesta directa abajo
+            if query_stripped == "[DIRECTO]":
+                # El estudiante eligió explicación directa via botón (sin estar en socrático)
+                print("📖 Estudiante eligió DIRECTO via botón")
+                memory.socratic_disabled = True
+                memory.socratic_mode = False
+                query_for_generation = memory.original_query if memory.original_query else query
+                # Continuar al flujo de respuesta directa abajo
         
         # Verificar si el usuario quiere volver al modo socrático
         # SOLO si NO estamos saliendo del socrático
-        if not exiting_socratic and query_stripped not in ("[SOCRATIC]", "[DIRECTO]"):
+        if not exiting_socratic and query.strip() not in ("[SOCRATIC]", "[DIRECTO]"):
             enter_intent = await self._detect_socratic_intent(query, is_in_socratic_mode=False)
             if enter_intent == "ENTRAR":
                 print("🎓 El usuario decidió volver al modo socrático.")
@@ -1640,6 +1664,9 @@ Responde SOLO: SALIR o CONTINUAR"""
                 chat_history=memory.chat_history
             )
             self._save_to_memory(context_id, query, final_response)
+            # Resetear para que la próxima pregunta vuelva al modo socrático
+            memory.socratic_disabled = False
+            self._save_memories()
             
             yield {
                 'is_task_complete': True,
