@@ -136,6 +136,7 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
         )
         
         print(f"📤 Sending to {agent_name}:")
+        print(f"   context_id: {context_id[:12] if context_id else 'VACÍO'}...")
         print(f"   Parts: {len(parts)}")
         for i, p in enumerate(parts):
             if p.root.kind == 'file':
@@ -528,7 +529,9 @@ class BeeAIHostManager(ApplicationManager):
 
         self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
         self._sessions_file = "/tmp/beeai_active_sessions.json"
+        self._conversations_file = "/tmp/beeai_conversations.json"
         self._load_sessions()
+        self._load_conversations()
 
         # Initialize the LangChain Groq Model
         self.llm = ChatGroq(
@@ -560,6 +563,44 @@ class BeeAIHostManager(ApplicationManager):
                 json.dump(self._active_sessions, f)
         except Exception as e:
             print(f"Error guardando sesiones: {e}")
+
+    def _load_conversations(self):
+        """Carga las conversaciones desde el disco para persistencia entre reinicios."""
+        if os.path.exists(self._conversations_file):
+            try:
+                with open(self._conversations_file, 'r') as f:
+                    data = json.load(f)
+                for conv_data in data:
+                    conv_id = conv_data.get('conversation_id', '')
+                    if conv_id and not self.get_conversation(conv_id):
+                        c = Conversation(
+                            conversation_id=conv_id,
+                            is_active=conv_data.get('is_active', True),
+                            name=conv_data.get('name', ''),
+                        )
+                        c._memory = UnconstrainedMemory()
+                        self._conversations.append(c)
+                print(f"📖 Conversaciones cargadas desde disco: {len(self._conversations)}")
+            except Exception as e:
+                print(f"Error cargando conversaciones: {e}")
+        else:
+            print("ℹ️ No se encontró archivo de conversaciones previas.")
+
+    def _save_conversations(self):
+        """Guarda las conversaciones en el disco."""
+        try:
+            data = [
+                {
+                    'conversation_id': c.conversation_id,
+                    'is_active': c.is_active,
+                    'name': c.name,
+                }
+                for c in self._conversations
+            ]
+            with open(self._conversations_file, 'w') as f:
+                json.dump(data, f)
+        except Exception as e:
+            print(f"Error guardando conversaciones: {e}")
 
     async def _should_continue_active_session(self, user_message: str, active_agent: str) -> bool:
         """Determina si el mensaje del usuario debe ir al agente activo o al orquestador.
@@ -615,13 +656,27 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             print(f"⚠️ Error detectando intención de sesión: {e}")
             return True  # En caso de error, continuar con la sesión activa
 
-    async def create_conversation(self) -> Conversation:
-        conversation_id = str(uuid.uuid4())
+    async def create_conversation(self, conversation_id: str = None) -> Conversation:
+        """Crea una nueva conversación, opcionalmente con un ID específico.
+        
+        Si conversation_id es proporcionado (ej: desde el frontend), lo reutiliza
+        para mantener consistencia. Si no, genera uno nuevo.
+        """
+        if not conversation_id:
+            conversation_id = str(uuid.uuid4())
+        
+        # Verificar si ya existe (prevenir duplicados)
+        existing = self.get_conversation(conversation_id)
+        if existing:
+            print(f"♻️ Conversación {conversation_id[:8]}... ya existe, reutilizando.")
+            return existing
+        
         c = Conversation(conversation_id=conversation_id, is_active=True)
         self._conversations.append(c)
         # Store memory for this conversation
-        # Simplified: we use UnconstrainedMemory for simplicity
-        c._memory = UnconstrainedMemory() 
+        c._memory = UnconstrainedMemory()
+        self._save_conversations()
+        print(f"✨ Nueva conversación creada: {conversation_id[:8]}...")
         return c
 
     def sanitize_message(self, message: Message) -> Message:
@@ -675,12 +730,18 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
         self._current_processing_message = message
         
         context_id = message.context_id
+        print(f"📨 process_message: context_id recibido del frontend = '{context_id[:8] if context_id else 'VACÍO'}...'")
+        
         conversation = self.get_conversation(context_id)
         if not conversation:
-            print("Conversation not found. Creating a new one.")
-            conversation = await self.create_conversation()
+            # CRÍTICO: Reutilizar el context_id del frontend en vez de generar uno nuevo.
+            # Esto mantiene la sincronización frontend ↔ backend ↔ agente.
+            print(f"⚠️ Conversación '{context_id[:8] if context_id else '?'}...' no encontrada. Creando con MISMO ID.")
+            conversation = await self.create_conversation(conversation_id=context_id)
             context_id = conversation.conversation_id
             message.context_id = context_id
+        else:
+            print(f"✅ Conversación existente encontrada: {context_id[:8]}...")
 
         if not hasattr(conversation, '_memory'):
             conversation._memory = UnconstrainedMemory()
@@ -757,11 +818,24 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                     llm=self.llm  # Pass the raw LangChain LLM
                 )
                 
+                # Format history for the orchestrator
+                history_texts = []
+                # Get last 5 messages excluding the current one
+                recent_messages = conversation.messages[:-1][-5:]
+                for m in recent_messages:
+                    role = m.role.name if hasattr(m.role, 'name') else str(m.role)
+                    text = " ".join([p.root.text for p in m.parts if p.root.kind == 'text'])
+                    if text:
+                        history_texts.append(f"{role.upper()}: {text}")
+                
+                history_text = "\n".join(history_texts)
+                
                 # Execute workflow with initial state (including image data for visual classification)
                 initial_state = OrchestratorState(
                     user_message=text_content,
                     has_images=has_images,
-                    image_data_list=image_data_list
+                    image_data_list=image_data_list,
+                    history_text=history_text
                 )
                 
                 workflow_run = await workflow.run(initial_state)

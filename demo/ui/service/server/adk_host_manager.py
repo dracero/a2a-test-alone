@@ -100,12 +100,12 @@ class ADKHostManager(ApplicationManager):
             memory_service=self._memory_service,
         )
 
-    async def create_conversation(self) -> Conversation:
+    async def create_conversation(self, conversation_id: str = None) -> Conversation:
         session = await self._session_service.create_session(
             app_name=self.app_name, user_id=self.user_id
         )
-        conversation_id = session.id
-        c = Conversation(conversation_id=conversation_id, is_active=True)
+        cid = conversation_id or session.id
+        c = Conversation(conversation_id=cid, is_active=True)
         self._conversations.append(c)
         return c
 

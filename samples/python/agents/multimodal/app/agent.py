@@ -1241,6 +1241,7 @@ Responde SOLO: SALIR o CONTINUAR"""
                         )
                         
                         # LaTeX rendering is handled by KaTeX in the frontend
+                        self._save_memories()
                         return next_question + "\n\n<!-- SOCRATIC_EXIT -->"
             
             # === CASO 2: No estamos en modo socrático ===
@@ -1340,6 +1341,8 @@ Responde SOLO: SALIR o CONTINUAR"""
             )
             
             # LaTeX rendering is handled by KaTeX in the frontend
+            # Persistir memorias al activar modo socrático
+            self._save_memories()
             return first_question
             
         except Exception as e:
@@ -1368,6 +1371,7 @@ Responde SOLO: SALIR o CONTINUAR"""
         
         memory = self._get_or_create_memory(context_id)
         memory_context = self._get_memory_context(context_id)
+        print(f"🗓️ [STREAM] context_id='{context_id[:12] if context_id else 'VACIO'}...', memoria existente: {context_id in self.memories}, conversaciones guardadas: {len(self.memories.get(context_id, SemanticMemory(llm=self.llm)).conversations)}")
         
         query_for_generation = query  # Default; may be overridden by socratic exit
         exiting_socratic = False  # Flag to track if we're exiting socratic mode
@@ -1483,6 +1487,7 @@ Responde SOLO: SALIR o CONTINUAR"""
                     memory.original_query = ""
                     
                     self._save_to_memory(context_id, query, final_response)
+                    self._save_memories()
                     
                     yield {
                         'is_task_complete': True,
@@ -1518,6 +1523,8 @@ Responde SOLO: SALIR o CONTINUAR"""
                         'content': next_question + "\n\n<!-- SOCRATIC_EXIT -->",
                         'status': 'socratic_question'
                     }
+                # Guardar memorias después de procesar la respuesta socrática
+                self._save_memories()
                 # Return temprano: ya procesamos la respuesta socrática (continuar o completar)
                 return
         
@@ -1728,6 +1735,8 @@ Responde SOLO: SALIR o CONTINUAR"""
                 'content': first_question + "\n\n<!-- SOCRATIC_EXIT -->",
                 'status': 'socratic_question'
             }
+            # Persistir memorias al activar modo socrático
+            self._save_memories()
 
     async def clear_memory(self, context_id: str):
         """Limpia la memoria de un contexto específico."""

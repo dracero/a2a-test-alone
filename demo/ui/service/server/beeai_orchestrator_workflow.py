@@ -20,6 +20,7 @@ class OrchestratorState(BaseModel):
     chosen_agent: str = ""
     agent_response: str = ""
     error: str = ""
+    history_text: str = ""
 
 
 async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
@@ -68,8 +69,12 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             classification_text = (
                 f"You are a routing system. Analyze the user's request and decide which specialized agent should handle it, or if you should respond directly.\n\n"
                 f"Available specialized agents:\n{agents_description}\n\n"
-                f"User request: \"{state.user_message}\"\n\n"
             )
+            
+            if state.history_text:
+                classification_text += f"Recent conversation history:\n{state.history_text}\n\n"
+                
+            classification_text += f"User request: \"{state.user_message}\"\n\n"
             
             # If images are present, add visual analysis instructions
             if state.has_images and state.image_data_list:

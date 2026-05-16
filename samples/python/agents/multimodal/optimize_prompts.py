@@ -73,8 +73,10 @@ class PhysicsDirectResponse(dspy.Signature):
 
 
 class PhysicsSocraticQuestion(dspy.Signature):
-    """Generate a Socratic question that guides the student toward
-    discovering the answer on their own."""
+    """Actúa como un profesor de física universitario hablando directamente con el estudiante.
+    Haz UNA pregunta socrática para guiar al estudiante hacia la respuesta correcta.
+    NO uses introducciones como 'Aquí tienes la pregunta' o 'Pregunta 1:'.
+    Dirígete al estudiante directamente (en segunda persona)."""
 
     question: str = dspy.InputField(desc="Student's original question")
     question_number: int = dspy.InputField(desc="Which question (1-3)")
@@ -87,8 +89,9 @@ class PhysicsSocraticQuestion(dspy.Signature):
 
 
 class PhysicsPostSocratic(dspy.Signature):
-    """After 3 Socratic questions, give the full explanation acknowledging
-    the student's reasoning process."""
+    """Actúa como un profesor de física universitario hablando directamente con el estudiante.
+    Después de 3 preguntas socráticas, da la explicación completa reconociendo
+    el proceso de razonamiento del estudiante. Dirígete a él de forma directa y amigable."""
 
     question: str = dspy.InputField(desc="Original question")
     student_answers: str = dspy.InputField(
@@ -232,14 +235,16 @@ Return ONLY a JSON object: {{"structure": X, "rigor": X, "accessibility": X, "de
             if pred_name:
                 feedback_text += f" (Evaluating predictor: '{pred_name}')"
 
-            return dict(score=normalized_score, feedback=feedback_text)
+            if pred_name is not None or pred_trace is not None:
+                return dict(score=normalized_score, feedback=feedback_text)
+            return normalized_score
 
         except json.JSONDecodeError as e:
             log(f"  ⚠️ Attempt {attempt+1}: JSON parse error: {e}")
             if attempt < max_retries - 1:
                 time.sleep(1)
                 continue
-            return dict(score=0.5, feedback=f"Could not parse evaluation JSON: {e}")
+            return dict(score=0.5, feedback=f"Could not parse evaluation JSON: {e}") if (pred_name is not None or pred_trace is not None) else 0.5
 
         except Exception as e:
             err_str = str(e).lower()
@@ -250,9 +255,9 @@ Return ONLY a JSON object: {{"structure": X, "rigor": X, "accessibility": X, "de
                 if attempt < max_retries - 1:
                     continue
             log(f"  ⚠️ Metric evaluation error: {e}")
-            return dict(score=0.5, feedback=f"Evaluation error: {e}")
+            return dict(score=0.5, feedback=f"Evaluation error: {e}") if (pred_name is not None or pred_trace is not None) else 0.5
 
-    return dict(score=0.5, feedback="Metric evaluation failed after retries.")
+    return dict(score=0.5, feedback="Metric evaluation failed after retries.") if (pred_name is not None or pred_trace is not None) else 0.5
 
 
 # ─────────────────────── Helpers ───────────────────────
@@ -569,7 +574,7 @@ def main():
     print(f"   Keys: {list(optimized_prompts.keys())}")
 
     # Also save the compiled DSPy module
-    module_path = args.output.with_suffix(".dspy")
+    module_path = args.output.with_name(args.output.stem + "_module.json")
     optimized_module.save(str(module_path))
     print(f"   DSPy module saved to: {module_path}")
 
