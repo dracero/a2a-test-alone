@@ -4,12 +4,12 @@
     "model": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     "reflection_model": "groq/meta-llama/llama-4-scout-17b-16e-instruct",
     "num_training_examples": 3,
-    "budget": "heavy",
+    "budget": "medium",
     "max_metric_calls": null,
     "temperature": 0.7,
     "reflection_temperature": 1.0,
-    "optimization_time_seconds": 504.3,
-    "created_at": "2026-05-16T21:50:03.716815+00:00"
+    "optimization_time_seconds": 168.7,
+    "created_at": "2026-05-23T21:20:39.509785+00:00"
   },
   "prompts": {
     "direct_response": {

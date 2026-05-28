@@ -828,13 +828,13 @@ Reglas:
         
         # Agregar contexto de documentos al system prompt
         if document_context and document_context.strip():
-            system_prompt += f"\n\nDOCUMENTOS DE REFERENCIA:\n{document_context[:3000]}"
+            system_prompt += f"\n\nDOCUMENTOS DE REFERENCIA:\n{document_context[:15000]}"
         if image_context and image_context.strip():
-            system_prompt += f"\n\nIMÁGENES RELACIONADAS:\n{image_context[:1000]}"
+            system_prompt += f"\n\nIMÁGENES RELACIONADAS:\n{image_context[:5000]}"
         if visual_findings and visual_findings.strip() and visual_findings != "No hay imágenes.":
-            system_prompt += f"\n\nHALLAZGOS VISUALES:\n{visual_findings[:1000]}"
+            system_prompt += f"\n\nHALLAZGOS VISUALES:\n{visual_findings[:5000]}"
         if classification and classification.strip():
-            system_prompt += f"\n\nCLASIFICACIÓN DEL TEMA:\n{classification[:500]}"
+            system_prompt += f"\n\nCLASIFICACIÓN DEL TEMA:\n{classification[:2000]}"
         
         try:
             messages = [SystemMessage(content=system_prompt)]
@@ -873,21 +873,62 @@ Responde SOLO con una de estas palabras: SALIR, ENTRAR, CONTINUAR."""
         except Exception:
             return "CONTINUAR"
     
+    async def _search_qdrant_for_context(self, query: str, image_embedding: List[float] = None, top_k: int = 5) -> tuple:
+        """Busca en Qdrant y retorna (document_context, image_context) formateados.
+        
+        Helper centralizado para evitar duplicar la lógica de búsqueda
+        en todos los flujos (socrático, directo, etc.).
+        """
+        try:
+            search_results = await self.search_multimodal(
+                query=query,
+                image_embedding=image_embedding,
+                top_k=top_k
+            )
+            
+            document_context = "\n".join([
+                f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
+                for i, r in enumerate(search_results.get('text', []))
+            ])
+            
+            image_context = "\n".join([
+                f"--- Imagen {i+1} ---\nPDF: {r['payload'].get('pdf_name', 'N/A')}"
+                for i, r in enumerate(search_results.get('image', []))
+            ])
+            
+            return document_context, image_context
+        except Exception as e:
+            print(f"⚠️ Error buscando en Qdrant: {e}")
+            return "", ""
+    
     @traceable(name="generate_socratic_question", run_type="llm")
     async def generate_socratic_question(
         self,
         original_query: str,
         question_number: int,
         previous_answers: List[str],
-        visual_findings: str = ""
+        visual_findings: str = "",
+        document_context: str = ""
     ) -> str:
-        """Genera una pregunta socrática para guiar al estudiante."""
+        """Genera una pregunta socrática para guiar al estudiante.
+        
+        Ahora recibe document_context de Qdrant para basar las preguntas
+        en el material real de la materia.
+        """
         visual_section = ""
         if visual_findings:
             visual_section = f"""\nHALLAZGOS VISUALES (de imágenes proporcionadas por el estudiante):
 {visual_findings}
 - Incorpora lo que se observa en las imágenes en tus preguntas.
 - Pregunta al estudiante qué fenómenos físicos identifica en la imagen.
+"""
+
+        document_section = ""
+        if document_context and document_context.strip():
+            document_section = f"""\nDOCUMENTOS DE REFERENCIA (material de la materia):
+{document_context[:10000]}
+- BASA tus preguntas en estos documentos. Usa los conceptos, ecuaciones y ejemplos que aparecen aquí.
+- Las preguntas deben guiar al estudiante hacia los conceptos clave de estos documentos.
 """
 
         _default_socratic = f"""Eres un tutor socrático de Física I de la UBA.
@@ -898,13 +939,14 @@ Recibís tanto texto como imágenes de experimentos, diagramas y problemas de f�
 TEMARIO:
 {self.temario}
 {visual_section}
+{document_section}
 
 Reglas para las preguntas:
-- BASA TUS PREGUNTAS ÚNICAMENTE en el contenido del TEMARIO y los documentos. Si el tema no pertenece al temario, informa al estudiante que el tema está fuera de alcance.
+- BASA TUS PREGUNTAS ÚNICAMENTE en el contenido del TEMARIO y los DOCUMENTOS DE REFERENCIA proporcionados. Si el tema no pertenece al temario, informa al estudiante que el tema está fuera de alcance.
 - Pregunta {question_number + 1}/3
 - Haz preguntas que activen el pensamiento crítico
 - Si el estudiante envió una imagen, preguntá sobre lo que se observa en ella
-- Relaciona con conceptos fundamentales
+- Relaciona con conceptos fundamentales presentes en los documentos
 - Progresa desde lo básico a lo específico
 - Sé breve y directo
 - **Si incluyes fórmulas, usa formato LaTeX**: `$formula$` para inline, `$$formula$$` para display
@@ -1232,12 +1274,20 @@ Responde SOLO: SALIR o CONTINUAR"""
                         
                         return final_response
                     else:
-                        # Generar siguiente pregunta socrática
+                        # Buscar en Qdrant para contextualizar la siguiente pregunta socrática
+                        print(f"🔎 Buscando contexto en Qdrant para pregunta socrática {memory.socratic_questions_asked + 1}/3...")
+                        doc_ctx, _ = await self._search_qdrant_for_context(
+                            query=memory.original_query,
+                            top_k=5
+                        )
+                        
+                        # Generar siguiente pregunta socrática CON contexto documental
                         next_question = await self.generate_socratic_question(
                             memory.original_query,
                             memory.socratic_questions_asked,
                             memory.socratic_answers,
-                            visual_findings=self.visual_findings.get(context_id, "")
+                            visual_findings=self.visual_findings.get(context_id, ""),
+                            document_context=doc_ctx
                         )
                         
                         # LaTeX rendering is handled by KaTeX in the frontend
@@ -1334,10 +1384,19 @@ Responde SOLO: SALIR o CONTINUAR"""
             memory.socratic_questions_asked = 0
             memory.socratic_answers = []
             
-            # Generar primera pregunta socrática
+            # Buscar contexto en Qdrant para la primera pregunta socrática
+            print(f"🔎 Buscando contexto en Qdrant para primera pregunta socrática...")
+            doc_ctx, _ = await self._search_qdrant_for_context(
+                query=query,
+                image_embedding=image_embedding,
+                top_k=5
+            )
+            
+            # Generar primera pregunta socrática CON contexto documental
             first_question = await self.generate_socratic_question(
                 query, 0, [],
-                visual_findings=visual_findings
+                visual_findings=visual_findings,
+                document_context=doc_ctx
             )
             
             # LaTeX rendering is handled by KaTeX in the frontend
@@ -1504,11 +1563,19 @@ Responde SOLO: SALIR o CONTINUAR"""
                         'status': 'socratic_processing'
                     }
                     
+                    # Buscar en Qdrant para contextualizar la siguiente pregunta socrática
+                    print(f"🔎 Buscando contexto en Qdrant para pregunta socrática {memory.socratic_questions_asked + 1}/3...")
+                    doc_ctx, _ = await self._search_qdrant_for_context(
+                        query=memory.original_query,
+                        top_k=5
+                    )
+                    
                     next_question = await self.generate_socratic_question(
                         memory.original_query,
                         memory.socratic_questions_asked,
                         memory.socratic_answers,
-                        visual_findings=self.visual_findings.get(context_id, "")
+                        visual_findings=self.visual_findings.get(context_id, ""),
+                        document_context=doc_ctx
                     )
                     
                     # Guardar el intercambio socrático en el chat_history real
@@ -1557,9 +1624,17 @@ Responde SOLO: SALIR o CONTINUAR"""
                     'status': 'socratic_init'
                 }
                 
+                # Buscar en Qdrant para primera pregunta socrática (botón)
+                print(f"🔎 Buscando contexto en Qdrant para primera pregunta socrática...")
+                doc_ctx, _ = await self._search_qdrant_for_context(
+                    query=original_q,
+                    top_k=5
+                )
+                
                 first_question = await self.generate_socratic_question(
                     original_q, 0, [],
-                    visual_findings=self.visual_findings.get(context_id, "")
+                    visual_findings=self.visual_findings.get(context_id, ""),
+                    document_context=doc_ctx
                 )
                 
                 yield {
@@ -1724,9 +1799,18 @@ Responde SOLO: SALIR o CONTINUAR"""
                 'status': 'socratic_init'
             }
             
+            # Buscar contexto en Qdrant para la primera pregunta socrática
+            print(f"🔎 Buscando contexto en Qdrant para primera pregunta socrática...")
+            doc_ctx, _ = await self._search_qdrant_for_context(
+                query=query,
+                image_embedding=image_embedding,
+                top_k=5
+            )
+            
             first_question = await self.generate_socratic_question(
                 query, 0, [],
-                visual_findings=self.visual_findings.get(context_id, "")
+                visual_findings=self.visual_findings.get(context_id, ""),
+                document_context=doc_ctx
             )
             
             yield {

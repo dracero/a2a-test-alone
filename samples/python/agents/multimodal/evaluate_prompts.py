@@ -134,13 +134,13 @@ def main():
     print("🏃 RUNNING EVALUATION: BASELINE")
     print("-" * 40)
     evaluator = Evaluate(devset=dataset, metric=extract_score_only, num_threads=args.num_threads, display_progress=True, display_table=0)
-    baseline_score = evaluator(baseline_module)
+    baseline_score = float(evaluator(baseline_module))
 
     # 5. Evaluate Optimized
     print("\n" + "-" * 40)
     print("🏃 RUNNING EVALUATION: GEPA OPTIMIZED")
     print("-" * 40)
-    optimized_score = evaluator(optimized_module)
+    optimized_score = float(evaluator(optimized_module))
 
     # 6. Results
     print("\n" + "=" * 60)
