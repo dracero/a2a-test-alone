@@ -6,6 +6,11 @@ Run:
   uv run main.py
 """
 
+import sys
+if sys.platform.startswith('win'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 import asyncio
 import os
 from contextlib import asynccontextmanager
@@ -61,6 +66,15 @@ async def lifespan(app: FastAPI):
     app.openapi_schema = None
     app.setup()
     yield
+    
+    # Close Neo4j memory if active
+    if hasattr(server.manager, 'neo4j_memory') and server.manager.neo4j_memory:
+        try:
+            await server.manager.neo4j_memory.close()
+            print("🛑 Closed Neo4j Agent Memory client connection")
+        except Exception as e:
+            print(f"Error closing Neo4j memory client: {e}")
+
     await httpx_client_wrapper.stop()
 
 

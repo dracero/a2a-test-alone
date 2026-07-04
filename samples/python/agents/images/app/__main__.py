@@ -4,6 +4,11 @@ It initializes the A2A server, defines the agent's capabilities,
 and starts the server to handle incoming requests with LangSmith monitoring.
 """
 
+import sys
+if sys.platform.startswith('win'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 import logging
 import os
 

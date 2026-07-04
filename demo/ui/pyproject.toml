@@ -10,10 +10,13 @@ dependencies = [
     "uvicorn>=0.34.0",
     "python-dotenv>=1.0.0",
     "requests>=2.32.0",
-    "a2a-sdk>=0.3.0",
-    "beeai-framework>=0.1.0",
+    "a2a-sdk>=0.3.0,<1.0.0",
+    "beeai-framework[a2a]>=0.1.0",
+    "neo4j-agent-memory>=0.4.0",
     "langchain-groq>=0.2.0",
     "langchain-core>=0.3.0",
+    "google-adk>=2.3.0",
+    "sentence-transformers>=5.6.0",
 ]
 
 [build-system]

@@ -27,6 +27,13 @@ from pathlib import Path
 from PIL import Image
 from pydantic import BaseModel
 
+# Monkey patch CrewAI cache_breakpoint issue for Groq/LiteLLM
+try:
+    import crewai.llms.cache as _crewai_cache
+    _crewai_cache.mark_cache_breakpoint = lambda msg: msg
+except Exception:
+    pass
+
 # Load .env from project root (5 levels up: agent.py -> app -> images -> agents -> python -> samples -> root)
 root_dir = Path(__file__).resolve().parents[5]
 env_path = root_dir / '.env'
@@ -224,7 +231,7 @@ class ImageGenerationAgent:
         # CrewAI usa LiteLLM internamente, el formato correcto es: groq/<model>
         from crewai import LLM as CrewAILLM
         self.model = CrewAILLM(
-            model='groq/llama-3.3-70b-versatile',  # Modelo disponible en Groq
+            model='groq/llama-3.1-8b-instant',  # Modelo rápido y con límites altos en Groq
             api_key=os.getenv('GROQ_API_KEY'),
         )
 
@@ -291,7 +298,7 @@ class ImageGenerationAgent:
             return ""
 
     @traceable(name="crew_execution", run_type="chain")
-    def _execute_crew_with_tracing(self, inputs: dict) -> str:
+    async def _execute_crew_with_tracing(self, inputs: dict) -> str:
         """Execute crew with LangSmith tracing."""
         # Log crew start
         if LANGSMITH_ENABLED:
@@ -308,8 +315,8 @@ class ImageGenerationAgent:
             except:
                 pass
         
-        # Execute crew
-        result = self.image_crew.kickoff(inputs)
+        # Execute crew asynchronously
+        result = await self.image_crew.kickoff_async(inputs)
         
         # Log crew completion
         if LANGSMITH_ENABLED:
@@ -328,7 +335,7 @@ class ImageGenerationAgent:
         return result
 
     @traceable(name="generate_image_workflow", run_type="chain")
-    def invoke(self, query, session_id) -> str:
+    async def invoke(self, query, session_id) -> str:
         """Kickoff CrewAI and return the response with LangSmith monitoring."""
         artifact_file_id = self.extract_artifact_file_id(query)
 
@@ -348,7 +355,7 @@ class ImageGenerationAgent:
             print(f'📊 LangSmith monitoring active')
         
         try:
-            response = self._execute_crew_with_tracing(inputs)
+            response = await self._execute_crew_with_tracing(inputs)
             print(f'✅ Crew completed')
             print(f'📤 Raw response: {response}')
             print(f'📤 Response type: {type(response)}')

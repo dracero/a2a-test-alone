@@ -413,8 +413,8 @@ class ImageGenerationAgentExecutor(AgentExecutor):
                 logger.debug(f"LangSmith feedback error: {e}")
         
         # Execute the agent using invoke() method with session_id (context_id)
-        # Note: invoke() is synchronous, not async
-        result = self.agent.invoke(query, context_id)
+        # Note: invoke() is now async
+        result = await self.agent.invoke(query, context_id)
         
         if LANGSMITH_ENABLED:
             try:

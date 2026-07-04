@@ -25,7 +25,9 @@ from beeai_framework.emitter.emitter import Emitter
 from beeai_framework.memory.unconstrained_memory import UnconstrainedMemory
 from beeai_framework.tools.tool import Tool
 from langchain_groq import ChatGroq
-from pydantic import BaseModel, Field
+from neo4j_agent_memory import MemoryClient, MemorySettings
+from neo4j_agent_memory.llm.adapters.sentence_transformers import SentenceTransformersProvider
+from pydantic import BaseModel, Field, SecretStr
 from service.server.application_manager import ApplicationManager
 from service.types import Conversation, Event
 
@@ -543,6 +545,38 @@ class BeeAIHostManager(ApplicationManager):
         # Wrap it for BeeAI
         self.chat_model = LangChainChatModel(self.llm)
 
+        # Initialize Neo4j Agent Memory direct connection to Aura DB
+        uri = os.getenv("NEO4J_URI")
+        username = os.getenv("NEO4J_USERNAME")
+        password = os.getenv("NEO4J_PASSWORD")
+        database = os.getenv("NEO4J_DATABASE")
+
+        if uri and username and password:
+            print(f"🔗 Initializing Neo4j Agent Memory direct connection to: {uri} (db: {database})")
+            try:
+                # Use local SentenceTransformers BAAI/bge-small-en-v1.5 (384 dimensions)
+                embedder = SentenceTransformersProvider(
+                    model="BAAI/bge-small-en-v1.5",
+                    device="cpu"
+                )
+                self.memory_settings = MemorySettings(
+                    neo4j={
+                        "uri": uri,
+                        "username": username,
+                        "password": SecretStr(password),
+                        "database": database or "neo4j"
+                    },
+                    embedding=embedder
+                )
+                self.neo4j_memory = MemoryClient(self.memory_settings)
+                print("✅ Neo4j Agent Memory client initialized successfully with local embeddings")
+            except Exception as e:
+                print(f"❌ Error initializing Neo4j Agent Memory: {e}")
+                self.neo4j_memory = None
+        else:
+            print("⚠️ Neo4j connection parameters not found in environment. Running without Neo4j Agent Memory.")
+            self.neo4j_memory = None
+
     def _load_sessions(self):
         """Carga las sesiones activas desde el disco."""
         if os.path.exists(self._sessions_file):
@@ -777,6 +811,30 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                         })
             print(f"🖼️ Extracted {len(image_data_list)} image(s) for visual classification")
 
+        # Retrieve Neo4j context
+        neo4j_context_text = ""
+        if self.neo4j_memory:
+            try:
+                print(f"🧠 Querying Neo4j Agent Memory for context (session_id={context_id})...")
+                ctx = await self.neo4j_memory.get_context(text_content, session_id=context_id)
+                if ctx:
+                    neo4j_context_text = str(ctx)
+                    print(f"📖 Retrieved Neo4j context: {len(neo4j_context_text)} chars")
+            except Exception as e:
+                print(f"⚠️ Error retrieving Neo4j context: {e}")
+
+        # Save user message to Neo4j Short-Term memory
+        if self.neo4j_memory:
+            try:
+                await self.neo4j_memory.short_term.add_message(
+                    session_id=context_id,
+                    role="user",
+                    content=text_content
+                )
+                print("💾 Saved user message to Neo4j Short-Term memory")
+            except Exception as e:
+                print(f"⚠️ Error saving user message to Neo4j: {e}")
+
         # Use BeeAI Workflow pattern for Gemini compatibility
         try:
             # Verificar si hay una sesión activa para este contexto
@@ -835,7 +893,8 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                     user_message=text_content,
                     has_images=has_images,
                     image_data_list=image_data_list,
-                    history_text=history_text
+                    history_text=history_text,
+                    neo4j_context_text=neo4j_context_text
                 )
                 
                 workflow_run = await workflow.run(initial_state)
@@ -861,7 +920,22 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                 del self._active_sessions[context_id]
                 self._save_sessions()
 
- 
+        # Save assistant response to Neo4j Short-Term memory
+        if self.neo4j_memory and resp_text:
+            try:
+                # Strip visual/binary markers from saved message for clean text history
+                clean_resp_text = resp_text.split("__IMAGE_PARTS__:")[0].strip()
+                await self.neo4j_memory.short_term.add_message(
+                    session_id=context_id,
+                    role="assistant",
+                    content=clean_resp_text
+                )
+                print("💾 Saved assistant response to Neo4j Short-Term memory")
+            except Exception as e:
+                print(f"⚠️ Error saving assistant response to Neo4j: {e}")
+
+            # Run Self-Learning in background to extract and persist user preferences/facts
+            asyncio.create_task(self._learn_user_preferences(text_content, context_id))
 
         # Build response parts — detect image marker from image agent
         import json as _json
@@ -911,4 +985,54 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
 
         if message.message_id in self._pending_message_ids:
             self._pending_message_ids.remove(message.message_id)
+
+    async def _learn_user_preferences(self, user_message: str, context_id: str):
+        """Extract and persist user preferences and facts to Neo4j Agent Memory in background."""
+        if not self.neo4j_memory or not user_message:
+            return
+            
+        try:
+            print("🧠 Running self-learning extractor in background...")
+            from langchain_core.messages import HumanMessage
+            
+            prompt = f"""Analiza el siguiente mensaje enviado por un usuario:
+"{user_message}"
+
+Determina si el usuario está expresando alguna preferencia personal persistente, hábito, interés, su nombre, o algún dato biográfico relevante (por ejemplo: le gustan las explicaciones socráticas, se llama Diego, estudia ingeniería, prefiere respuestas cortas, etc.).
+
+Si encuentras alguna preferencia o dato relevante, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El nombre del usuario es Diego").
+Si no encuentras nada relevante o es solo una pregunta general de paso, responde únicamente con la palabra "NONE".
+
+Responde en el formato:
+Preferencia: <frase corta>
+(O "NONE" si no hay nada)."""
+
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            result = response.content.strip()
+            
+            if "NONE" in result.upper() or not result:
+                print("🧠 Self-learning: No new persistent preferences detected.")
+                return
+                
+            # Parse preferences
+            preferences = []
+            for line in result.split('\n'):
+                if ":" in line:
+                    pref_val = line.split(":", 1)[1].strip()
+                    if pref_val and pref_val.upper() != "NONE":
+                        preferences.append(pref_val)
+                elif line.strip() and line.strip().upper() != "NONE":
+                    preferences.append(line.strip())
+            
+            for pref in preferences:
+                print(f"💾 Self-learning: Extracted preference -> '{pref}'")
+                # Store preference in Neo4j Long-Term memory
+                await self.neo4j_memory.long_term.add_preference(
+                    category="user_preference",
+                    preference=pref
+                )
+                print(f"✅ Preference persisted in Neo4j Graph")
+                
+        except Exception as e:
+            print(f"⚠️ Error in self-learning extractor: {e}")
 

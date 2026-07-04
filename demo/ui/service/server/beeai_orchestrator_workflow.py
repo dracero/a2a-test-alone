@@ -21,6 +21,7 @@ class OrchestratorState(BaseModel):
     agent_response: str = ""
     error: str = ""
     history_text: str = ""
+    neo4j_context_text: str = ""
 
 
 async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
@@ -70,6 +71,9 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 f"You are a routing system. Analyze the user's request and decide which specialized agent should handle it, or if you should respond directly.\n\n"
                 f"Available specialized agents:\n{agents_description}\n\n"
             )
+            
+            if state.neo4j_context_text:
+                classification_text += f"Retrieved User Profile & Memory from Neo4j Graph:\n{state.neo4j_context_text}\n\n"
             
             if state.history_text:
                 classification_text += f"Recent conversation history:\n{state.history_text}\n\n"
@@ -146,8 +150,13 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 print(f"✅ Responding directly (no agent needed)")
                 # Generate a direct response
                 direct_prompt = (
-                    f"You are a friendly AI assistant. The user said: \"{state.user_message}\"\n\n"
-                    f"Respond naturally and helpfully. If they're greeting you, greet them back. "
+                    f"You are a friendly AI assistant.\n"
+                )
+                if state.neo4j_context_text:
+                    direct_prompt += f"User Profile & Memory Context from Neo4j:\n{state.neo4j_context_text}\n\n"
+                direct_prompt += (
+                    f"The user said: \"{state.user_message}\"\n\n"
+                    f"Respond naturally and helpfully, taking into account any retrieved user profile, preferences, or memory context if relevant. If they're greeting you, greet them back. "
                     f"If they ask what you can do, explain that you can connect them with specialized agents for:\n"
                     f"- Medical image analysis\n"
                     f"- Physics problems and explanations\n"

@@ -74,8 +74,9 @@ This repository has been configured to use **Groq (Llama 4)** for ultra-fast age
 
 3. Start all services:
    ```bash
-   ./restart-all.sh
+   npm run dev
    ```
+   *Note: This runs the `start_ordered.py` script natively, starting the agents, waiting for their ports to be ready, and then launching the backend orchestrator and Next.js frontend. Works on Windows, macOS, and Linux natively without WSL.*
 
 4. Open your browser at [http://localhost:3000](http://localhost:3000)
 
@@ -85,24 +86,59 @@ This repository has been configured to use **Groq (Llama 4)** for ultra-fast age
 - **[RESUMEN-COMPLETO.md](RESUMEN-COMPLETO.md)** - Complete summary of changes
 - **[CAMBIO-A-GROQ.md](CAMBIO-A-GROQ.md)** - Groq migration details
 
-## Architecture
+## Architecture & Ecosistema
 
-This system includes:
+Este sistema se compone de los siguientes elementos organizados de forma concurrente y orquestada:
 
-- **3 Specialized Agents**:
-  - Medical Images Agent (port 10001)
-  - Multimodal Physics Agent (port 10002)
-  - Image Generation Agent (port 10003)
+```mermaid
+graph TD
+    User([Cliente / Usuario]) <--> Frontend[Frontend Next.js: Puerto 3000]
+    Frontend <--> Orchestrator[Backend Orquestador: Puerto 12000]
+    
+    subgraph Agents [Agentes Especializados A2A]
+        AgentMed[Asistente Médico: Puerto 10002]
+        AgentImg[Generador de Imágenes: Puerto 10001]
+        AgentPhys[Tutor Socrático de Física: Puerto 10003]
+    end
+    
+    Orchestrator <--> AgentMed
+    Orchestrator <--> AgentImg
+    Orchestrator <--> AgentPhys
+    
+    subgraph MemorySystem [Memoria en Grafo Neo4j y Auto-Aprendizaje]
+        Neo4jClient[MemoryClient]
+        AuraDB[(Neo4j Aura Cloud DB)]
+        LocalEmbedder[SentenceTransformers Local: BAAI/bge-small-en-v1.5]
+        LearningLoop[Extractor en Segundo Plano: Groq LLM]
+    end
+    
+    Orchestrator -->|1. Almacenar y Recuperar Contexto| Neo4jClient
+    Neo4jClient -->|Generar Vectores en CPU| LocalEmbedder
+    Neo4jClient <-->|Consultas Cypher| AuraDB
+    Orchestrator -->|2. Disparar extracción asíncrona| LearningLoop
+    LearningLoop -->|3. Persistir preferencia| Neo4jClient
+```
 
-- **Backend Orchestrator** (port 12000):
-  - BeeAI workflow-based orchestrator
-  - Intelligent agent routing
-  - Uses Groq for fast classification
+### Componentes Clave
 
-- **Frontend** (port 3000):
-  - Next.js React application
-  - Admin dashboard
-  - Real-time chat interface
+1. **3 Agentes Especializados**:
+   - **Generador de Imágenes** (puerto 10001): Usa CrewAI + Stable Diffusion XL (vía Hugging Face Inference API) para generar y editar imágenes basándose en prompts de texto.
+   - **Asistente Médico** (puerto 10002): Analiza imágenes médicas (radiografías, resonancias) y realiza búsquedas complementarias con Tavily.
+   - **Tutor Socrático de Física** (puerto 10003): Utiliza procesamiento de PDFs (base vectorial Qdrant) y enseña a los estudiantes mediante el método socrático formulando preguntas guía en base a la bibliografía oficial de Física I.
+
+2. **Backend Orquestador** (puerto 12000):
+   - Construido con FastAPI y **BeeAI Workflow**.
+   - Analiza el contexto de la conversación y enruta dinámicamente las consultas del usuario al agente más calificado.
+   - Integrado con **Neo4j Agent Memory** y un bucle de **Auto-Aprendizaje (Self-Learning)**:
+     - **Memoria a Corto Plazo**: Registra el historial de interacciones en el grafo.
+     - **Memoria a Largo Plazo**: Recupera las preferencias del usuario y las inyecta en los prompts del orquestador.
+     - **Auto-Aprendizaje**: Analiza asíncronamente en segundo plano si el usuario expresó nombres, preferencias académicas o correcciones, guardándolas permanentemente en Neo4j Aura Cloud DB sin ralentizar las respuestas.
+     - **Embeddings Locales**: Genera vectores localmente usando `SentenceTransformers` (modelo `BAAI/bge-small-en-v1.5`), eliminando costes y dependencias de claves de OpenAI.
+
+3. **Frontend** (puerto 3000):
+   - Aplicación Next.js React moderna y responsiva.
+   - Dashboard de administración para monitorizar los agentes y el inspector del protocolo A2A.
+   - Chat interactivo en tiempo real con soporte multimedia (texto, PDF e imágenes).
 
 ## Related Repositories
 

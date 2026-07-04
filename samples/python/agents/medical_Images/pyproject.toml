@@ -3,9 +3,9 @@ name = "medical-images"
 version = "0.1.0"
 description = "Agente de procesamiento de imágenes médicas utilizando Google Gemini y Tavily."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
-    "a2a-sdk>=0.3.2",
+    "a2a-sdk>=0.3.2,<1.0.0",
     "click>=8.1.7,<8.2",
     "httpx>=0.28.1",
     "langchain>=0.3.27",

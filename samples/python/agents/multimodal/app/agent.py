@@ -1,5 +1,10 @@
 # samples/python/agents/multimodal/app/agent.py
 
+import sys
+if sys.platform.startswith('win'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 import asyncio
 import base64
 import glob
