@@ -577,6 +577,19 @@ class BeeAIHostManager(ApplicationManager):
             print("⚠️ Neo4j connection parameters not found in environment. Running without Neo4j Agent Memory.")
             self.neo4j_memory = None
 
+    async def _ensure_neo4j_connected(self):
+        """Idempotently ensure that the Neo4j Memory Client is connected."""
+        if self.neo4j_memory:
+            if not getattr(self, '_neo4j_connected', False):
+                try:
+                    print("🔌 Connecting Neo4j Agent Memory client...")
+                    await self.neo4j_memory.connect()
+                    self._neo4j_connected = True
+                    print("✅ Connected to Neo4j Agent Memory")
+                except Exception as e:
+                    print(f"❌ Failed to connect to Neo4j Agent Memory: {e}")
+                    self._neo4j_connected = False
+
     def _load_sessions(self):
         """Carga las sesiones activas desde el disco."""
         if os.path.exists(self._sessions_file):
@@ -814,17 +827,19 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
         # Retrieve Neo4j context
         neo4j_context_text = ""
         if self.neo4j_memory:
-            try:
-                print(f"🧠 Querying Neo4j Agent Memory for context (session_id={context_id})...")
-                ctx = await self.neo4j_memory.get_context(text_content, session_id=context_id)
-                if ctx:
-                    neo4j_context_text = str(ctx)
-                    print(f"📖 Retrieved Neo4j context: {len(neo4j_context_text)} chars")
-            except Exception as e:
-                print(f"⚠️ Error retrieving Neo4j context: {e}")
+            await self._ensure_neo4j_connected()
+            if getattr(self, '_neo4j_connected', False):
+                try:
+                    print(f"🧠 Querying Neo4j Agent Memory for context (session_id={context_id})...")
+                    ctx = await self.neo4j_memory.get_context(text_content, session_id=context_id)
+                    if ctx:
+                        neo4j_context_text = str(ctx)
+                        print(f"📖 Retrieved Neo4j context: {len(neo4j_context_text)} chars")
+                except Exception as e:
+                    print(f"⚠️ Error retrieving Neo4j context: {e}")
 
         # Save user message to Neo4j Short-Term memory
-        if self.neo4j_memory:
+        if self.neo4j_memory and getattr(self, '_neo4j_connected', False):
             try:
                 await self.neo4j_memory.short_term.add_message(
                     session_id=context_id,
@@ -922,15 +937,17 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
 
         # Save assistant response to Neo4j Short-Term memory
         if self.neo4j_memory and resp_text:
-            try:
-                # Strip visual/binary markers from saved message for clean text history
-                clean_resp_text = resp_text.split("__IMAGE_PARTS__:")[0].strip()
-                await self.neo4j_memory.short_term.add_message(
-                    session_id=context_id,
-                    role="assistant",
-                    content=clean_resp_text
-                )
-                print("💾 Saved assistant response to Neo4j Short-Term memory")
+            await self._ensure_neo4j_connected()
+            if getattr(self, '_neo4j_connected', False):
+                try:
+                    # Strip visual/binary markers from saved message for clean text history
+                    clean_resp_text = resp_text.split("__IMAGE_PARTS__:")[0].strip()
+                    await self.neo4j_memory.short_term.add_message(
+                        session_id=context_id,
+                        role="assistant",
+                        content=clean_resp_text
+                    )
+                    print("💾 Saved assistant response to Neo4j Short-Term memory")
             except Exception as e:
                 print(f"⚠️ Error saving assistant response to Neo4j: {e}")
 
