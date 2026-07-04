@@ -25,7 +25,7 @@ from beeai_framework.emitter.emitter import Emitter
 from beeai_framework.memory.unconstrained_memory import UnconstrainedMemory
 from beeai_framework.tools.tool import Tool
 from langchain_groq import ChatGroq
-from neo4j_agent_memory import MemoryClient, MemorySettings
+from neo4j_agent_memory import MemoryClient, MemorySettings, ExtractionConfig, ExtractorType
 from neo4j_agent_memory.llm.adapters.sentence_transformers import SentenceTransformersProvider
 from pydantic import BaseModel, Field, SecretStr
 from service.server.application_manager import ApplicationManager
@@ -566,7 +566,11 @@ class BeeAIHostManager(ApplicationManager):
                         "password": SecretStr(password),
                         "database": database or "neo4j"
                     },
-                    embedding=embedder
+                    embedding=embedder,
+                    llm="groq/llama-3.3-70b-versatile",
+                    extraction=ExtractionConfig(
+                        extractor_type=ExtractorType.LLM
+                    )
                 )
                 self.neo4j_memory = MemoryClient(self.memory_settings)
                 print("✅ Neo4j Agent Memory client initialized successfully with local embeddings")
@@ -948,8 +952,8 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                         content=clean_resp_text
                     )
                     print("💾 Saved assistant response to Neo4j Short-Term memory")
-            except Exception as e:
-                print(f"⚠️ Error saving assistant response to Neo4j: {e}")
+                except Exception as e:
+                    print(f"⚠️ Error saving assistant response to Neo4j: {e}")
 
             # Run Self-Learning in background to extract and persist user preferences/facts
             asyncio.create_task(self._learn_user_preferences(text_content, context_id))
