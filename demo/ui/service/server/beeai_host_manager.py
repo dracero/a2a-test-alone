@@ -1057,14 +1057,17 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             prompt = f"""Analiza el siguiente mensaje enviado por un usuario:
 "{user_message}"
 
-Determina si el usuario está expresando alguna preferencia personal persistente, hábito, interés, su nombre, o algún dato biográfico relevante (por ejemplo: le gustan las explicaciones socráticas, se llama Diego, estudia ingeniería, prefiere respuestas cortas, etc.).
+Determina si el usuario está expresando:
+1. Alguna preferencia personal persistente, hábito, interés, su nombre, o algún dato biográfico relevante (por ejemplo: le gustan las explicaciones socráticas, se llama Diego, estudia ingeniería, prefiere respuestas cortas, etc.).
+2. Una corrección o aclaración de datos o conceptos físicos/matemáticos que rectifique o enmiende afirmaciones previas (por ejemplo: "la gravedad es 9.8, no 10", "Diego estudia física en la UBA", "ese cálculo da 40", "el ángulo es de 30 grados").
 
-Si encuentras alguna preferencia o dato relevante, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El nombre del usuario es Diego").
+Si encuentras alguna preferencia, dato relevante o corrección, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El usuario aclaró o corrigió que la aceleración de la gravedad debe considerarse como 9.8 m/s²").
 Si no encuentras nada relevante o es solo una pregunta general de paso, responde únicamente con la palabra "NONE".
 
 Responde en el formato:
 Preferencia: <frase corta>
 (O "NONE" si no hay nada)."""
+
 
             response = await self.llm.ainvoke([HumanMessage(content=prompt)])
             result = response.content.strip()

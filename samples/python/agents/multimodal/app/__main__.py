@@ -5,6 +5,24 @@ if sys.platform.startswith('win'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
+    _orig_stdout_write = sys.stdout.write
+    _orig_stderr_write = sys.stderr.write
+
+    def _safe_stdout_write(s):
+        try:
+            return _orig_stdout_write(s)
+        except OSError:
+            return 0
+
+    def _safe_stderr_write(s):
+        try:
+            return _orig_stderr_write(s)
+        except OSError:
+            return 0
+
+    sys.stdout.write = _safe_stdout_write
+    sys.stderr.write = _safe_stderr_write
+
 import asyncio
 import logging
 import os

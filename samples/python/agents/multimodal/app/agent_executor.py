@@ -320,6 +320,62 @@ class PhysicsAgentExecutor(AgentExecutor):
             
             logger.info(f"📊 Total chunks: {chunk_count}")
         
+        except OSError as pipe_err:
+            # WinError 233 or other pipe errors — typically from stdout/stderr
+            # pipe breaking when parent process restarts. Not a real agent error.
+            logger.warning(f'⚠️ Pipe/OS error (non-fatal): {pipe_err}')
+            import sys
+            if sys.platform.startswith('win'):
+                try:
+                    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+                    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+                except Exception:
+                    pass
+            # Retry the stream once after fixing pipes
+            try:
+                async for item in self.agent.stream(query, task.context_id, images):
+                    if hasattr(item, 'model_dump'):
+                        item_dict = item.model_dump()
+                    elif isinstance(item, dict):
+                        item_dict = item
+                    else:
+                        continue
+                    
+                    is_complete = item_dict.get('is_task_complete', False)
+                    require_input = item_dict.get('require_user_input', False)
+                    content = item_dict.get('content', '')
+                    
+                    if require_input:
+                        await updater.update_status(
+                            TaskState.input_required,
+                            new_agent_text_message(content, task.context_id, task.id),
+                            final=True,
+                        )
+                        return
+                    elif is_complete:
+                        await updater.add_artifact(
+                            [Part(root=TextPart(text=content))],
+                            name='physics_analysis',
+                        )
+                        await updater.complete()
+                        return
+            except Exception as retry_err:
+                logger.error(f'❌ Retry also failed: {retry_err}')
+                has_error = True
+                try:
+                    await updater.update_status(
+                        TaskState.failed,
+                        new_agent_text_message(
+                            f"Error interno: {str(retry_err)}",
+                            task.context_id,
+                            task.id,
+                        ),
+                        final=True,
+                    )
+                except:
+                    pass
+                raise ServerError(error=InternalError()) from retry_err
+        
         except Exception as e:
             logger.error(f'❌ EXCEPCIÓN: {e}', exc_info=True)
             has_error = True
