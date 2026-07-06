@@ -530,8 +530,10 @@ class BeeAIHostManager(ApplicationManager):
         self._active_sessions: dict[str, str] = {}
 
         self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
-        self._sessions_file = "/tmp/beeai_active_sessions.json"
-        self._conversations_file = "/tmp/beeai_conversations.json"
+        # Guardar sesiones y conversaciones localmente (no /tmp)
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self._sessions_file = os.path.join(base_dir, "beeai_active_sessions.json")
+        self._conversations_file = os.path.join(base_dir, "beeai_conversations.json")
         self._load_sessions()
         self._load_conversations()
 
@@ -828,7 +830,11 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                         })
             print(f"🖼️ Extracted {len(image_data_list)} image(s) for visual classification")
 
-        # Retrieve Neo4j context
+        # Retrieve Neo4j context — filtered to avoid duplicate chat history
+        # The agent already maintains its own SemanticMemory.chat_history,
+        # so we filter out short-term NAMS history to avoid duplicate context
+        # that confuses the LLM into answering from memory instead of
+        # the current turn.
         neo4j_context_text = ""
         if self.neo4j_memory:
             await self._ensure_neo4j_connected()
@@ -837,8 +843,28 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                     print(f"🧠 Querying Neo4j Agent Memory for context (session_id={context_id})...")
                     ctx = await self.neo4j_memory.get_context(text_content, session_id=context_id)
                     if ctx:
-                        neo4j_context_text = str(ctx)
-                        print(f"📖 Retrieved Neo4j context: {len(neo4j_context_text)} chars")
+                        raw_text = str(ctx)
+                        # Filter out lines that look like chat history to avoid duplicates
+                        # (the agent already tracks this via SemanticMemory.chat_history)
+                        filtered_lines = []
+                        for line in raw_text.split('\n'):
+                            line_lower = line.strip().lower()
+                            # Skip lines that look like short-term chat messages
+                            if any(line_lower.startswith(prefix) for prefix in [
+                                'user:', 'assistant:', 'human:', 'ai:',
+                                'usuario:', 'asistente:', 'q:', 'a:',
+                            ]):
+                                continue
+                            filtered_lines.append(line)
+                        neo4j_context_text = '\n'.join(filtered_lines).strip()
+                        # Truncate to avoid dominating the prompt
+                        if len(neo4j_context_text) > 3000:
+                            neo4j_context_text = neo4j_context_text[:3000] + "\n[... truncado]"
+                        print(f"📖 Retrieved filtered Neo4j context: {len(neo4j_context_text)} chars (from {len(raw_text)} original)")
+                except OSError as pipe_err:
+                    # WinError 233 or other pipe/connection errors — force reconnect next time
+                    print(f"⚠️ Neo4j connection error (will reconnect): {pipe_err}")
+                    self._neo4j_connected = False
                 except Exception as e:
                     print(f"⚠️ Error retrieving Neo4j context: {e}")
 
@@ -851,6 +877,9 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                     content=text_content
                 )
                 print("💾 Saved user message to Neo4j Short-Term memory")
+            except OSError as pipe_err:
+                print(f"⚠️ Neo4j pipe error saving user message (will reconnect): {pipe_err}")
+                self._neo4j_connected = False
             except Exception as e:
                 print(f"⚠️ Error saving user message to Neo4j: {e}")
 
@@ -870,9 +899,15 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                 if should_bypass:
                     print(f"📤 Continuando sesión activa con {active_agent}")
                     send_tool_instance = SendMessageToAgentTool(self)
+                    
+                    message_text = text_content
+                    if neo4j_context_text:
+                        message_text = f"[NAMS_CONTEXT]\n{neo4j_context_text}\n[/NAMS_CONTEXT]\n\n{text_content}"
+                        print(f"🧠 Injected NAMS context into active session message sent to {active_agent}")
+                        
                     send_input = SendMessageToAgentInput(
                         agent_name=active_agent,
-                        message=text_content
+                        message=message_text
                     )
                     resp_text = await send_tool_instance._run(send_input, None, None)
                 else:
@@ -952,6 +987,9 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                         content=clean_resp_text
                     )
                     print("💾 Saved assistant response to Neo4j Short-Term memory")
+                except OSError as pipe_err:
+                    print(f"⚠️ Neo4j pipe error saving assistant response (will reconnect): {pipe_err}")
+                    self._neo4j_connected = False
                 except Exception as e:
                     print(f"⚠️ Error saving assistant response to Neo4j: {e}")
 

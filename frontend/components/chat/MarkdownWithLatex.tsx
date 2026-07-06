@@ -27,13 +27,18 @@ function preprocessLatex(content: string): string {
   // e.g., \\\\vec → \\vec, \\\\frac → \\frac
   processed = processed.replace(/\\\\\\\\([a-zA-Z])/g, '\\\\$1');
   
+  // Fix triple-escaped backslashes
+  processed = processed.replace(/\\\\\\\\\\\\([a-zA-Z])/g, '\\\\$1');
+  
+  // Convert \[ ... \] to $$ ... $$ (display math) - MUST be first before \( handling
+  // Handle multiline display math
+  processed = processed.replace(/\\\[(.+?)\\\]/gs, (_, math) => `$$${math.trim()}$$`);
+  
   // Convert \( ... \) to $ ... $ (inline math)
   processed = processed.replace(/\\\((.+?)\\\)/gs, (_, math) => `$${math.trim()}$`);
   
-  // Convert \[ ... \] to $$ ... $$ (display math)
-  processed = processed.replace(/\\\[(.+?)\\\]/gs, (_, math) => `$$${math.trim()}$$`);
-  
-  // Ensure $$ blocks are on their own lines (remark-math requires this)
+  // Handle $$ blocks - ensure they are on their own lines for remark-math
+  // This helps remark-math correctly identify display math blocks
   processed = processed.replace(/([^\n])\$\$/g, '$1\n$$');
   processed = processed.replace(/\$\$([^\n])/g, '$$\n$1');
   

@@ -93,7 +93,11 @@ class MedicalAgentExecutor(AgentExecutor):
                         # FileWithUri (Caso de uso futuro)
                         elif hasattr(file_obj, 'uri') and hasattr(file_obj, 'mime_type'):
                             try:
-                                host_url = "http://localhost:8080" # Fallback
+                                ui_host = os.getenv("A2A_UI_HOST", "localhost")
+                                if ui_host == "0.0.0.0":
+                                    ui_host = "localhost"
+                                ui_port = os.getenv("A2A_UI_PORT", "12000")
+                                host_url = f"http://{ui_host}:{ui_port}"
                                 if context.message.metadata:
                                     host_url = context.message.metadata.get('host_base_url', host_url)
 

@@ -64,7 +64,7 @@ class SemanticMemory:
             "socratic_questions_asked": self.socratic_questions_asked,
             "socratic_answers": self.socratic_answers,
             "original_query": self.original_query,
-            "socratic_disabled": getattr(self, 'socratic_disabled', True)
+            "socratic_disabled": getattr(self, 'socratic_disabled', False)
         }
 
     @classmethod
@@ -79,7 +79,7 @@ class SemanticMemory:
         mem.socratic_questions_asked = data.get("socratic_questions_asked", 0)
         mem.socratic_answers = data.get("socratic_answers", [])
         mem.original_query = data.get("original_query", "")
-        mem.socratic_disabled = data.get("socratic_disabled", True)
+        mem.socratic_disabled = data.get("socratic_disabled", False)
         # Reconstruir chat_history desde la lista serializada
         for entry in data.get("chat_history", []):
             if entry["role"] == "human":
@@ -203,7 +203,9 @@ class PhysicsMultimodalAgent:
         # Memoria conversacional
         self.memories = {}
         self.visual_findings = {}
-        self._memories_file = "/tmp/physics_agent_memories.json"
+        # Guardar memorias en el directorio del agente (no /tmp)
+        agent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self._memories_file = os.path.join(agent_dir, "physics_agent_memories.json")
         
         self._load_memories()
 
@@ -227,6 +229,14 @@ class PhysicsMultimodalAgent:
                     data = json.load(f)
                 for cid, mem_data in data.items():
                     self.memories[cid] = SemanticMemory.from_dict(mem_data, self.llm)
+                    # Resetear estado socrático al cargar para evitar estados stale
+                    mem = self.memories[cid]
+                    if mem.socratic_mode:
+                        print(f"⚠️ Reseteando estado socrático stale para contexto {cid[:12]}...")
+                        mem.socratic_mode = False
+                        mem.socratic_questions_asked = 0
+                        mem.socratic_answers = []
+                        mem.original_query = ""
                 print(f"📖 Memorias del agente cargadas: {len(self.memories)}")
             except Exception as e:
                 print(f"Error cargando memorias del agente: {e}")
@@ -312,26 +322,67 @@ class PhysicsMultimodalAgent:
             return ""
     
     def extraer_imagenes_pdf(self, pdf_path: str, output_folder: str = "extracted_images") -> List[str]:
-        """Extraer imágenes de un PDF."""
+        """Extraer imágenes embebidas (diagramas, figuras, fotos) de un PDF.
+        
+        Extrae solo las imágenes reales incrustadas en el PDF, no renderiza
+        cada página completa. Filtra imágenes muy pequeñas (íconos, viñetas).
+        """
         import os
         from pathlib import Path
         
         os.makedirs(output_folder, exist_ok=True)
         imagenes = []
+        seen_xrefs = set()  # Evitar duplicados de la misma imagen en varias páginas
         
         try:
-            from pdf2image import convert_from_path
-            pages = convert_from_path(pdf_path, dpi=150)
+            import fitz
+            doc = fitz.open(pdf_path)
+            stem = Path(pdf_path).stem
             
-            for page_num, page in enumerate(pages):
-                img_path = os.path.join(
-                    output_folder,
-                    f"{Path(pdf_path).stem}_page{page_num}.png"
-                )
-                page.save(img_path, 'PNG')
-                imagenes.append(img_path)
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                image_list = page.get_images(full=True)
+                
+                for img_index, img_info in enumerate(image_list):
+                    xref = img_info[0]
+                    
+                    # Evitar extraer la misma imagen dos veces
+                    if xref in seen_xrefs:
+                        continue
+                    seen_xrefs.add(xref)
+                    
+                    try:
+                        base_image = doc.extract_image(xref)
+                        if not base_image:
+                            continue
+                        
+                        # Filtrar imágenes muy pequeñas (íconos, viñetas, etc.)
+                        width = base_image.get("width", 0)
+                        height = base_image.get("height", 0)
+                        if width < 100 or height < 100:
+                            continue
+                        
+                        image_bytes = base_image["image"]
+                        image_ext = base_image.get("ext", "png")
+                        
+                        img_path = os.path.join(
+                            output_folder,
+                            f"{stem}_p{page_num}_img{img_index}.{image_ext}"
+                        )
+                        
+                        # No re-extraer si ya existe en disco
+                        if os.path.exists(img_path) and os.path.getsize(img_path) > 0:
+                            imagenes.append(img_path)
+                            continue
+                        
+                        with open(img_path, "wb") as f:
+                            f.write(image_bytes)
+                        imagenes.append(img_path)
+                    except Exception:
+                        continue
             
-            print(f"✅ Extraídas {len(imagenes)} páginas de {Path(pdf_path).name}")
+            doc.close()
+            print(f"   🖼️ {len(imagenes)} imágenes extraídas de {Path(pdf_path).name}")
             return imagenes
         except Exception as e:
             print(f"❌ Error extrayendo imágenes: {e}")
@@ -539,7 +590,6 @@ Contenido:
             
             # Imágenes
             imagenes = self.extraer_imagenes_pdf(pdf_file)
-            print(f"   🖼️ {len(imagenes)} imágenes")
             
             for img_path in imagenes:
                 img_embedding = self.generate_image_embedding(open(img_path, 'rb').read())
@@ -558,9 +608,11 @@ Contenido:
         # Extraer temario
         temario = await self.extraer_temario(contenido_para_temario)
         
-        # Guardar temario a disco
+        # Guardar temario a disco (en el directorio del agente)
         try:
-            with open("temario.txt", "w", encoding="utf-8") as f:
+            agent_dir = Path(os.path.abspath(__file__)).parents[1]
+            temario_path = agent_dir / "temario.txt"
+            with open(temario_path, "w", encoding="utf-8") as f:
                 f.write(temario)
         except Exception as e:
             print(f"⚠️ No se pudo guardar el temario a disco: {e}")
@@ -579,6 +631,39 @@ Contenido:
         return temario
     
     # ==================== MÉTODOS DE ANÁLISIS ====================
+    
+    def _sanitize_nams_context(self, nams_context: str, max_len: int = 3000) -> str:
+        """Filtra y trunca el contexto NAMS para evitar que domine el prompt.
+        
+        Elimina líneas que parecen historial de chat (ya cubierto por
+        SemanticMemory.chat_history) y trunca a max_len caracteres.
+        """
+        if not nams_context or not nams_context.strip():
+            return ""
+        
+        # Prefijos que indican historial de chat (ya está en chat_history)
+        chat_prefixes = (
+            'user:', 'assistant:', 'human:', 'ai:',
+            'usuario:', 'asistente:', 'q:', 'a:',
+            'pregunta:', 'respuesta:',
+        )
+        
+        filtered_lines = []
+        for line in nams_context.split('\n'):
+            line_lower = line.strip().lower()
+            if not line_lower:
+                continue
+            # Saltar líneas que parecen historial de chat
+            if any(line_lower.startswith(prefix) for prefix in chat_prefixes):
+                continue
+            filtered_lines.append(line)
+        
+        result = '\n'.join(filtered_lines).strip()
+        
+        if len(result) > max_len:
+            result = result[:max_len] + '\n[... truncado]'
+        
+        return result
     
     def _get_or_create_memory(self, context_id: str) -> SemanticMemory:
         if context_id not in self.memories:
@@ -619,16 +704,10 @@ Contenido:
         
         try:
             if query and image_embedding:
-                # Si hay imagen y query, buscamos en ambas. 
-                # El text collection se busca con el HF embedding.
-                # El image collection se busca con CLIP embedding del texto o image_embedding? 
-                # Lo mejor es buscar en texto con HF y en imágenes con el image_embedding o el CLIP de texto.
-                # Como el input nos da ambos, lo tratamos por separado.
                 search_embedding_hf = self.generate_hf_text_embedding(query)
-                search_embedding_clip = self.generate_clip_text_embedding(query)
                 search_ops = [
                     (self.text_collection, search_embedding_hf),
-                    (self.image_collection, search_embedding_clip) # o image_embedding, pero usar texto suele encontrar el concepto de imagen
+                    (self.image_collection, image_embedding)
                 ]
             elif query:
                 search_embedding_hf = self.generate_hf_text_embedding(query)
@@ -670,19 +749,24 @@ Contenido:
             return results
     
     @traceable(name="analyze_physics_image", run_type="llm")
-    async def analyze_physics_image(self, images: List[dict]) -> str:
+    async def analyze_physics_image(self, images: List[dict], pdf_text_context: str = "") -> str:
         """Analiza imágenes de física."""
         if not images:
             return "No se proporcionaron imágenes."
         
+        prompt_prefix = ""
+        if pdf_text_context and pdf_text_context.strip():
+            prompt_prefix = f"TEXTO DEL MATERIAL DE LA MATERIA ASOCIADO A LA IMAGEN (obtenido por búsqueda visual):\n{pdf_text_context}\n\n"
+
         content = [{
             "type": "text",
-            "text": f"""Analiza estas {len(images)} imágenes de física:
+            "text": f"""{prompt_prefix}Analiza estas {len(images)} imágenes de física. 
+Si eres un modelo de solo texto y no puedes ver la imagen físicamente, utiliza el texto del material de la materia proporcionado arriba para deducir qué fenómeno se representa en la imagen y descríbelo según estos puntos:
 
-1. FENÓMENO FÍSICO observado
-2. PRINCIPIOS FÍSICOS aplicables
-3. ECUACIONES RELEVANTES
-4. DESCRIPCIÓN DETALLADA
+1. FENÓMENO FÍSICO observado (ej: cilindro/disco rodando con/sin rozamiento, resorte, oscilaciones. Sé muy preciso y fiel al texto asociado. NO inventes cañones u otros dispositivos si no se mencionan en el texto).
+2. PRINCIPIOS FÍSICOS aplicables (ej: rodadura sin deslizar, conservación de la energía, fuerza elástica, dinámica de rotación, etc.)
+3. ECUACIONES RELEVANTES (ej: torque, conservación de energía elástica y cinética, energía cinética de rotación y traslación).
+4. DESCRIPCIÓN DETALLADA (ej: coeficiente de rozamiento, tramo sin fricción, tramo con fricción, longitud natural L0, elongación A).
 
 Sé técnico y preciso."""
         }]
@@ -716,6 +800,68 @@ Sé técnico y preciso."""
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
+            
+    def _get_pdf_page_text(self, pdf_path: str, image_path: str) -> str:
+        """Extrae el texto de la página del PDF usando el nombre de la imagen."""
+        try:
+            import fitz
+            import re
+            basename = os.path.basename(image_path)
+            match = re.search(r'_p(\d+)_', basename)
+            if match:
+                page_idx = int(match.group(1))
+                if os.path.exists(pdf_path):
+                    doc = fitz.open(pdf_path)
+                    if 0 <= page_idx < len(doc):
+                        text = doc[page_idx].get_text()
+                        print(f"📖 Recuperado texto del PDF {os.path.basename(pdf_path)} Página {page_idx+1} ({len(text)} caracteres)")
+                        return text
+                else:
+                    # Intentar buscar en el directorio PDF local del agente
+                    agent_pdf_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "PDF")
+                    local_path = os.path.join(agent_pdf_dir, os.path.basename(pdf_path))
+                    if os.path.exists(local_path):
+                        doc = fitz.open(local_path)
+                        if 0 <= page_idx < len(doc):
+                            text = doc[page_idx].get_text()
+                            print(f"📖 Recuperado texto del PDF local {os.path.basename(pdf_path)} Página {page_idx+1} ({len(text)} caracteres)")
+                            return text
+        except Exception as e:
+            print(f"⚠️ Error leyendo texto de página de PDF: {e}")
+        return ""
+        
+    async def _get_visual_findings(self, images: List[dict], context_id: str) -> tuple[str, Optional[List[float]]]:
+        """Analiza la imagen utilizando pre-búsqueda CLIP y lectura directa de PDF."""
+        visual_findings = ""
+        image_embedding = None
+        
+        if images and len(images) > 0:
+            first_image_data = images[0].get('data') or images[0].get('bytes')
+            if isinstance(first_image_data, str):
+                first_image_data = base64.b64decode(first_image_data)
+            image_embedding = self.generate_image_embedding(first_image_data)
+            
+            pdf_text_context = ""
+            if image_embedding:
+                try:
+                    print("🔎 Pre-buscando contexto de imagen en Qdrant...")
+                    img_search = await self.search_multimodal(image_embedding=image_embedding, top_k=1)
+                    img_matches = img_search.get('image', [])
+                    if img_matches:
+                        match_payload = img_matches[0].get('payload', {})
+                        pdf_path = match_payload.get('pdf_name', '')
+                        img_path = match_payload.get('image_path', '')
+                        if pdf_path and img_path:
+                            pdf_text_context = self._get_pdf_page_text(pdf_path, img_path)
+                except Exception as e:
+                    print(f"⚠️ Error en pre-búsqueda de imagen: {e}")
+            
+            visual_findings = await self.analyze_physics_image(images, pdf_text_context)
+            self.visual_findings[context_id] = visual_findings
+        else:
+            visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
+            
+        return visual_findings, image_embedding
     
     @traceable(name="classify_query", run_type="llm")
     async def classify_query(self, query: str, context: str, visual_findings: str) -> str:
@@ -799,7 +945,8 @@ Genera consulta optimizada."""
         visual_findings: str,
         document_context: str,
         image_context: str,
-        chat_history: list = None
+        chat_history: list = None,
+        nams_context: str = ""
     ) -> str:
         """Genera respuesta final usando historial real de chat."""
         _default_direct = f"""Eres un Profesor de Física I UBA en modo de diálogo directo con el estudiante.
@@ -817,6 +964,7 @@ Estructura de respuesta:
 6. RESUMEN
 
 Reglas:
+- **PRIORIDAD ABSOLUTA**: Responde SIEMPRE a la CONSULTA ACTUAL del estudiante. El historial de conversación y las preferencias de fondo son solo contexto secundario. Tu respuesta DEBE basarse en la pregunta actual y los DOCUMENTOS DE REFERENCIA.
 - RESPONDE ÚNICAMENTE basándote en los DOCUMENTOS DE REFERENCIA proporcionados. Si la información solicitada no está en los documentos, indica explícitamente que el tema no se encuentra en el temario de la materia y NO inventes una respuesta.
 - NUNCA repitas lo que ya explicaste antes. Avanza en la conversación.
 - Técnico pero claro. Conecta con lo que el estudiante ya dijo.
@@ -830,6 +978,17 @@ Reglas:
         demos = self._get_demos("direct_response")
         if demos:
             system_prompt += demos
+        
+        # Inyectar contexto NAMS como fondo de baja prioridad (solo preferencias)
+        sanitized_nams = self._sanitize_nams_context(nams_context)
+        if sanitized_nams:
+            system_prompt += (
+                f"\n\n--- CONTEXTO DE FONDO (baja prioridad) ---\n"
+                f"Las siguientes son preferencias del usuario almacenadas previamente. "
+                f"Úsalas SOLO si son directamente relevantes a la consulta actual. "
+                f"NUNCA bases tu respuesta principal en este contexto.\n"
+                f"{sanitized_nams}"
+            )
         
         # Agregar contexto de documentos al system prompt
         if document_context and document_context.strip():
@@ -913,7 +1072,8 @@ Responde SOLO con una de estas palabras: SALIR, ENTRAR, CONTINUAR."""
         question_number: int,
         previous_answers: List[str],
         visual_findings: str = "",
-        document_context: str = ""
+        document_context: str = "",
+        nams_context: str = ""
     ) -> str:
         """Genera una pregunta socrática para guiar al estudiante.
         
@@ -970,6 +1130,16 @@ Formato de respuesta:
         if demos:
             system_prompt += demos
         
+        # Inyectar contexto NAMS como fondo de baja prioridad (solo preferencias)
+        sanitized_nams = self._sanitize_nams_context(nams_context)
+        if sanitized_nams:
+            system_prompt += (
+                f"\n\n--- CONTEXTO DE FONDO (baja prioridad) ---\n"
+                f"Preferencias del usuario almacenadas previamente. "
+                f"Úsalas SOLO si son relevantes a la consulta actual.\n"
+                f"{sanitized_nams}"
+            )
+        
         previous_context = ""
         if previous_answers:
             previous_context = "\n\nRespuestas previas del estudiante:\n" + "\n".join([
@@ -1003,7 +1173,8 @@ Genera la pregunta socrática número {question_number + 1} para guiar al estudi
         visual_findings: str,
         document_context: str,
         image_context: str,
-        student_answers: str
+        student_answers: str,
+        nams_context: str = ""
     ) -> str:
         """Genera respuesta final después del diálogo socrático."""
         _default_post_socratic = f"""Profesor de Física I UBA que usa el método socrático.
@@ -1023,6 +1194,7 @@ Estructura de tu respuesta:
 7. **RESUMEN Y CONCLUSIÓN**: Síntesis final
 
 Reglas:
+- **PRIORIDAD ABSOLUTA**: Responde SIEMPRE a la CONSULTA ORIGINAL del estudiante y valora sus respuestas socráticas. Las preferencias de fondo son solo contexto secundario.
 - RESPONDE ÚNICAMENTE basándote en los DOCUMENTOS DE REFERENCIA proporcionados. Si la información no está en los documentos, indícalo claramente y no inventes.
 - Reconoce los aciertos del estudiante
 - Corrige errores con tacto
@@ -1049,6 +1221,16 @@ Reglas:
         demos = self._get_demos("post_socratic_response")
         if demos:
             system_prompt += demos
+        
+        # Inyectar contexto NAMS como fondo de baja prioridad (solo preferencias)
+        sanitized_nams = self._sanitize_nams_context(nams_context)
+        if sanitized_nams:
+            system_prompt += (
+                f"\n\n--- CONTEXTO DE FONDO (baja prioridad) ---\n"
+                f"Preferencias del usuario almacenadas previamente. "
+                f"Úsalas SOLO si son relevantes a la consulta actual.\n"
+                f"{sanitized_nams}"
+            )
         
         user_prompt = f"""
 CONSULTA ORIGINAL:
@@ -1184,15 +1366,35 @@ Responde SOLO: SALIR o CONTINUAR"""
     async def invoke(self, query: str, context_id: str, 
                     images: List[dict] = None) -> str:
         """Procesa consulta completa con modo socrático."""
+        # Extract NAMS context from query if present
+        nams_context = ""
+        if "[NAMS_CONTEXT]" in query and "[/NAMS_CONTEXT]" in query:
+            start_tag = "[NAMS_CONTEXT]"
+            end_tag = "[/NAMS_CONTEXT]"
+            start_idx = query.find(start_tag)
+            end_idx = query.find(end_tag)
+            nams_context = query[start_idx + len(start_tag):end_idx].strip()
+            remainder = query[end_idx + len(end_tag):]
+            if remainder.startswith("\n\n"):
+                query = remainder[2:]
+            elif remainder.startswith("\n"):
+                query = remainder[1:]
+            else:
+                query = remainder
+
         print(f"\n{'='*80}")
         print(f"📚 Consulta de física")
         print(f"Query: {query[:100]}...")
+        if nams_context:
+            print(f"NAMS Context: {nams_context[:100]}...")
         print(f"Imágenes: {len(images) if images else 0}")
         print(f"{'='*80}\n")
         
         try:
             memory = self._get_or_create_memory(context_id)
             memory_context = self._get_memory_context(context_id)
+            
+            pass
             
             query_for_generation = query  # Default; may be overridden by socratic exit
             exiting_socratic = False  # Flag to track if we're exiting socratic mode
@@ -1264,7 +1466,8 @@ Responde SOLO: SALIR o CONTINUAR"""
                         final_response = await self.generate_physics_response_with_socratic(
                             memory.original_query, memory_context, classification, 
                             visual_findings, document_context, image_context,
-                            student_answers_summary
+                            student_answers_summary,
+                            nams_context=nams_context
                         )
                         
                         # LaTeX rendering is handled by KaTeX in the frontend
@@ -1292,7 +1495,8 @@ Responde SOLO: SALIR o CONTINUAR"""
                             memory.socratic_questions_asked,
                             memory.socratic_answers,
                             visual_findings=self.visual_findings.get(context_id, ""),
-                            document_context=doc_ctx
+                            document_context=doc_ctx,
+                            nams_context=nams_context
                         )
                         
                         # LaTeX rendering is handled by KaTeX in the frontend
@@ -1317,20 +1521,7 @@ Responde SOLO: SALIR o CONTINUAR"""
                 print(f"💬 Entablando diálogo normal sin socrático...")
                 
                 # Analizar imágenes si las hay
-                visual_findings = ""
-                image_embedding = None
-                
-                if images and len(images) > 0:
-                    print(f"🖼️ Analizando imágenes para diálogo...")
-                    visual_findings = await self.analyze_physics_image(images)
-                    self.visual_findings[context_id] = visual_findings
-                    
-                    first_image_data = images[0].get('data') or images[0].get('bytes')
-                    if isinstance(first_image_data, str):
-                        first_image_data = base64.b64decode(first_image_data)
-                    image_embedding = self.generate_image_embedding(first_image_data)
-                else:
-                    visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
+                visual_findings, image_embedding = await self._get_visual_findings(images, context_id)
                 
                 classification = await self.classify_query(
                     query_for_generation, memory_context, visual_findings
@@ -1358,7 +1549,8 @@ Responde SOLO: SALIR o CONTINUAR"""
                 final_response = await self.generate_physics_response(
                     query_for_generation, memory_context, classification, 
                     visual_findings, document_context, image_context,
-                    chat_history=memory.chat_history
+                    chat_history=memory.chat_history,
+                    nams_context=nams_context
                 )
                 self._save_to_memory(context_id, query, final_response)
                 # Resetear para que la próxima pregunta vuelva al modo socrático
@@ -1369,19 +1561,7 @@ Responde SOLO: SALIR o CONTINUAR"""
             # Modo normal: iniciar modo socrático
             print(f"🎓 Iniciando modo socrático...")
             
-            # Analizar imágenes
-            visual_findings = ""
-            image_embedding = None
-            
-            if images and len(images) > 0:
-                print(f"🖼️ Analizando imágenes...")
-                visual_findings = await self.analyze_physics_image(images)
-                self.visual_findings[context_id] = visual_findings
-                
-                first_image_data = images[0].get('data') or images[0].get('bytes')
-                if isinstance(first_image_data, str):
-                    first_image_data = base64.b64decode(first_image_data)
-                image_embedding = self.generate_image_embedding(first_image_data)
+            visual_findings, image_embedding = await self._get_visual_findings(images, context_id)
             
             # Activar modo socrático
             memory.socratic_mode = True
@@ -1401,7 +1581,8 @@ Responde SOLO: SALIR o CONTINUAR"""
             first_question = await self.generate_socratic_question(
                 query, 0, [],
                 visual_findings=visual_findings,
-                document_context=doc_ctx
+                document_context=doc_ctx,
+                nams_context=nams_context
             )
             
             # LaTeX rendering is handled by KaTeX in the frontend
@@ -1427,9 +1608,27 @@ Responde SOLO: SALIR o CONTINUAR"""
         
         Implementa modo socrático con 3 preguntas antes de la respuesta.
         """
+        # Extract NAMS context from query if present
+        nams_context = ""
+        if "[NAMS_CONTEXT]" in query and "[/NAMS_CONTEXT]" in query:
+            start_tag = "[NAMS_CONTEXT]"
+            end_tag = "[/NAMS_CONTEXT]"
+            start_idx = query.find(start_tag)
+            end_idx = query.find(end_tag)
+            nams_context = query[start_idx + len(start_tag):end_idx].strip()
+            remainder = query[end_idx + len(end_tag):]
+            if remainder.startswith("\n\n"):
+                query = remainder[2:]
+            elif remainder.startswith("\n"):
+                query = remainder[1:]
+            else:
+                query = remainder
+
         print(f"\n{'='*80}")
         print(f"📚 Consulta (streaming)")
         print(f"Query: {query[:100]}...")
+        if nams_context:
+            print(f"NAMS Context: {nams_context[:100]}...")
         print(f"Imágenes: {len(images) if images else 0}")
         print(f"{'='*80}\n")
         
@@ -1437,6 +1636,8 @@ Responde SOLO: SALIR o CONTINUAR"""
         memory_context = self._get_memory_context(context_id)
         print(f"🗓️ [STREAM] context_id='{context_id[:12] if context_id else 'VACIO'}...', memoria existente: {context_id in self.memories}, conversaciones guardadas: {len(self.memories.get(context_id, SemanticMemory(llm=self.llm)).conversations)}")
         
+        pass
+
         query_for_generation = query  # Default; may be overridden by socratic exit
         exiting_socratic = False  # Flag to track if we're exiting socratic mode
         
@@ -1540,7 +1741,8 @@ Responde SOLO: SALIR o CONTINUAR"""
                     final_response = await self.generate_physics_response_with_socratic(
                         memory.original_query, memory_context, classification,
                         visual_findings, document_context, image_context,
-                        student_answers_summary
+                        student_answers_summary,
+                        nams_context=nams_context
                     )
                     
                     # LaTeX rendering is handled by KaTeX in the frontend
@@ -1580,7 +1782,8 @@ Responde SOLO: SALIR o CONTINUAR"""
                         memory.socratic_questions_asked,
                         memory.socratic_answers,
                         visual_findings=self.visual_findings.get(context_id, ""),
-                        document_context=doc_ctx
+                        document_context=doc_ctx,
+                        nams_context=nams_context
                     )
                     
                     # Guardar el intercambio socrático en el chat_history real
@@ -1639,7 +1842,8 @@ Responde SOLO: SALIR o CONTINUAR"""
                 first_question = await self.generate_socratic_question(
                     original_q, 0, [],
                     visual_findings=self.visual_findings.get(context_id, ""),
-                    document_context=doc_ctx
+                    document_context=doc_ctx,
+                    nams_context=nams_context
                 )
                 
                 yield {
@@ -1674,34 +1878,14 @@ Responde SOLO: SALIR o CONTINUAR"""
                 'content': f'💬 Entablando diálogo normal sin socrático...',
                 'status': 'normal_dialogue'
             }
-            
-            visual_findings = ""
-            image_embedding = None
-            
+            visual_findings, image_embedding = await self._get_visual_findings(images, context_id)
             if images and len(images) > 0:
-                yield {
-                    'is_task_complete': False,
-                    'require_user_input': False,
-                    'content': f'🖼️ Analizando {len(images)} imagen(es) para diálogo...',
-                    'status': 'analyzing_images'
-                }
-                
-                visual_findings = await self.analyze_physics_image(images)
-                self.visual_findings[context_id] = visual_findings
-                
-                first_image_data = images[0].get('data') or images[0].get('bytes')
-                if isinstance(first_image_data, str):
-                    first_image_data = base64.b64decode(first_image_data)
-                image_embedding = self.generate_image_embedding(first_image_data)
-                
                 yield {
                     'is_task_complete': False,
                     'require_user_input': False,
                     'content': '✅ Fenómenos físicos identificados.',
                     'status': 'analyzing_images'
                 }
-            else:
-                visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
             
             yield {
                 'is_task_complete': False,
@@ -1748,7 +1932,8 @@ Responde SOLO: SALIR o CONTINUAR"""
             final_response = await self.generate_physics_response(
                 query_for_generation, memory_context, classification, 
                 visual_findings, document_context, image_context,
-                chat_history=memory.chat_history
+                chat_history=memory.chat_history,
+                nams_context=nams_context
             )
             self._save_to_memory(context_id, query, final_response)
             # Resetear para que la próxima pregunta vuelva al modo socrático
@@ -1766,25 +1951,8 @@ Responde SOLO: SALIR o CONTINUAR"""
             # === Activar modo socrático directamente ===
             print(f"🎓 Iniciando modo socrático...")
             
-            visual_findings = ""
-            image_embedding = None
-            
+            visual_findings, image_embedding = await self._get_visual_findings(images, context_id)
             if images and len(images) > 0:
-                yield {
-                    'is_task_complete': False,
-                    'require_user_input': False,
-                    'content': f'🖼️ Analizando {len(images)} imagen(es)...',
-                    'status': 'analyzing_images'
-                }
-                
-                visual_findings = await self.analyze_physics_image(images)
-                self.visual_findings[context_id] = visual_findings
-                
-                first_image_data = images[0].get('data') or images[0].get('bytes')
-                if isinstance(first_image_data, str):
-                    first_image_data = base64.b64decode(first_image_data)
-                image_embedding = self.generate_image_embedding(first_image_data)
-                
                 yield {
                     'is_task_complete': False,
                     'require_user_input': False,
@@ -1815,7 +1983,8 @@ Responde SOLO: SALIR o CONTINUAR"""
             first_question = await self.generate_socratic_question(
                 query, 0, [],
                 visual_findings=self.visual_findings.get(context_id, ""),
-                document_context=doc_ctx
+                document_context=doc_ctx,
+                nams_context=nams_context
             )
             
             yield {

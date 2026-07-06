@@ -73,7 +73,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             )
             
             if state.neo4j_context_text:
-                classification_text += f"Retrieved User Profile & Memory from Neo4j Graph:\n{state.neo4j_context_text}\n\n"
+                classification_text += f"User preferences (background):\n{state.neo4j_context_text[:1500]}\n\n"
             
             if state.history_text:
                 classification_text += f"Recent conversation history:\n{state.history_text}\n\n"
@@ -153,7 +153,12 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                     f"You are a friendly AI assistant.\n"
                 )
                 if state.neo4j_context_text:
-                    direct_prompt += f"User Profile & Memory Context from Neo4j:\n{state.neo4j_context_text}\n\n"
+                    direct_prompt += (
+                        f"Background context (low priority) - User preferences from memory:\n"
+                        f"{state.neo4j_context_text[:2000]}\n\n"
+                        f"Use the above ONLY if directly relevant to the user's current message. "
+                        f"Always prioritize responding to what the user is saying NOW.\n\n"
+                    )
                 direct_prompt += (
                     f"The user said: \"{state.user_message}\"\n\n"
                     f"Respond naturally and helpfully, taking into account any retrieved user profile, preferences, or memory context if relevant. If they're greeting you, greet them back. "
@@ -223,9 +228,15 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
         try:
             from service.server.beeai_host_manager import \
                 SendMessageToAgentInput
+            
+            message_text = state.user_message
+            if state.neo4j_context_text:
+                message_text = f"[NAMS_CONTEXT]\n{state.neo4j_context_text}\n[/NAMS_CONTEXT]\n\n{state.user_message}"
+                print(f"🧠 Injected NAMS context into message sent to {state.chosen_agent}")
+                
             send_input = SendMessageToAgentInput(
                 agent_name=state.chosen_agent,
-                message=state.user_message
+                message=message_text
             )
             
             result = await send_tool._run(send_input, None, None)

@@ -31,7 +31,7 @@
     "train": [],
     "demos": [],
     "signature": {
-      "instructions": "Actúa como un profesor de física universitario hablando directamente con el estudiante.\nHaz UNA pregunta socrática para guiar al estudiante hacia la respuesta correcta.\nNO uses introducciones como 'Aquí tienes la pregunta' o 'Pregunta 1:'.\nDirígete al estudiante directamente (en segunda persona).",
+      "instructions": "Actúa como un profesor de física universitario hablando directamente con el estudiante.\nHaz UNA pregunta socrática para guiar al estudiante hacia la respuesta correcta.\nNO uses introducciones como 'Aquí tienes la pregunta' o 'Pregunta 1:'.\nDirígete al estudiante directamente (en segunda persona).\nSi incluyes variables matemáticas, números o fórmulas físicas, usa SIEMPRE formato LaTeX: un solo signo de dólar $formula$ para inline. Ejemplo: $x_0 = 10\\text{ m}$.",
       "fields": [
         {
           "prefix": "Question:",
@@ -62,7 +62,7 @@
     "train": [],
     "demos": [],
     "signature": {
-      "instructions": "Actúa como un profesor de física universitario hablando directamente con el estudiante.\nDespués de 3 preguntas socráticas, da la explicación completa reconociendo\nel proceso de razonamiento del estudiante. Dirígete a él de forma directa y amigable.",
+      "instructions": "Actúa como un profesor de física universitario hablando directamente con el estudiante.\nDespués de 3 preguntas socráticas, da la explicación completa reconociendo\nel proceso de razonamiento del estudiante. Dirígete a él de forma directa y amigable.\nTodas las fórmulas, variables matemáticas, números y ecuaciones físicas deben estar estrictamente en formato LaTeX:\n- Usa un solo signo de dólar $formula$ para fórmulas en línea con el texto (inline). Ejemplo: La masa de la bala es $m_b = 200\\text{ kg}$.\n- Usa doble signo de dólar $$formula$$ en líneas separadas para ecuaciones en bloque (display). Ejemplo:\n  $$\n  E_k = \\frac{1}{2}mv^2\n  $$\nNUNCA envíes ecuaciones o fórmulas en texto plano. No separes letras de palabras en líneas verticales.",
       "fields": [
         {
           "prefix": "Question:",

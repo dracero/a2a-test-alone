@@ -1,0 +1,27 @@
+                    Física I – Ondas Mecánicas – Rev.02 
+ 
+ 
+38 
+La obra “Física para estudiantes de Ingeniería” está protegida bajo una licencia Creative Commons 
+Atribución-NoComercial-SinDerivadas 4.0 Internacional. 
+ 
+Figura 20 
+1 y 2 son dos frentes de onda emitidas por F. El 2 fue emitido un período T más tarde 
+que 1. La diferencia entre ambos frentes de onda es λ (longitud de onda). Si “f” es el 
+número de frentes de onda que emite la fuente en 1 segundo, el observador ubicado en 
+x recibirá el mismo número de frentes de onda por unidad de tiempo. 
+b) Ahora, supongamos que el observador se mueve hacia la fuente. Por lo tanto, va a 
+interceptar más ondas por unidad de tiempo que las percibidas si estuviera quieto.  
+¿Por qué?  
+Sabemos, por movimiento relativo: 
+𝑣⃗𝑟= 𝑣⃗𝑠−𝑣⃗𝑜 
+Siendo: 
+𝑣⃗𝑟: 𝑣𝑒𝑙𝑜𝑐𝑖𝑑𝑎𝑑 𝑟𝑒𝑙𝑎𝑡𝑖𝑣𝑎 𝑑𝑒𝑙 𝑠𝑜𝑛𝑖𝑑𝑜 𝑟𝑒𝑠𝑝𝑒𝑐𝑡𝑜 𝑎𝑙 𝑜𝑏𝑠𝑒𝑟𝑣𝑎𝑑𝑜𝑟 
+𝑣⃗𝑠: 𝑣𝑒𝑙𝑜𝑐𝑖𝑑𝑎𝑑 𝑑𝑒𝑙 𝑠𝑜𝑛𝑖𝑑𝑜 𝑚𝑒𝑑𝑖𝑑𝑎 𝑟𝑒𝑠𝑝𝑒𝑐𝑡𝑜 𝑎𝑙 𝑚𝑒𝑑𝑖𝑜 
+𝑣⃗𝑜: 𝑣𝑒𝑙𝑜𝑐𝑖𝑑𝑎𝑑 𝑑𝑒𝑙 𝑜𝑏𝑠𝑒𝑟𝑣𝑎𝑑𝑜𝑟 𝑚𝑒𝑑𝑖𝑑𝑎 𝑟𝑒𝑠𝑝𝑒𝑐𝑡𝑜 𝑎𝑙 𝑚𝑒𝑑𝑖𝑜 
+ 
+Figura 21 
+ 
+Teniendo en cuenta que la velocidad del hombre es negativa, de acuerdo a la 
+convención utilizada, hacemos los reemplazos correspondientes. Llamamos 𝑓′ a la 
+frecuencia percibida por el observador en movimiento. 

@@ -1,0 +1,79 @@
+
+================ arch8.pdf Page 19 ================
+Física I – Hidrodinámica – Rev. 01 
+    
+18 
+La obra “Física para estudiantes de Ingeniería” está protegida bajo una licencia Creative 
+Commons Atribución-NoComercial-SinDerivadas 4.0 Internacional. 
+ 
+Figura 10 
+En nuestro ejercicio supondremos que la tubería tiene diámetro mucho 
+mayor que el diámetro del tubo de medición. Es decir no se afecta la 
+velocidad pues el cambio de sección producido por el tubo de medición es 
+despreciable. 
+Se ha señalado en la figura el punto de remanso, también conocido como 
+punto de estancamiento o en inglés stagnation point. 
+La línea de corriente que consideramos pasa por el punto de remanso. Y que 
+la presión que se da como dato es presión relativa. (en el caso que 
+desarrollamos no es relevante, en las conclusiones del ejercicio lo 
+mostraremos) 
+𝑝+ 1
+2  𝛿 𝑉2 = 𝑝𝑆𝑡 
+También si consideramos el tubo vertical de medición conectado a ese 
+punto, se establecerá la altura z2:        
+ 𝛿 𝑔 𝑧2 = 𝑝𝑆𝑡 
+Por otra parte el tubo de medición de la izquierda, mide la presión relativa 
+hidrostática.   
+ 𝛿 𝑔 𝑧1 =  𝑝 
+Por lo tanto para medir velocidad se puede medir la diferencia de altura de 
+columna de ambos tubos:  
+
+================ arch2.pdf Page 23 ================
+       Física I –  Dinámica de la partícula – Rev. 03 
+ 
+ 
+La obra “Física para estudiantes de Ingeniería” está protegida bajo una licencia Creative 
+Commons Atribución-NoComercial-SinDerivadas 4.0 Internacional. 
+22 
+ 
+FIGURA 16. Lo mismo ocurre en el caso de los objetos que se apoyan sobre una 
+cinta transportadora: están sometidos a una fuerza de roce muy grande, por lo que 
+quedan pegados a la cinta y pueden moverse al mismo tiempo que ella.  
+ 
+Ahora, supongamos que la fuerza de rozamiento estática alcanzó su valor máximo, pero 
+la fuerza que efectuamos sobre el bloque la supera y éste se pone en movimiento. El 
+coeficiente de rozamiento, ahora dinámico, adopta un valor inferior al estático, y la 
+fuerza de rozamiento dinámico se opone al movimiento relativo entre ambas superficies. 
+Podemos representar esta situación en el gráfico siguiente: 
+ 
+ 
+GRÁFICO 1 
+ 
+
+================ arch2.pdf Page 21 ================
+       Física I –  Dinámica de la partícula – Rev. 03 
+ 
+ 
+La obra “Física para estudiantes de Ingeniería” está protegida bajo una licencia Creative 
+Commons Atribución-NoComercial-SinDerivadas 4.0 Internacional. 
+20 
+7_ (FUERZAS DERIVADAS DE INTERACCIONES ELÉCTRICAS) LA 
+FUERZA DE ROZAMIENTO 
+ 
+La fuerza de fricción o de rozamiento es consecuencia de las rugosidades que poseen 
+todas las superficies, las que determinan un conjunto de interacciones microscópicas 
+entre las nubes electrónicas de las moléculas que las forman. El efecto macroscópico es 
+lo que llamamos rozamiento o fricción, nuevamente una fuerza de tipo estadístico, 
+resultante de un gran número de interacciones básicas de naturaleza eléctrica. 
+ 
+FIGURA  14 
+Supongamos entonces que empujamos un bloque, inicialmente en reposo, apoyado 
+sobre el piso. Para ello, le aplicamos una fuerza 𝐹 . El bloque no se mueve. ¿Por qué? 
+Porque existe una fuerza 𝐹 ′, de igual módulo y opuesta a 𝐹 , que la equilibra. Esta es la 
+fuerza de rozamiento estático𝐹 𝑒𝑠𝑡, denominada así porque no existe desplazamiento 
+relativo entre el bloque y la superficie de apoyo.  
+Esta fuerza está estrechamente relacionada con otra fuerza que ya conocemos: la Normal 
+(𝑁⃗ ). Ambas, en realidad, son las dos componentes de la fuerza de contacto entre el 
+bloque y la superficie de apoyo. La 𝐹 𝑒𝑠𝑡 es la componente de dicha fuerza paralela a la 
+superficie de contacto, la 𝑁⃗ , como su nombre lo indica, es la componente normal o 
+perpendicular. 

@@ -39,78 +39,44 @@ A continuación, te presento el temario estructurado de Física I:
 - Subtema 5.4: Velocidad del CM de un sistema de partículas
 - Subtema 5.5: Aceleración del CM de un sistema de partículas
 - Subtema 5.6: Dinámica de un sistema de partículas
-- Subtema 5.7: Segunda ecuación universal para un sistema de partículas
-- Subtema 5.8: Impulso y cantidad de movimiento del sistema de partículas
-- Subtema 5.9: Momento angular y torque para un sistema de partículas
 
 **TEMA 6: Cinemática del Cuerpo Rígido**
-- Subtema 6.1: Introducción
+- Subtema 6.1: Introducción a la cinemática del cuerpo rígido
 - Subtema 6.2: Determinación del Centro de Masa (CM) del cuerpo rígido
 - Subtema 6.3: Estudio de los posibles movimientos de un Cuerpo Rígido (CR) en un plano perpendicular a su eje de simetría
-- Subtema 6.4: Condición de rigidez
-- Subtema 6.5: Casos particulares de movimientos de CR
-- Subtema 6.6: Diagramas vectoriales
-- Subtema 6.7: Centro instantáneo de rotación (CIR)
 
 **TEMA 7: Dinámica del Cuerpo Rígido**
-- Subtema 7.1: Introducción
+- Subtema 7.1: Introducción a la dinámica del cuerpo rígido
 - Subtema 7.2: Resultado de trasladar una fuerza al CM
 - Subtema 7.3: Cupla o par de fuerzas
 - Subtema 7.4: Resultante de un sistema de fuerzas y torques aplicados a un CR
-- Subtema 7.5: Momento cinético de un CR en rotación
-- Subtema 7.6: Cálculo del momento de inercia baricéntrico de un cilindro respecto de un eje perpendicular a su eje de simetría
-- Subtema 7.7: Teorema de Steiner o de los ejes paralelos
 
 **TEMA 8: Dinámica Impulsiva del Cuerpo Rígido**
-- Subtema 8.1: Introducción
+- Subtema 8.1: Introducción a la dinámica impulsiva del cuerpo rígido
 - Subtema 8.2: Centro de percusión
-- Subtema 8.3: Centro de percusión de cuerpos suspendidos
-- Subtema 8.4: Radio de giro baricéntrico
-- Subtema 8.5: Aplicaciones de centro de percusión
 
 **TEMA 9: Hidrodinámica**
 - Subtema 9.1: Discusión de conceptos previos
 - Subtema 9.2: Flujo del fluido ideal
 - Subtema 9.3: Caudal y caudal másico
-- Subtema 9.4: Teorema de continuidad
-- Subtema 9.5: Integración de la ecuación de Euler
-- Subtema 9.6: Tubo de Pitot
 
 **TEMA 10: Ondas Mecánicas**
-- Subtema 10.1: Introducción
+- Subtema 10.1: Introducción a las ondas mecánicas
 - Subtema 10.2: Características del movimiento ondulatorio
 - Subtema 10.3: Clasificación de las ondas
-- Subtema 10.4: La ecuación general del movimiento ondulatorio
-- Subtema 10.5: Soluciones de la ecuación de onda
-- Subtema 10.6: Ondas transversales en una cuerda
-- Subtema 10.7: Ondas longitudinales en una varilla
-- Subtema 10.8: Energía de las ondas: energía cinética y energía elástica
 
 **TEMA 11: Óptica Geométrica**
-- Subtema 11.1: Introducción
+- Subtema 11.1: Introducción a la óptica geométrica
 - Subtema 11.2: Leyes o principio fundamentales de la óptica geométrica
 - Subtema 11.3: Algunas definiciones
-- Subtema 11.4: Fenómeno de reflexión: espejos
-- Subtema 11.5: Espejos planos: formación de imágenes
-- Subtema 11.6: Campo del espejo
-- Subtema 11.7: Reflexión en espejos esféricos
-- Subtema 11.8: Formula de los espejos esféricos
-- Subtema 11.9: Focos
-- Subtema 11.10: Agrandamiento lateral
-- Subtema 11.11: Formación de imágenes en espejos esféricos
 
 **TEMA 12: Óptica Física**
 - Subtema 12.1: Principio de Huygens
 - Subtema 12.2: El concepto de coherencia
 - Subtema 12.3: Interferencia
-- Subtema 12.4: Experiencia de Young
-- Subtema 12.5: Interferencia para 3 fuentes
-- Subtema 12.6: Generalización para n fuentes
-- Subtema 12.7: Intensidad debida a la interferencia de ondas por varias fuentes sincrónicas
-- Subtema 12.8: Difracción
 
 **TEMA 13: Sistemas de Referencia No Inerciales**
-- Subtema 13.1: Introducción
-- Subtema 13.2: Sistemas de referencia no inerciales
+- Subtema 13.1: Introducción a los sistemas de referencia no inerciales
+- Subtema 13.2: Sistemas de referencia acelerados
 
-Espero que esta estructura te sea de ayuda. ¡Si tienes alguna pregunta o necesitas más información, no dudes en preguntar!
+Espero que esta estructura te sea de ayuda. ¡Si necesitas algo más, no dudes en preguntar!

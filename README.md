@@ -140,6 +140,30 @@ graph TD
    - Dashboard de administración para monitorizar los agentes y el inspector del protocolo A2A.
    - Chat interactivo en tiempo real con soporte multimedia (texto, PDF e imágenes).
 
+## 🧠 NAMS: Neo4j Agent Memory System
+
+NAMS es un sistema avanzado de gestión de memoria para agentes inteligentes basado en **Neo4j Aura Cloud DB** y **SentenceTransformers** (ejecutado localmente en CPU). 
+
+Su arquitectura divide la cognición en tres subsistemas clave:
+
+### 1. Memoria a Corto Plazo (Conversacional)
+* **Función**: Almacena cada intercambio de mensajes (User/Assistant) en una estructura de grafo dirigida por `session_id`.
+* **Beneficio**: Permite al orquestador reconstruir el hilo completo del diálogo en formato conversacional nativo y recuperar los últimos mensajes para mantener la coherencia semántica inmediata.
+
+### 2. Memoria a Largo Plazo (Perfil & Preferencias)
+* **Función**: Almacena hechos aprendidos sobre el usuario (nombre, dificultades específicas de aprendizaje, velocidad preferida, etc.) como nodos de entidad vinculados a su usuario único.
+* **Flujo**: Antes de despachar cada nueva consulta a un agente, el orquestador recupera las preferencias almacenadas y las inyecta dinámicamente como directrices contextuales (ej. `"El estudiante prefiere explicaciones matemáticas detalladas, se llama Diego y tiene dificultades en cinemática"`).
+
+### 3. Bucle de Auto-Aprendizaje Asíncrono (Self-Learning)
+* **Proceso**: Al finalizar cada respuesta al usuario, el orquestador dispara una rutina asíncrona en segundo plano:
+  1. Envía el último intercambio al extractor de preferencias (alimentado por Groq LLM).
+  2. Si se detecta un hecho valioso, corrección o dato de perfil, se genera una preferencia.
+  3. La preferencia se vectoriza localmente usando el modelo `BAAI/bge-small-en-v1.5` de `SentenceTransformers` (vector de 384 dimensiones).
+  4. Se persiste el nuevo nodo y vector en la base de datos en grafo Neo4j.
+* **Beneficio**: Este análisis ocurre de manera completamente asíncrona en segundo plano sin añadir un solo milisegundo de latencia a las interacciones de chat en tiempo real del usuario.
+
+---
+
 ## Related Repositories
 
 -   [A2A](https://github.com/a2aproject/A2A) - A2A Specification and documentation.

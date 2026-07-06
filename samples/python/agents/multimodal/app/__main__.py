@@ -43,9 +43,13 @@ async def inicializar_agente_con_pdfs(qdrant_url: str, qdrant_api_key: str, pdf_
     """
     Inicializar agente y procesar PDFs si es la primera vez.
     
+    Usa un archivo marcador local (.pdf_processing_done) para evitar
+    reprocesar PDFs en cada reinicio. El procesamiento solo se ejecuta
+    si: (1) el marcador no existe, Y (2) las colecciones Qdrant no existen.
+    
     Args:
         qdrant_url: URL de Qdrant
-        qdrant_api_key: API Key de Qdrant (CORREGIDO: nombre clave)
+        qdrant_api_key: API Key de Qdrant
         pdf_dir: Directorio con PDFs (opcional)
     
     Returns:
@@ -57,7 +61,21 @@ async def inicializar_agente_con_pdfs(qdrant_url: str, qdrant_api_key: str, pdf_
         qdrant_api_key=qdrant_api_key
     )
     
-    # Verificar si ya existen las colecciones en Qdrant
+    # Directorio del agente (para el archivo marcador)
+    agent_dir = Path(__file__).resolve().parents[1]
+    processing_marker = agent_dir / '.pdf_processing_done'
+    temario_path = agent_dir / 'temario.txt'
+    
+    # ── Check 1: Marcador local ──
+    # Si el procesamiento ya se completó antes, cargar temario y saltar todo
+    if processing_marker.exists() and temario_path.exists():
+        logger.info("✅ PDFs ya procesados anteriormente (marcador local encontrado)")
+        with open(temario_path, "r", encoding="utf-8") as f:
+            executor.agent.temario = f.read()
+        logger.info("✅ Temario cargado desde disco")
+        return executor
+    
+    # ── Check 2: Colecciones en Qdrant ──
     from qdrant_client import AsyncQdrantClient
     client = AsyncQdrantClient(url=qdrant_url, api_key=qdrant_api_key)
     
@@ -67,56 +85,54 @@ async def inicializar_agente_con_pdfs(qdrant_url: str, qdrant_api_key: str, pdf_
         colecciones_existen = True
         logger.info("✅ Colecciones ya existen en Qdrant, saltando procesamiento de PDFs")
         # Intentar cargar temario desde disco
-        if Path("temario.txt").exists():
-            with open("temario.txt", "r", encoding="utf-8") as f:
+        if temario_path.exists():
+            with open(temario_path, "r", encoding="utf-8") as f:
                 executor.agent.temario = f.read()
             logger.info("✅ Temario cargado desde disco")
         else:
             logger.warning("⚠️ No se encontró temario.txt. El agente podría no tener contexto del temario.")
+        # Crear marcador para futuros reinicios
+        processing_marker.touch()
+        return executor
     except Exception as e:
         logger.info(f"⚠️ Colecciones no encontradas: {e}")
         logger.info("🔄 Se procesarán los PDFs")
     
-    # Si no existen colecciones, procesar PDFs
-    if not colecciones_existen:
-        # Obtener directorio de PDFs
-        if pdf_dir is None:
-            # Default: carpeta PDF/ relativa al directorio del agente
-            agent_dir = Path(__file__).resolve().parents[1]
-            pdf_dir = str(agent_dir / 'PDF')
-            logger.info(f"📂 Usando carpeta PDF por defecto: {pdf_dir}")
+    # ── Procesar PDFs ──
+    if pdf_dir is None:
+        pdf_dir = str(agent_dir / 'PDF')
+        logger.info(f"📂 Usando carpeta PDF por defecto: {pdf_dir}")
+    
+    pdf_path = Path(pdf_dir)
+    logger.info(f"📂 Buscando PDFs en: {pdf_path.absolute()}")
+    
+    if pdf_path.exists():
+        pdf_files = list(pdf_path.glob("arch*.pdf"))
+        if not pdf_files:
+            pdf_files = list(pdf_path.glob("*.pdf"))
         
-        pdf_path = Path(pdf_dir)
-        logger.info(f"📂 Buscando PDFs en: {pdf_path.absolute()}")
+        pdf_files = [str(f) for f in pdf_files]
         
-        # Buscar PDFs
-        if pdf_path.exists():
-            # Opción 1: Buscar arch*.pdf
-            pdf_files = list(pdf_path.glob("arch*.pdf"))
+        if pdf_files:
+            logger.info(f"📚 Encontrados {len(pdf_files)} archivos PDF:")
+            for f in pdf_files:
+                logger.info(f"   • {Path(f).name}")
             
-            # Opción 2: Si no hay arch*.pdf, buscar todos los PDFs
-            if not pdf_files:
-                pdf_files = list(pdf_path.glob("*.pdf"))
+            logger.info("🔄 Procesando PDFs y extrayendo temario...")
+            temario = await executor.agent.procesar_y_almacenar_pdfs(pdf_files)
             
-            pdf_files = [str(f) for f in pdf_files]
+            logger.info(f"✅ PDFs procesados y temario extraído")
+            logger.info(f"📋 Temario preview:\n{temario[:500]}...\n")
             
-            if pdf_files:
-                logger.info(f"📚 Encontrados {len(pdf_files)} archivos PDF:")
-                for f in pdf_files:
-                    logger.info(f"   • {Path(f).name}")
-                
-                # Procesar PDFs (esto también extrae el temario)
-                logger.info("🔄 Procesando PDFs y extrayendo temario...")
-                temario = await executor.agent.procesar_y_almacenar_pdfs(pdf_files)
-                
-                logger.info(f"✅ PDFs procesados y temario extraído")
-                logger.info(f"📋 Temario preview:\n{temario[:500]}...\n")
-            else:
-                logger.warning(f"⚠️ No se encontraron archivos PDF en {pdf_dir}")
-                logger.info("💡 El agente funcionará sin documentos pre-cargados")
+            # Crear marcador de procesamiento completado
+            processing_marker.touch()
+            logger.info("✅ Marcador de procesamiento creado (.pdf_processing_done)")
         else:
-            logger.warning(f"⚠️ Directorio de PDFs no existe: {pdf_dir}")
-            logger.info("💡 Configura PDF_DIR en .env o el agente funcionará sin documentos")
+            logger.warning(f"⚠️ No se encontraron archivos PDF en {pdf_dir}")
+            logger.info("💡 El agente funcionará sin documentos pre-cargados")
+    else:
+        logger.warning(f"⚠️ Directorio de PDFs no existe: {pdf_dir}")
+        logger.info("💡 Configura PDF_DIR en .env o el agente funcionará sin documentos")
     
     return executor
 
