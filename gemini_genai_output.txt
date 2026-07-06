@@ -1,3 +1,0 @@
-Import successful.
-Client initialized.
-Response: OK

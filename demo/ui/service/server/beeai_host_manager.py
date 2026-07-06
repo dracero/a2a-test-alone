@@ -846,13 +846,33 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                         raw_text = str(ctx)
                         # Filter out lines that look like chat history to avoid duplicates
                         # (the agent already tracks this via SemanticMemory.chat_history)
+                        ignore_headers = (
+                            '## conversation history',
+                            '### relevant past messages',
+                            'conversation history',
+                            'relevant past messages'
+                        )
                         filtered_lines = []
+                        in_chat_history_section = False
                         for line in raw_text.split('\n'):
-                            line_lower = line.strip().lower()
+                            line_stripped = line.strip()
+                            line_lower = line_stripped.lower()
+                            if not line_lower:
+                                continue
+                            if any(h in line_lower for h in ignore_headers):
+                                in_chat_history_section = True
+                                continue
+                            if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
+                                in_chat_history_section = False
+                                continue
+                            if in_chat_history_section:
+                                continue
                             # Skip lines that look like short-term chat messages
                             if any(line_lower.startswith(prefix) for prefix in [
                                 'user:', 'assistant:', 'human:', 'ai:',
                                 'usuario:', 'asistente:', 'q:', 'a:',
+                                '- [user]', '- [assistant]', '- [human]', '- [ai]',
+                                '- [usuario]', '- [asistente]'
                             ]):
                                 continue
                             filtered_lines.append(line)
@@ -1059,9 +1079,9 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
 
 Determina si el usuario está expresando:
 1. Alguna preferencia personal persistente, hábito, interés, su nombre, o algún dato biográfico relevante (por ejemplo: le gustan las explicaciones socráticas, se llama Diego, estudia ingeniería, prefiere respuestas cortas, etc.).
-2. Una corrección o aclaración de datos o conceptos físicos/matemáticos que rectifique o enmiende afirmaciones previas (por ejemplo: "la gravedad es 9.8, no 10", "Diego estudia física en la UBA", "ese cálculo da 40", "el ángulo es de 30 grados").
+2. Una corrección, conclusión de aprendizaje o aclaración de conceptos físicos/matemáticos que rectifique afirmaciones previas o represente una lección aprendida (por ejemplo: "la fuerza de rozamiento en rodadura no es μ·N", "la cantidad de movimiento no se conserva si hay fuerzas externas", "la gravedad es 9.8, no 10").
 
-Si encuentras alguna preferencia, dato relevante o corrección, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El usuario aclaró o corrigió que la aceleración de la gravedad debe considerarse como 9.8 m/s²").
+Si encuentras alguna preferencia, dato relevante, conclusión o corrección, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El usuario concluyó que la fuerza de rozamiento en un cuerpo rígido que rueda sin deslizar se calcula con las ecuaciones de movimiento y la rodadura, no como μ·N").
 Si no encuentras nada relevante o es solo una pregunta general de paso, responde únicamente con la palabra "NONE".
 
 Responde en el formato:

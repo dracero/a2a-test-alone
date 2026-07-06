@@ -108,6 +108,9 @@ class ConversationServer:
         app.add_api_route(
             '/api_key/update', self._update_api_key, methods=['POST']
         )
+        app.add_api_route(
+            '/nams/conclusions', self._nams_conclusions, methods=['POST']
+        )
 
     def update_api_key(self, api_key: str):
         if isinstance(self.manager, ADKHostManager):
@@ -333,3 +336,27 @@ class ConversationServer:
             return {'status': 'error', 'message': 'No API key provided'}
         except Exception as e:
             return {'status': 'error', 'message': str(e)}
+
+    async def _nams_conclusions(self):
+        """Fetch all user preferences/conclusions from NAMS"""
+        if not hasattr(self.manager, 'neo4j_memory') or not self.manager.neo4j_memory:
+            return {'status': 'inactive', 'conclusions': []}
+            
+        try:
+            await self.manager._ensure_neo4j_connected()
+            if getattr(self.manager, '_neo4j_connected', False):
+                prefs = await self.manager.neo4j_memory.long_term.get_preferences_by_category('user_preference')
+                conclusions = []
+                for p in prefs:
+                    if hasattr(p, 'preference'):
+                        conclusions.append(p.preference)
+                    elif isinstance(p, dict) and 'preference' in p:
+                        conclusions.append(p['preference'])
+                    else:
+                        conclusions.append(str(p))
+                return {'status': 'active', 'conclusions': conclusions}
+            else:
+                return {'status': 'inactive', 'conclusions': []}
+        except Exception as e:
+            print(f"Error fetching NAMS conclusions: {e}")
+            return {'status': 'error', 'message': str(e), 'conclusions': []}

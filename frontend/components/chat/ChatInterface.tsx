@@ -5,7 +5,13 @@ import { chatAPI, Message, Part, Conversation } from '@/lib/api';
 import { MessageBubble } from './MessageBubble';
 import { MessageInput } from './MessageInput';
 import { Button } from '@/components/ui/button';
-import { Loader2, Plus, MessageSquare } from 'lucide-react';
+import { Loader2, Plus, MessageSquare, Brain } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -22,8 +28,29 @@ export function ChatInterface() {
   const [isSending, setIsSending] = useState(false);
   const [isCreatingChat, setIsCreatingChat] = useState(false);
   const [allConversations, setAllConversations] = useState<Conversation[]>([]);
+  const [isNamsOpen, setIsNamsOpen] = useState(false);
+  const [namsConclusions, setNamsConclusions] = useState<string[]>([]);
+  const [isLoadingNams, setIsLoadingNams] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleOpenNams = async () => {
+    setIsNamsOpen(true);
+    setIsLoadingNams(true);
+    try {
+      const response = await chatAPI.getNamsConclusions();
+      if (response.status === 'active') {
+        setNamsConclusions(response.conclusions);
+      } else {
+        setNamsConclusions([]);
+      }
+    } catch (error) {
+      console.error('Failed to fetch NAMS conclusions:', error);
+      setNamsConclusions([]);
+    } finally {
+      setIsLoadingNams(false);
+    }
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -358,6 +385,15 @@ export function ChatInterface() {
             )}
             New Chat
           </Button>
+
+          <Button
+            onClick={handleOpenNams}
+            variant="outline"
+            className="gap-2 border-purple-200 text-purple-700 hover:bg-purple-50 hover:text-purple-800"
+          >
+            <Brain className="h-4 w-4" />
+            Memoria NAMS
+          </Button>
         </div>
       </header>
 
@@ -403,6 +439,52 @@ export function ChatInterface() {
       </div>
 
       <MessageInput onSend={handleSendMessage} disabled={isSending} />
+
+      <Dialog open={isNamsOpen} onOpenChange={setIsNamsOpen}>
+        <DialogContent className="max-w-2xl bg-white sm:rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl font-bold text-purple-900 border-b pb-2">
+              <Brain className="h-6 w-6 text-purple-600 animate-pulse" />
+              Conclusiones y Hechos en NAMS
+            </DialogTitle>
+          </DialogHeader>
+          <div className="mt-4 space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+            {isLoadingNams ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-purple-600 mb-2" />
+                <p className="text-sm text-slate-500 font-medium">Consultando base de datos de grafos Neo4j Aura DB...</p>
+              </div>
+            ) : namsConclusions.length === 0 ? (
+              <div className="text-center py-12 px-4 rounded-xl border border-dashed border-slate-200 bg-slate-50/50">
+                <Brain className="h-10 w-10 text-slate-400 mx-auto mb-2 stroke-1" />
+                <p className="font-semibold text-slate-700 text-sm">No se han registrado conclusiones aún</p>
+                <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                  A medida que hables con el Tutor de Física, el extractor asíncrono en segundo plano identificará tus correcciones y aprendizajes de forma automática.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                  Memoria a largo plazo ({namsConclusions.length} registros cargados):
+                </p>
+                <ul className="space-y-2.5">
+                  {namsConclusions.map((conclusion, idx) => (
+                    <li 
+                      key={idx} 
+                      className="p-4 rounded-xl border border-purple-100 bg-purple-50/40 text-slate-700 text-sm leading-relaxed flex items-start gap-3 shadow-sm hover:border-purple-200 hover:bg-purple-50 transition-all duration-200"
+                    >
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-purple-100 text-[11px] font-bold text-purple-700 mt-0.5">
+                        {idx + 1}
+                      </span>
+                      <p className="flex-1">{conclusion}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

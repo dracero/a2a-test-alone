@@ -666,16 +666,44 @@ Contenido:
             'user:', 'assistant:', 'human:', 'ai:',
             'usuario:', 'asistente:', 'q:', 'a:',
             'pregunta:', 'respuesta:',
+            '- [user]', '- [assistant]', '- [human]', '- [ai]',
+            '- [usuario]', '- [asistente]'
+        )
+        
+        # Secciones completas a ignorar
+        ignore_headers = (
+            '## conversation history',
+            '### relevant past messages',
+            'conversation history',
+            'relevant past messages'
         )
         
         filtered_lines = []
+        in_chat_history_section = False
+        
         for line in nams_context.split('\n'):
-            line_lower = line.strip().lower()
+            line_stripped = line.strip()
+            line_lower = line_stripped.lower()
             if not line_lower:
                 continue
-            # Saltar líneas que parecen historial de chat
+                
+            # Detectar si entramos a una sección de historial de conversación
+            if any(h in line_lower for h in ignore_headers):
+                in_chat_history_section = True
+                continue
+                
+            # Si entramos en la sección de conocimiento relevante o preferencias, desactivar el ignore
+            if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
+                in_chat_history_section = False
+                continue
+                
+            if in_chat_history_section:
+                continue
+                
+            # Saltar líneas que parecen historial de chat individual
             if any(line_lower.startswith(prefix) for prefix in chat_prefixes):
                 continue
+                
             filtered_lines.append(line)
         
         result = '\n'.join(filtered_lines).strip()
@@ -684,6 +712,7 @@ Contenido:
             result = result[:max_len] + '\n[... truncado]'
         
         return result
+
     
     def _get_or_create_memory(self, context_id: str) -> SemanticMemory:
         if context_id not in self.memories:
@@ -999,14 +1028,14 @@ Reglas:
         if demos:
             system_prompt += demos
         
-        # Inyectar contexto NAMS como fondo de baja prioridad (solo preferencias)
+        # Inyectar contexto NAMS (hechos, conclusiones de aprendizaje y preferencias del usuario)
         sanitized_nams = self._sanitize_nams_context(nams_context)
         if sanitized_nams:
             system_prompt += (
-                f"\n\n--- CONTEXTO DE FONDO (baja prioridad) ---\n"
-                f"Las siguientes son preferencias del usuario almacenadas previamente. "
-                f"Úsalas SOLO si son directamente relevantes a la consulta actual. "
-                f"NUNCA bases tu respuesta principal en este contexto.\n"
+                f"\n\n--- CONOCIMIENTO Y PREFERENCIAS APRENDIDAS (NAMS) ---\n"
+                f"IMPORTANTE: Las siguientes son hechos, conclusiones de aprendizaje y preferencias que el estudiante ha establecido o corregido previamente en NAMS. "
+                f"Debes respetar estas conclusiones y aplicarlas directamente en tu explicación si se relacionan con el tema tratado. "
+                f"Por ejemplo, si hay una conclusión sobre cómo calcular la fuerza de rozamiento en rodadura, incorpórala de forma prioritaria y coherente en tu respuesta:\n"
                 f"{sanitized_nams}"
             )
         
@@ -1150,13 +1179,14 @@ Formato de respuesta:
         if demos:
             system_prompt += demos
         
-        # Inyectar contexto NAMS como fondo de baja prioridad (solo preferencias)
+        # Inyectar contexto NAMS (hechos, conclusiones de aprendizaje y preferencias del usuario)
         sanitized_nams = self._sanitize_nams_context(nams_context)
         if sanitized_nams:
             system_prompt += (
-                f"\n\n--- CONTEXTO DE FONDO (baja prioridad) ---\n"
-                f"Preferencias del usuario almacenadas previamente. "
-                f"Úsalas SOLO si son relevantes a la consulta actual.\n"
+                f"\n\n--- CONOCIMIENTO Y PREFERENCIAS APRENDIDAS (NAMS) ---\n"
+                f"IMPORTANTE: Las siguientes son hechos, conclusiones de aprendizaje y preferencias que el estudiante ha establecido o corregido previamente en NAMS. "
+                f"Debes respetar estas conclusiones y aplicarlas directamente en tu explicación si se relacionan con el tema tratado. "
+                f"Por ejemplo, si hay una conclusión sobre cómo calcular la fuerza de rozamiento en rodadura, incorpórala de forma prioritaria y coherente en tu respuesta:\n"
                 f"{sanitized_nams}"
             )
         
@@ -1242,13 +1272,14 @@ Reglas:
         if demos:
             system_prompt += demos
         
-        # Inyectar contexto NAMS como fondo de baja prioridad (solo preferencias)
+        # Inyectar contexto NAMS (hechos, conclusiones de aprendizaje y preferencias del usuario)
         sanitized_nams = self._sanitize_nams_context(nams_context)
         if sanitized_nams:
             system_prompt += (
-                f"\n\n--- CONTEXTO DE FONDO (baja prioridad) ---\n"
-                f"Preferencias del usuario almacenadas previamente. "
-                f"Úsalas SOLO si son relevantes a la consulta actual.\n"
+                f"\n\n--- CONOCIMIENTO Y PREFERENCIAS APRENDIDAS (NAMS) ---\n"
+                f"IMPORTANTE: Las siguientes son hechos, conclusiones de aprendizaje y preferencias que el estudiante ha establecido o corregido previamente en NAMS. "
+                f"Debes respetar estas conclusiones y aplicarlas directamente en tu explicación si se relacionan con el tema tratado. "
+                f"Por ejemplo, si hay una conclusión sobre cómo calcular la fuerza de rozamiento en rodadura, incorpórala de forma prioritaria y coherente en tu respuesta:\n"
                 f"{sanitized_nams}"
             )
         

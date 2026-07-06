@@ -41,17 +41,11 @@ const nextConfig = {
         source: '/api_key/:path*',
         destination: 'http://127.0.0.1:12000/api_key/:path*',
       },
-    ];
-  },
-  images: {
-    remotePatterns: [
       {
-        protocol: 'http',
-        hostname: 'localhost',
-        port: '12000',
-        pathname: '/message/file/**',
+        source: '/nams/:path*',
+        destination: 'http://127.0.0.1:12000/nams/:path*',
       },
-    ],
+    ];
   },
 };
 
