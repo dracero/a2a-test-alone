@@ -113,7 +113,41 @@ export const chatAPI = {
     });
   },
 
-  getNamsConclusions: async (): Promise<{ status: string; conclusions: string[]; message?: string }> => {
-    return postJSON<{ status: string; conclusions: string[]; message?: string }>('/nams/conclusions');
+  updateConversationName: async (conversationId: string, name: string): Promise<{ status: string }> => {
+    return postJSON<{ status: string }>('/conversation/update', {
+      conversation_id: conversationId,
+      name: name,
+    });
+  },
+
+  correctAgent: async (studentId: string, tema: string, correccion: string): Promise<{ status: string }> => {
+    const response = await fetch('/correct', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Role': 'profesor',
+      },
+      body: JSON.stringify({
+        student_id: studentId,
+        tema: tema,
+        correccion: correccion,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    return response.json() as Promise<{ status: string }>;
+  },
+
+  getNamsConclusions: async (
+    studentId?: string,
+    conversationId?: string
+  ): Promise<{ status: string; conclusions: string[]; deficiencies: string[]; message?: string }> => {
+    return postJSON<{ status: string; conclusions: string[]; deficiencies: string[]; message?: string }>('/nams/conclusions', {
+      student_id: studentId,
+      conversation_id: conversationId,
+    });
   },
 };

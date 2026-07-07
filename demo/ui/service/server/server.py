@@ -46,6 +46,19 @@ class RegisterAgentBody(BaseModel):
 class UpdateApiKeyBody(BaseModel):
     api_key: str
 
+class UpdateConversationBody(BaseModel):
+    conversation_id: str
+    name: str
+
+class CorrectBody(BaseModel):
+    student_id: str
+    tema: str
+    correccion: str
+
+class NamsConclusionsBody(BaseModel):
+    student_id: str | None = None
+    conversation_id: str | None = None
+
 # --- FIN DE MODELOS ---
 
 class ConversationServer:
@@ -110,6 +123,12 @@ class ConversationServer:
         )
         app.add_api_route(
             '/nams/conclusions', self._nams_conclusions, methods=['POST']
+        )
+        app.add_api_route(
+            '/conversation/update', self._update_conversation, methods=['POST']
+        )
+        app.add_api_route(
+            '/correct', self._correct_agent, methods=['POST']
         )
 
     def update_api_key(self, api_key: str):
@@ -337,26 +356,72 @@ class ConversationServer:
         except Exception as e:
             return {'status': 'error', 'message': str(e)}
 
-    async def _nams_conclusions(self):
-        """Fetch all user preferences/conclusions from NAMS"""
+    async def _nams_conclusions(self, body: NamsConclusionsBody):
+        """Fetch all user preferences/conclusions and deficiencies from NAMS for a student"""
         if not hasattr(self.manager, 'neo4j_memory') or not self.manager.neo4j_memory:
-            return {'status': 'inactive', 'conclusions': []}
+            return {'status': 'inactive', 'conclusions': [], 'deficiencies': []}
             
         try:
             await self.manager._ensure_neo4j_connected()
             if getattr(self.manager, '_neo4j_connected', False):
-                prefs = await self.manager.neo4j_memory.long_term.get_preferences_by_category('user_preference')
-                conclusions = []
-                for p in prefs:
-                    if hasattr(p, 'preference'):
-                        conclusions.append(p.preference)
-                    elif isinstance(p, dict) and 'preference' in p:
-                        conclusions.append(p['preference'])
+                student_id = body.student_id
+                if not student_id and body.conversation_id:
+                    conv = self.manager.get_conversation(body.conversation_id)
+                    if conv:
+                        student_id = conv.name or body.conversation_id
                     else:
-                        conclusions.append(str(p))
-                return {'status': 'active', 'conclusions': conclusions}
+                        student_id = body.conversation_id
+                
+                if not student_id:
+                    return {'status': 'active', 'conclusions': [], 'deficiencies': []}
+
+                print(f"🔍 Fetching preferences and deficiencies for user_identifier '{student_id}'")
+                prefs = await self.manager.neo4j_memory.long_term.get_preferences_for(student_id)
+                
+                conclusions = []
+                deficiencies = []
+                for p in prefs:
+                    pref_str = p.preference if hasattr(p, 'preference') else (p.get('preference', str(p)) if isinstance(p, dict) else str(p))
+                    cat = p.category if hasattr(p, 'category') else (p.get('category', '') if isinstance(p, dict) else '')
+                    
+                    if cat == "falencia":
+                        deficiencies.append(pref_str)
+                    else:
+                        conclusions.append(pref_str)
+                        
+                return {
+                    'status': 'active', 
+                    'conclusions': conclusions, 
+                    'deficiencies': deficiencies
+                }
             else:
-                return {'status': 'inactive', 'conclusions': []}
+                return {'status': 'inactive', 'conclusions': [], 'deficiencies': []}
         except Exception as e:
             print(f"Error fetching NAMS conclusions: {e}")
-            return {'status': 'error', 'message': str(e), 'conclusions': []}
+            return {'status': 'error', 'message': str(e), 'conclusions': [], 'deficiencies': []}
+
+    async def _update_conversation(self, body: UpdateConversationBody):
+        conversation = self.manager.get_conversation(body.conversation_id)
+        if conversation:
+            conversation.name = body.name
+            if hasattr(self.manager, '_save_conversations'):
+                self.manager._save_conversations()
+            return {'status': 'success'}
+        return {'status': 'error', 'message': 'Conversation not found'}
+
+    async def _correct_agent(self, body: CorrectBody, request: Request):
+        role = request.headers.get("X-Role", "alumno")
+        if role != "profesor":
+            return Response(status_code=403, content="Only professors can submit corrections.")
+            
+        if hasattr(self.manager, 'add_deficiency'):
+            success = await self.manager.add_deficiency(
+                student_id=body.student_id,
+                tema=body.tema,
+                correccion=body.correccion
+            )
+            if success:
+                return {'status': 'success'}
+            else:
+                return {'status': 'error', 'message': 'Failed to save deficiency in database'}
+        return {'status': 'error', 'message': 'Manager does not support deficiencies'}

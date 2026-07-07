@@ -840,8 +840,9 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             await self._ensure_neo4j_connected()
             if getattr(self, '_neo4j_connected', False):
                 try:
-                    print(f"🧠 Querying Neo4j Agent Memory for context (session_id={context_id})...")
-                    ctx = await self.neo4j_memory.get_context(text_content, session_id=context_id)
+                    student_id = conversation.name or context_id
+                    print(f"🧠 Querying student NAMS context for student '{student_id}' (session_id={context_id})...")
+                    ctx = await self.get_student_context(text_content, student_id=student_id, session_id=context_id)
                     if ctx:
                         raw_text = str(ctx)
                         # Filter out lines that look like chat history to avoid duplicates
@@ -1065,6 +1066,144 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
         if message.message_id in self._pending_message_ids:
             self._pending_message_ids.remove(message.message_id)
 
+    async def get_student_context(self, query: str, student_id: str, session_id: str, max_items: int = 10) -> str:
+        """Get combined context from memory, but filter long-term preferences strictly by student_id."""
+        parts = []
+
+        # 1. Short-term memory (session-scoped conversation history)
+        short_term_context = await self.neo4j_memory.short_term.get_context(
+            query,
+            session_id=session_id,
+            max_messages=max_items,
+        )
+        if short_term_context:
+            parts.append(f"## Conversation History\n{short_term_context}")
+
+        # 2. Long-term memory - filtered strictly to user_identifier = student_id
+        embedding = None
+        if self.neo4j_memory.long_term._embedder is not None:
+            try:
+                embedding = await self.neo4j_memory.long_term._embedder.embed(query)
+            except Exception as e:
+                print(f"⚠️ Error generating embedding for student context search: {e}")
+
+        preferences = []
+        if embedding is not None:
+            try:
+                # Custom cypher query to enforce User relationship
+                cypher_query = """
+                CALL db.index.vector.queryNodes('preference_embedding_idx', $limit, $embedding)
+                YIELD node, score
+                WHERE score >= $threshold
+                MATCH (u:User {identifier: $user_identifier})-[:HAS_PREFERENCE]->(node)
+                RETURN node AS p, score
+                ORDER BY score DESC
+                """
+                results = await self.neo4j_memory.long_term._client.execute_read(
+                    cypher_query,
+                    {
+                        "embedding": embedding,
+                        "limit": max_items,
+                        "threshold": 0.7,
+                        "user_identifier": student_id
+                    }
+                )
+                for row in results:
+                    pref_data = dict(row["p"])
+                    pref = self.neo4j_memory.long_term._parse_preference(pref_data)
+                    preferences.append(pref)
+            except Exception as e:
+                print(f"⚠️ Vector search failed, falling back to direct preference query: {e}")
+
+        # Fallback: if vector search failed or returned nothing, fetch student preferences directly
+        if not preferences:
+            try:
+                preferences = await self.neo4j_memory.long_term.get_preferences_for(student_id)
+            except Exception as e:
+                print(f"⚠️ Failed to fetch preferences for user {student_id}: {e}")
+
+        if preferences:
+            parts.append("## Relevant Knowledge")
+            for pref in preferences:
+                line = f"- [{pref.category}] {pref.preference}"
+                if pref.context:
+                    line += f" (context: {pref.context})"
+                parts.append(line)
+
+        # 3. Entities
+        try:
+            entities = await self.neo4j_memory.long_term.search_entities(query, limit=max_items)
+            if entities:
+                entity_parts = []
+                for entity in entities:
+                    type_str = entity.full_type
+                    line = f"- {entity.display_name} ({type_str})"
+                    if entity.description:
+                        line += f": {entity.description}"
+                    entity_parts.append(line)
+                if entity_parts:
+                    parts.append("## Relevant Entities\n" + "\n".join(entity_parts))
+        except Exception as e:
+            print(f"⚠️ Failed to search entities: {e}")
+
+        return "\n\n".join(parts)
+
+    async def add_deficiency(self, student_id: str, tema: str, correccion: str):
+        """Save a deficiency verified by the teacher both semantically and structurally in Neo4j."""
+        if not self.neo4j_memory:
+            print("⚠️ Neo4j Memory Client not initialized. Cannot save deficiency.")
+            return False
+
+        try:
+            await self._ensure_neo4j_connected()
+            if not getattr(self, '_neo4j_connected', False):
+                print("❌ Neo4j not connected. Cannot save deficiency.")
+                return False
+
+            # 1. Save semantically as a Preference node scoped to the student
+            pref_text = f"El alumno tiene una falencia en '{tema}': {correccion}"
+            await self.neo4j_memory.long_term.add_preference(
+                category="falencia",
+                preference=pref_text,
+                user_identifier=student_id
+            )
+            print(f"✅ Saved semantic deficiency preference for student '{student_id}'")
+
+            # 2. Save structurally as custom entities and relationships
+            # Get or create the Student entity
+            student_entity, _ = await self.neo4j_memory.long_term.add_entity(
+                name=student_id,
+                entity_type="Student",
+                description=f"Perfil del estudiante {student_id}",
+                resolve=False,
+                deduplicate=True
+            )
+
+            # Get or create the Concept entity
+            concept_entity, _ = await self.neo4j_memory.long_term.add_entity(
+                name=tema,
+                entity_type="Concept",
+                description=f"Concepto de física: {tema}",
+                resolve=False,
+                deduplicate=True
+            )
+
+            # Add TIENE_FALENCIA relationship between Student and Concept
+            await self.neo4j_memory.long_term.add_relationship(
+                source=student_entity.id,
+                target=concept_entity.id,
+                relationship_type="TIENE_FALENCIA",
+                description=correccion
+            )
+            print(f"✅ Saved structural relationship (Student {student_id}) -[:TIENE_FALENCIA]-> (Concept {tema})")
+            return True
+
+        except Exception as e:
+            print(f"❌ Error adding deficiency: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     async def _learn_user_preferences(self, user_message: str, context_id: str):
         """Extract and persist user preferences and facts to Neo4j Agent Memory in background."""
         if not self.neo4j_memory or not user_message:
@@ -1077,12 +1216,12 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             prompt = f"""Analiza el siguiente mensaje enviado por un usuario:
 "{user_message}"
 
-Determina si el usuario está expresando:
-1. Alguna preferencia personal persistente, hábito, interés, su nombre, o algún dato biográfico relevante (por ejemplo: le gustan las explicaciones socráticas, se llama Diego, estudia ingeniería, prefiere respuestas cortas, etc.).
-2. Una corrección, conclusión de aprendizaje o aclaración de conceptos físicos/matemáticos que rectifique afirmaciones previas o represente una lección aprendida (por ejemplo: "la fuerza de rozamiento en rodadura no es μ·N", "la cantidad de movimiento no se conserva si hay fuerzas externas", "la gravedad es 9.8, no 10").
+Determina si el usuario está expresando alguna preferencia personal persistente, hábito, estilo de comunicación preferido o dato biográfico relevante (por ejemplo: prefiere respuestas cortas, le gustan las explicaciones con analogías, se llama Diego, estudia ingeniería, etc.).
 
-Si encuentras alguna preferencia, dato relevante, conclusión o corrección, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El usuario concluyó que la fuerza de rozamiento en un cuerpo rígido que rueda sin deslizar se calcula con las ecuaciones de movimiento y la rodadura, no como μ·N").
-Si no encuentras nada relevante o es solo una pregunta general de paso, responde únicamente con la palabra "NONE".
+IMPORTANTE: No extraigas conclusiones de aprendizaje, correcciones ni conceptos físicos o matemáticos (por ejemplo, NO extraigas afirmaciones sobre leyes físicas, fórmulas o resolución de problemas). Solo debes extraer preferencias de estilo, formato o datos personales.
+
+Si encuentras alguna preferencia o dato relevante, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El usuario prefiere respuestas concisas").
+Si no encuentras nada relevante o es una pregunta general, responde únicamente con la palabra "NONE".
 
 Responde en el formato:
 Preferencia: <frase corta>
@@ -1106,12 +1245,15 @@ Preferencia: <frase corta>
                 elif line.strip() and line.strip().upper() != "NONE":
                     preferences.append(line.strip())
             
+            conversation = self.get_conversation(context_id)
+            student_id = conversation.name or context_id if conversation else context_id
             for pref in preferences:
-                print(f"💾 Self-learning: Extracted preference -> '{pref}'")
+                print(f"💾 Self-learning: Extracted preference -> '{pref}' for student '{student_id}'")
                 # Store preference in Neo4j Long-Term memory
                 await self.neo4j_memory.long_term.add_preference(
                     category="user_preference",
-                    preference=pref
+                    preference=pref,
+                    user_identifier=student_id
                 )
                 print(f"✅ Preference persisted in Neo4j Graph")
                 

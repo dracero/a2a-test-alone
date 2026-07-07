@@ -12,9 +12,11 @@ import { GraduationCap, BookOpen, XCircle } from 'lucide-react';
 interface MessageBubbleProps {
   message: Message;
   onSend?: (text: string) => Promise<void>;
+  isProfesor?: boolean;
+  onCorrect?: (message: Message) => void;
 }
 
-export function MessageBubble({ message, onSend }: MessageBubbleProps) {
+export function MessageBubble({ message, onSend, isProfesor, onCorrect }: MessageBubbleProps) {
   const isUser = message.role === 'user';
 
   return (
@@ -51,6 +53,20 @@ export function MessageBubble({ message, onSend }: MessageBubbleProps) {
           ))
         ) : (
           <p className="text-sm text-red-500">No content</p>
+        )}
+
+        {!isUser && isProfesor && onCorrect && (
+          <div className="flex justify-end mt-2 pt-2 border-t border-slate-200">
+            <Button
+              onClick={() => onCorrect(message)}
+              variant="outline"
+              size="sm"
+              className="text-purple-600 border-purple-200 hover:bg-purple-50 text-xs px-2.5 py-1 h-auto font-medium rounded-lg flex items-center gap-1.5"
+            >
+              <GraduationCap className="h-3.5 w-3.5" />
+              Corregir Agente / Registrar Falencia
+            </Button>
+          </div>
         )}
       </div>
     </div>

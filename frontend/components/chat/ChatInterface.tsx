@@ -5,7 +5,7 @@ import { chatAPI, Message, Part, Conversation } from '@/lib/api';
 import { MessageBubble } from './MessageBubble';
 import { MessageInput } from './MessageInput';
 import { Button } from '@/components/ui/button';
-import { Loader2, Plus, MessageSquare, Brain } from 'lucide-react';
+import { Loader2, Plus, MessageSquare, Brain, GraduationCap } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -19,6 +19,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 export function ChatInterface() {
@@ -34,21 +36,100 @@ export function ChatInterface() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
+  // New state variables
+  const [role, setRole] = useState<'alumno' | 'profesor'>('alumno');
+  const [studentName, setStudentName] = useState<string>('');
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+  const [namsDeficiencies, setNamsDeficiencies] = useState<string[]>([]);
+
+  // Correction state variables
+  const [isCorrectOpen, setIsCorrectOpen] = useState(false);
+  const [selectedMessageToCorrect, setSelectedMessageToCorrect] = useState<Message | null>(null);
+  const [correctTema, setCorrectTema] = useState('');
+  const [correctExplanation, setCorrectExplanation] = useState('');
+  const [isSubmittingCorrection, setIsSubmittingCorrection] = useState(false);
+
+  // Sync student name when conversationId or allConversations change
+  useEffect(() => {
+    if (conversationId && allConversations.length > 0) {
+      const activeConv = allConversations.find(c => c.conversation_id === conversationId);
+      if (activeConv) {
+        setStudentName(activeConv.name || '');
+        setNameInput(activeConv.name || '');
+      }
+    }
+  }, [conversationId, allConversations]);
+
   const handleOpenNams = async () => {
     setIsNamsOpen(true);
     setIsLoadingNams(true);
     try {
-      const response = await chatAPI.getNamsConclusions();
+      const activeConv = allConversations.find(c => c.conversation_id === conversationId);
+      const studentId = studentName || activeConv?.name || conversationId;
+      const response = await chatAPI.getNamsConclusions(studentId, conversationId);
       if (response.status === 'active') {
-        setNamsConclusions(response.conclusions);
+        setNamsConclusions(response.conclusions || []);
+        setNamsDeficiencies(response.deficiencies || []);
       } else {
         setNamsConclusions([]);
+        setNamsDeficiencies([]);
       }
     } catch (error) {
       console.error('Failed to fetch NAMS conclusions:', error);
       setNamsConclusions([]);
+      setNamsDeficiencies([]);
     } finally {
       setIsLoadingNams(false);
+    }
+  };
+
+  const handleSaveStudentName = async () => {
+    if (!conversationId || !nameInput.trim()) return;
+    try {
+      await chatAPI.updateConversationName(conversationId, nameInput.trim());
+      setStudentName(nameInput.trim());
+      setIsEditingName(false);
+      setAllConversations(prev =>
+        prev.map(c =>
+          c.conversation_id === conversationId ? { ...c, name: nameInput.trim() } : c
+        )
+      );
+    } catch (error) {
+      console.error('Failed to update student name:', error);
+    }
+  };
+
+  const handleOpenCorrectModal = (message: Message) => {
+    setSelectedMessageToCorrect(message);
+    setCorrectTema('');
+    setCorrectExplanation('');
+    setIsCorrectOpen(true);
+  };
+
+  const handleSubmitCorrection = async () => {
+    const activeConv = allConversations.find(c => c.conversation_id === conversationId);
+    const studentId = studentName || activeConv?.name || conversationId;
+    if (!studentId || !correctTema.trim() || !correctExplanation.trim()) return;
+    
+    setIsSubmittingCorrection(true);
+    try {
+      const response = await chatAPI.correctAgent(
+        studentId,
+        correctTema.trim(),
+        correctExplanation.trim()
+      );
+      if (response.status === 'success') {
+        setIsCorrectOpen(false);
+        alert('Corrección guardada con éxito como falencia del alumno.');
+      } else {
+        alert('Error al guardar corrección.');
+      }
+    } catch (error) {
+      console.error('Failed to submit correction:', error);
+      alert('Error de red al guardar la corrección.');
+    } finally {
+      setIsSubmittingCorrection(false);
     }
   };
 
@@ -346,12 +427,77 @@ export function ChatInterface() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Selector de Rol */}
+          <Select
+            value={role}
+            onValueChange={(val: any) => setRole(val)}
+          >
+            <SelectTrigger className="w-[145px] font-semibold text-slate-700 border-slate-200">
+              <SelectValue placeholder="Rol" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="alumno">👨‍🎓 Alumno</SelectItem>
+              <SelectItem value="profesor">👩‍🏫 Profesor</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Nombre de Estudiante (Edición / Visualización) */}
+          {role === 'alumno' ? (
+            <div className="flex items-center gap-1.5 border rounded-lg px-2.5 py-1 bg-slate-50 border-slate-200 h-9 shadow-sm">
+              {isEditingName ? (
+                <>
+                  <input
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
+                    placeholder="Nombre alumno"
+                    className="w-28 bg-transparent text-xs outline-none px-1 border-b border-blue-400"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveStudentName();
+                    }}
+                  />
+                  <Button size="xs" onClick={handleSaveStudentName} className="h-5 px-1.5 text-[10px]">
+                    OK
+                  </Button>
+                  <Button size="xs" variant="ghost" onClick={() => setIsEditingName(false)} className="h-5 px-1 text-[10px]">
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <span className="text-[10px] text-slate-500 font-bold uppercase">Alumno:</span>
+                  <span className="text-xs font-semibold text-slate-700 max-w-24 truncate">
+                    {studentName || 'Sin Nombre'}
+                  </span>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => {
+                      setNameInput(studentName);
+                      setIsEditingName(true);
+                    }}
+                    className="h-5 w-5 p-0 text-slate-400 hover:text-slate-600 text-xs flex items-center justify-center"
+                  >
+                    ✏️
+                  </Button>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 border border-purple-100 rounded-lg px-2.5 py-1 bg-purple-50/50 h-9 shadow-sm">
+              <span className="text-[10px] text-purple-600 font-bold uppercase tracking-wider">Estudiante:</span>
+              <span className="text-xs font-bold text-purple-900 max-w-24 truncate">
+                {studentName || 'Conversación ' + conversationId.slice(0, 5)}
+              </span>
+            </div>
+          )}
+
+          {/* Selector de Conversación */}
           <Select
             value={conversationId}
             onValueChange={handleSelectConversation}
             disabled={isCreatingChat}
           >
-            <SelectTrigger className="w-[280px]">
+            <SelectTrigger className="w-[220px]">
               <SelectValue placeholder="Select a conversation" />
             </SelectTrigger>
             <SelectContent>
@@ -365,8 +511,7 @@ export function ChatInterface() {
                     key={conv.conversation_id}
                     value={conv.conversation_id}
                   >
-                    {conv.conversation_id.slice(0, 8)}... (
-                    {conv.messages?.length || 0} msgs)
+                    {conv.name ? `${conv.name} (${conv.conversation_id.slice(0, 5)})` : `${conv.conversation_id.slice(0, 8)}...`} ({conv.messages?.length || 0} msgs)
                   </SelectItem>
                 ))}
             </SelectContent>
@@ -420,7 +565,9 @@ export function ChatInterface() {
               <MessageBubble 
                 key={message.message_id} 
                 message={message} 
-                onSend={handleSendMessage} 
+                onSend={handleSendMessage}
+                isProfesor={role === 'profesor'}
+                onCorrect={handleOpenCorrectModal}
               />
             ))}
             {isSending && (
@@ -441,47 +588,145 @@ export function ChatInterface() {
       <MessageInput onSend={handleSendMessage} disabled={isSending} />
 
       <Dialog open={isNamsOpen} onOpenChange={setIsNamsOpen}>
-        <DialogContent className="max-w-2xl bg-white sm:rounded-2xl">
+        <DialogContent className="max-w-3xl bg-white sm:rounded-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-xl font-bold text-purple-900 border-b pb-2">
               <Brain className="h-6 w-6 text-purple-600 animate-pulse" />
-              Conclusiones y Hechos en NAMS
+              Memoria a Largo Plazo (NAMS) - Estudiante: {studentName || 'Sin Nombre'}
             </DialogTitle>
           </DialogHeader>
-          <div className="mt-4 space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+          <div className="mt-4 max-h-[65vh] overflow-y-auto pr-2">
             {isLoadingNams ? (
               <div className="flex flex-col items-center justify-center py-12">
                 <Loader2 className="h-8 w-8 animate-spin text-purple-600 mb-2" />
                 <p className="text-sm text-slate-500 font-medium">Consultando base de datos de grafos Neo4j Aura DB...</p>
               </div>
-            ) : namsConclusions.length === 0 ? (
+            ) : namsConclusions.length === 0 && namsDeficiencies.length === 0 ? (
               <div className="text-center py-12 px-4 rounded-xl border border-dashed border-slate-200 bg-slate-50/50">
                 <Brain className="h-10 w-10 text-slate-400 mx-auto mb-2 stroke-1" />
-                <p className="font-semibold text-slate-700 text-sm">No se han registrado conclusiones aún</p>
+                <p className="font-semibold text-slate-700 text-sm">No se han registrado aprendizajes ni falencias aún</p>
                 <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                  A medida que hables con el Tutor de Física, el extractor asíncrono en segundo plano identificará tus correcciones y aprendizajes de forma automática.
+                  A medida que interactúes con el bot y el profesor registre falencias, esta base de conocimiento se irá poblando de forma personalizada.
                 </p>
               </div>
             ) : (
-              <div className="space-y-3">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                  Memoria a largo plazo ({namsConclusions.length} registros cargados):
-                </p>
-                <ul className="space-y-2.5">
-                  {namsConclusions.map((conclusion, idx) => (
-                    <li 
-                      key={idx} 
-                      className="p-4 rounded-xl border border-purple-100 bg-purple-50/40 text-slate-700 text-sm leading-relaxed flex items-start gap-3 shadow-sm hover:border-purple-200 hover:bg-purple-50 transition-all duration-200"
-                    >
-                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-purple-100 text-[11px] font-bold text-purple-700 mt-0.5">
-                        {idx + 1}
-                      </span>
-                      <p className="flex-1">{conclusion}</p>
-                    </li>
-                  ))}
-                </ul>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Columna de Preferencias de Estilo */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider border-b pb-1">
+                    Preferencias de Estilo y Pedagogía ({namsConclusions.length})
+                  </h3>
+                  {namsConclusions.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic">No hay preferencias registradas.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {namsConclusions.map((conclusion, idx) => (
+                        <li 
+                          key={idx} 
+                          className="p-3 rounded-lg border border-slate-100 bg-slate-50 text-slate-700 text-xs leading-relaxed flex items-start gap-2 hover:border-slate-200 transition-all"
+                        >
+                          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[9px] font-bold text-slate-600 mt-0.5">
+                            {idx + 1}
+                          </span>
+                          <p className="flex-1">{conclusion}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                {/* Columna de Falencias Registradas */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-purple-700 uppercase tracking-wider border-b pb-1">
+                    Falencias Detectadas por Docentes ({namsDeficiencies.length})
+                  </h3>
+                  {namsDeficiencies.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic">No hay falencias registradas.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {namsDeficiencies.map((deficiency, idx) => (
+                        <li 
+                          key={idx} 
+                          className="p-3 rounded-lg border border-purple-100 bg-purple-50/30 text-slate-800 text-xs leading-relaxed flex items-start gap-2 hover:border-purple-200 transition-all"
+                        >
+                          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-purple-100 text-[9px] font-bold text-purple-700 mt-0.5">
+                            {idx + 1}
+                          </span>
+                          <p className="flex-1 font-medium">{deficiency}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog de Corrección de Profesor */}
+      <Dialog open={isCorrectOpen} onOpenChange={setIsCorrectOpen}>
+        <DialogContent className="max-w-md bg-white sm:rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg font-bold text-purple-900 border-b pb-2">
+              <GraduationCap className="h-5 w-5 text-purple-600" />
+              Corregir Agente / Registrar Falencia
+            </DialogTitle>
+          </DialogHeader>
+          <div className="mt-4 space-y-4">
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Registra una corrección física/conceptual sobre las respuestas del agente. Esta corrección quedará asociada como una falencia de aprendizaje para el estudiante <strong>{studentName || 'Sin Nombre'}</strong> y guiará al tutor en futuras conversaciones.
+            </p>
+            
+            <div className="space-y-1.5">
+              <label htmlFor="tema" className="text-xs font-bold text-slate-700">Tema o Concepto Físico</label>
+              <Input
+                id="tema"
+                value={correctTema}
+                onChange={(e) => setCorrectTema(e.target.value)}
+                placeholder="Ej: Fuerza de rozamiento, Conservación de energía"
+                className="text-sm"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="explicacion" className="text-xs font-bold text-slate-700">Corrección / Concepto a Corregir</label>
+              <Textarea
+                id="explicacion"
+                value={correctExplanation}
+                onChange={(e) => setCorrectExplanation(e.target.value)}
+                placeholder="Ej: En rodadura pura sin deslizar, el rozamiento no es μ*N. Se debe calcular a partir de las ecuaciones de Newton y la relación de aceleraciones."
+                rows={4}
+                className="text-sm"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button
+                variant="outline"
+                onClick={() => setIsCorrectOpen(false)}
+                disabled={isSubmittingCorrection}
+                className="text-xs"
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleSubmitCorrection}
+                disabled={isSubmittingCorrection || !correctTema.trim() || !correctExplanation.trim()}
+                className="bg-purple-600 hover:bg-purple-700 text-white text-xs gap-1.5"
+              >
+                {isSubmittingCorrection ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Guardando...
+                  </>
+                ) : (
+                  <>
+                    Guardar Corrección
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
