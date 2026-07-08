@@ -1412,11 +1412,10 @@ Responde SOLO: SALIR o CONTINUAR"""
         return "CONTINUAR"
     
     # ==================== MÉTODOS PRINCIPALES ====================
-    
     @traceable(name="PhysicsMultimodalAgent.invoke", run_type="chain")
     async def invoke(self, query: str, context_id: str, 
                     images: List[dict] = None) -> str:
-        """Procesa consulta completa con modo socrático."""
+        """Procesa consulta completa con diálogo directo (modo socrático desactivado)."""
         # Extract NAMS context from query if present
         nams_context = ""
         if "[NAMS_CONTEXT]" in query and "[/NAMS_CONTEXT]" in query:
@@ -1434,7 +1433,7 @@ Responde SOLO: SALIR o CONTINUAR"""
                 query = remainder
 
         print(f"\n{'='*80}")
-        print(f"📚 Consulta de física")
+        print(f"📚 Consulta de física (Directa)")
         print(f"Query: {query[:100]}...")
         if nams_context:
             print(f"NAMS Context: {nams_context[:100]}...")
@@ -1445,517 +1444,21 @@ Responde SOLO: SALIR o CONTINUAR"""
             memory = self._get_or_create_memory(context_id)
             memory_context = self._get_memory_context(context_id)
             
-            pass
-            
-            query_for_generation = query  # Default; may be overridden by socratic exit
-            exiting_socratic = False  # Flag to track if we're exiting socratic mode
-            
-            # === CASO 1: Estamos en modo socrático (respondiendo preguntas) ===
-            if memory.socratic_mode:
-                # Primero: detectar comando de botón [DIRECTO] del frontend
-                query_stripped = query.strip()
-                if query_stripped == "[DIRECTO]":
-                    print("🚪 Salida del modo socrático via botón [DIRECTO]")
-                    wants_exit = True
-                else:
-                    # Detección unificada: keywords rápidos + LLM fallback
-                    intent = await self._detect_socratic_intent(query, is_in_socratic_mode=True)
-                    wants_exit = (intent == "SALIR")
-                
-                if wants_exit:
-                    print("🚪 Salida del modo socrático detectada.")
-                    memory.socratic_disabled = True
-                    memory.socratic_mode = False
-                    query_for_generation = memory.original_query if memory.original_query else query
-                    exiting_socratic = True
-                    memory.socratic_questions_asked = 0
-                    memory.socratic_answers = []
-                    memory.original_query = ""
-                    # Caer al flujo de respuesta directa abajo (CASO 2)
-                else:
-                    # Procesar como respuesta socrática normal
-                    memory.socratic_answers.append(query)
-                    memory.socratic_questions_asked += 1
-                    
-                    print(f"🎓 Modo socrático: {memory.socratic_questions_asked}/3 preguntas respondidas")
-                    
-                    # Si ya respondió las 3 preguntas, dar la respuesta completa
-                    if memory.socratic_questions_asked >= 3:
-                        print(f"✅ Completadas las 3 preguntas, generando respuesta final...")
-                        
-                        visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
-                        image_embedding = None
-                        
-                        classification = await self.classify_query(
-                            memory.original_query, memory_context, visual_findings
-                        )
-                        
-                        search_query = await self.generate_search_query(
-                            classification, visual_findings, memory.original_query
-                        )
-                        search_results = await self.search_multimodal(
-                            query=search_query,
-                            image_embedding=image_embedding,
-                            top_k=5
-                        )
-                        
-                        document_context = "\n".join([
-                            f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
-                            for i, r in enumerate(search_results.get('text', []))
-                        ])
-                        
-                        image_context = "\n".join([
-                            f"--- Imagen {i+1} ---\nPDF: {r['payload'].get('pdf_name', 'N/A')}"
-                            for i, r in enumerate(search_results.get('image', []))
-                        ])
-                        
-                        student_answers_summary = "\n".join([
-                            f"Pregunta {i+1}: {ans}"
-                            for i, ans in enumerate(memory.socratic_answers)
-                        ])
-                        
-                        final_response = await self.generate_physics_response_with_socratic(
-                            memory.original_query, memory_context, classification, 
-                            visual_findings, document_context, image_context,
-                            student_answers_summary,
-                            nams_context=nams_context
-                        )
-                        
-                        # LaTeX rendering is handled by KaTeX in the frontend
-                        # Resetear modo socrático
-                        memory.socratic_mode = False
-                        memory.socratic_questions_asked = 0
-                        memory.socratic_answers = []
-                        memory.original_query = ""
-                        
-                        self._save_to_memory(context_id, query, final_response)
-                        print(f"✅ Completado\n")
-                        
-                        return final_response
-                    else:
-                        # Buscar en Qdrant para contextualizar la siguiente pregunta socrática
-                        print(f"🔎 Buscando contexto en Qdrant para pregunta socrática {memory.socratic_questions_asked + 1}/3...")
-                        doc_ctx, _ = await self._search_qdrant_for_context(
-                            query=memory.original_query,
-                            top_k=5
-                        )
-                        
-                        # Generar siguiente pregunta socrática CON contexto documental
-                        next_question = await self.generate_socratic_question(
-                            memory.original_query,
-                            memory.socratic_questions_asked,
-                            memory.socratic_answers,
-                            visual_findings=self.visual_findings.get(context_id, ""),
-                            document_context=doc_ctx,
-                            nams_context=nams_context
-                        )
-                        
-                        # LaTeX rendering is handled by KaTeX in the frontend
-                        self._save_memories()
-                        return next_question + "\n\n<!-- SOCRATIC_EXIT -->"
-            
-            # === CASO 2: No estamos en modo socrático ===
-            # Si venimos del CASO 1 con exit, query_for_generation ya tiene el original_query
-            if not exiting_socratic:
-                query_for_generation = query
-            
-            # Verificar si el usuario quiere volver al modo socrático
-            # SOLO si NO estamos saliendo del socrático
-            if not exiting_socratic:
-                enter_intent = await self._detect_socratic_intent(query, is_in_socratic_mode=False)
-                if enter_intent == "ENTRAR":
-                    print("🎓 El usuario decidió volver al modo socrático.")
-                    memory.socratic_disabled = False
-            
-            # Si el modo socrático está deshabilitado, entablar diálogo normal
-            if memory.socratic_disabled:
-                print(f"💬 Entablando diálogo normal sin socrático...")
-                
-                # Analizar imágenes si las hay
-                visual_findings, image_embedding = await self._get_visual_findings(images, context_id)
-                
-                classification = await self.classify_query(
-                    query_for_generation, memory_context, visual_findings
-                )
-                
-                search_query = await self.generate_search_query(
-                    classification, visual_findings, query_for_generation
-                )
-                search_results = await self.search_multimodal(
-                    query=search_query,
-                    image_embedding=image_embedding,
-                    top_k=5
-                )
-                
-                document_context = "\n".join([
-                    f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
-                    for i, r in enumerate(search_results.get('text', []))
-                ])
-                
-                image_context = "\n".join([
-                    f"--- Imagen {i+1} ---\nPDF: {r['payload'].get('pdf_name', 'N/A')}"
-                    for i, r in enumerate(search_results.get('image', []))
-                ])
-                
-                final_response = await self.generate_physics_response(
-                    query_for_generation, memory_context, classification, 
-                    visual_findings, document_context, image_context,
-                    chat_history=memory.chat_history,
-                    nams_context=nams_context
-                )
-                self._save_to_memory(context_id, query, final_response)
-                # Resetear para que la próxima pregunta vuelva al modo socrático
-                memory.socratic_disabled = False
-                print(f"✅ Diálogo completado\n")
-                return final_response
-
-            # Modo normal: iniciar modo socrático
-            print(f"🎓 Iniciando modo socrático...")
-            
-            visual_findings, image_embedding = await self._get_visual_findings(images, context_id)
-            
-            # Activar modo socrático
-            memory.socratic_mode = True
-            memory.original_query = query
+            # Force direct mode
+            memory.socratic_mode = False
+            memory.socratic_disabled = True
             memory.socratic_questions_asked = 0
             memory.socratic_answers = []
+            memory.original_query = ""
             
-            # Buscar contexto en Qdrant para la primera pregunta socrática
-            print(f"🔎 Buscando contexto en Qdrant para primera pregunta socrática...")
-            doc_ctx, _ = await self._search_qdrant_for_context(
-                query=query,
-                image_embedding=image_embedding,
-                top_k=5
-            )
-            
-            # Generar primera pregunta socrática CON contexto documental
-            first_question = await self.generate_socratic_question(
-                query, 0, [],
-                visual_findings=visual_findings,
-                document_context=doc_ctx,
-                nams_context=nams_context
-            )
-            
-            # LaTeX rendering is handled by KaTeX in the frontend
-            # Persistir memorias al activar modo socrático
-            self._save_memories()
-            return first_question
-            
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            import traceback
-            traceback.print_exc()
-            return f"ERROR: {str(e)}"
-    
-    @traceable(name="PhysicsMultimodalAgent.stream", run_type="chain")
-    async def stream(self, query: str, context_id: str, 
-                    images: List[dict] = None) -> AsyncIterable[dict[str, Any]]:
-        """
-        🔧 CRÍTICO: Este método DEBE yieldar diccionarios con:
-        - 'is_task_complete': bool
-        - 'require_user_input': bool
-        - 'content': str
-        - 'status': str (opcional)
-        
-        Implementa modo socrático con 3 preguntas antes de la respuesta.
-        """
-        # Extract NAMS context from query if present
-        nams_context = ""
-        if "[NAMS_CONTEXT]" in query and "[/NAMS_CONTEXT]" in query:
-            start_tag = "[NAMS_CONTEXT]"
-            end_tag = "[/NAMS_CONTEXT]"
-            start_idx = query.find(start_tag)
-            end_idx = query.find(end_tag)
-            nams_context = query[start_idx + len(start_tag):end_idx].strip()
-            remainder = query[end_idx + len(end_tag):]
-            if remainder.startswith("\n\n"):
-                query = remainder[2:]
-            elif remainder.startswith("\n"):
-                query = remainder[1:]
-            else:
-                query = remainder
-
-        print(f"\n{'='*80}")
-        print(f"📚 Consulta (streaming)")
-        print(f"Query: {query[:100]}...")
-        if nams_context:
-            print(f"NAMS Context: {nams_context[:100]}...")
-        print(f"Imágenes: {len(images) if images else 0}")
-        print(f"{'='*80}\n")
-        
-        memory = self._get_or_create_memory(context_id)
-        memory_context = self._get_memory_context(context_id)
-        print(f"🗓️ [STREAM] context_id='{context_id[:12] if context_id else 'VACIO'}...', memoria existente: {context_id in self.memories}, conversaciones guardadas: {len(self.memories.get(context_id, SemanticMemory(llm=self.llm)).conversations)}")
-        
-        pass
-
-        query_for_generation = query  # Default; may be overridden by socratic exit
-        exiting_socratic = False  # Flag to track if we're exiting socratic mode
-        
-        # === CASO 1: Estamos en modo socrático (respondiendo preguntas) ===
-        if memory.socratic_mode:
-            print(f"🔍 [SOCRATIC] Query: '{query}'")
-            
-            # Primero: detectar comando de botón [DIRECTO] del frontend
-            query_stripped = query.strip()
-            if query_stripped == "[DIRECTO]":
-                print("🚪 Salida del modo socrático via botón [DIRECTO]")
-                wants_exit = True
-                intent = "SALIR"
-            else:
-                # Detección unificada: keywords rápidos + LLM fallback
-                intent = await self._detect_socratic_intent(query, is_in_socratic_mode=True)
-                wants_exit = (intent == "SALIR")
-            print(f"🔍 [SOCRATIC] Intent: {intent}, wants_exit: {wants_exit}")
-            
-            if wants_exit:
-                print("🚪 Salida del modo socrático detectada.")
-                memory.socratic_disabled = True
-                memory.socratic_mode = False
-                query_for_generation = memory.original_query if memory.original_query else query
-                exiting_socratic = True
-                memory.socratic_questions_asked = 0
-                memory.socratic_answers = []
-                memory.original_query = ""
-                print(f"🔍 [SOCRATIC] Exit complete. Falling to CASO 2.")
-                # Caer al flujo de respuesta directa abajo (CASO 2)
-            else:
-                # Procesar como respuesta socrática normal
-                memory.socratic_answers.append(query)
-                memory.socratic_questions_asked += 1
-                
-                print(f"🎓 Modo socrático: {memory.socratic_questions_asked}/3 preguntas respondidas")
-                
-                # Si ya respondió las 3 preguntas, dar la respuesta completa
-                if memory.socratic_questions_asked >= 3:
-                    print(f"✅ Completadas las 3 preguntas, generando respuesta final...")
-                    
-                    yield {
-                        'is_task_complete': False,
-                        'require_user_input': False,
-                        'content': '🎓 Excelente! Has completado las 3 preguntas. Ahora te daré la explicación completa...',
-                        'status': 'socratic_complete'
-                    }
-                    
-                    visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
-                    image_embedding = None
-                    
-                    yield {
-                        'is_task_complete': False,
-                        'require_user_input': False,
-                        'content': '📚 Analizando tu proceso de pensamiento...',
-                        'status': 'classifying'
-                    }
-                    
-                    classification = await self.classify_query(
-                        memory.original_query, memory_context, visual_findings
-                    )
-                    
-                    yield {
-                        'is_task_complete': False,
-                        'require_user_input': False,
-                        'content': '🔎 Buscando información complementaria...',
-                        'status': 'searching_documents'
-                    }
-                    
-                    search_query = await self.generate_search_query(
-                        classification, visual_findings, memory.original_query
-                    )
-                    search_results = await self.search_multimodal(
-                        query=search_query,
-                        image_embedding=image_embedding,
-                        top_k=5
-                    )
-                    
-                    document_context = "\n".join([
-                        f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
-                        for i, r in enumerate(search_results.get('text', []))
-                    ])
-                    
-                    image_context = "\n".join([
-                        f"--- Imagen {i+1} ---\nPDF: {r['payload'].get('pdf_name', 'N/A')}"
-                        for i, r in enumerate(search_results.get('image', []))
-                    ])
-                    
-                    yield {
-                        'is_task_complete': False,
-                        'require_user_input': False,
-                        'content': '📝 Generando explicación completa basada en tus respuestas...',
-                        'status': 'generating_response'
-                    }
-                    
-                    student_answers_summary = "\n".join([
-                        f"Pregunta {i+1}: {ans}"
-                        for i, ans in enumerate(memory.socratic_answers)
-                    ])
-                    
-                    final_response = await self.generate_physics_response_with_socratic(
-                        memory.original_query, memory_context, classification,
-                        visual_findings, document_context, image_context,
-                        student_answers_summary,
-                        nams_context=nams_context
-                    )
-                    
-                    # LaTeX rendering is handled by KaTeX in the frontend
-                    # Resetear modo socrático
-                    memory.socratic_mode = False
-                    memory.socratic_questions_asked = 0
-                    memory.socratic_answers = []
-                    memory.original_query = ""
-                    
-                    self._save_to_memory(context_id, query, final_response)
-                    self._save_memories()
-                    
-                    yield {
-                        'is_task_complete': True,
-                        'require_user_input': False,
-                        'content': final_response,
-                        'status': 'completed'
-                    }
-                else:
-                    # Generar siguiente pregunta socrática
-                    yield {
-                        'is_task_complete': False,
-                        'require_user_input': False,
-                        'content': f'💭 Procesando tu respuesta {memory.socratic_questions_asked}/3...',
-                        'status': 'socratic_processing'
-                    }
-                    
-                    # Buscar en Qdrant para contextualizar la siguiente pregunta socrática
-                    print(f"🔎 Buscando contexto en Qdrant para pregunta socrática {memory.socratic_questions_asked + 1}/3...")
-                    doc_ctx, _ = await self._search_qdrant_for_context(
-                        query=memory.original_query,
-                        top_k=5
-                    )
-                    
-                    next_question = await self.generate_socratic_question(
-                        memory.original_query,
-                        memory.socratic_questions_asked,
-                        memory.socratic_answers,
-                        visual_findings=self.visual_findings.get(context_id, ""),
-                        document_context=doc_ctx,
-                        nams_context=nams_context
-                    )
-                    
-                    # Guardar el intercambio socrático en el chat_history real
-                    last_answer = memory.socratic_answers[-1] if memory.socratic_answers else ""
-                    memory.add_socratic_exchange(next_question, last_answer)
-                    
-                    # LaTeX rendering is handled by KaTeX in the frontend
-                    # CRÍTICO: is_task_complete=False + require_user_input=True
-                    yield {
-                        'is_task_complete': False,
-                        'require_user_input': True,
-                        'content': next_question + "\n\n<!-- SOCRATIC_EXIT -->",
-                        'status': 'socratic_question'
-                    }
-                # Guardar memorias después de procesar la respuesta socrática
-                self._save_memories()
-                # Return temprano: ya procesamos la respuesta socrática (continuar o completar)
-                return
-        
-        # === CASO 2: No estamos en modo socrático ===
-        print(f"🔍 [CASO2] Reached. exiting_socratic={exiting_socratic}, socratic_disabled={memory.socratic_disabled}")
-        # Si venimos del CASO 1 con exit, query_for_generation ya tiene el original_query
-        if not exiting_socratic:
-            query_for_generation = query
-        print(f"🔍 [CASO2] query_for_generation='{query_for_generation[:80]}'")
-        
-        # === Detectar comandos de botón del frontend ===
-        # SOLO si NO venimos del CASO 1 con exit (ya procesado arriba)
-        if not exiting_socratic:
-            query_stripped = query.strip()
-            
-            if query_stripped == "[SOCRATIC]":
-                # El estudiante eligió modo socrático via botón
-                print("🎓 Estudiante eligió SOCRÁTICO via botón")
-                original_q = memory.original_query if memory.original_query else query
-                
-                memory.socratic_mode = True
-                memory.socratic_questions_asked = 0
-                memory.socratic_answers = []
-                memory.socratic_disabled = False
-                
-                yield {
-                    'is_task_complete': False,
-                    'require_user_input': False,
-                    'content': '🎓 Iniciando método socrático: te haré 3 preguntas para guiar tu aprendizaje...',
-                    'status': 'socratic_init'
-                }
-                
-                # Buscar en Qdrant para primera pregunta socrática (botón)
-                print(f"🔎 Buscando contexto en Qdrant para primera pregunta socrática...")
-                doc_ctx, _ = await self._search_qdrant_for_context(
-                    query=original_q,
-                    top_k=5
-                )
-                
-                first_question = await self.generate_socratic_question(
-                    original_q, 0, [],
-                    visual_findings=self.visual_findings.get(context_id, ""),
-                    document_context=doc_ctx,
-                    nams_context=nams_context
-                )
-                
-                yield {
-                    'is_task_complete': False,
-                    'require_user_input': True,
-                    'content': first_question + "\n\n<!-- SOCRATIC_EXIT -->",
-                    'status': 'socratic_question'
-                }
-                return
-            
-            if query_stripped == "[DIRECTO]":
-                # El estudiante eligió explicación directa via botón (sin estar en socrático)
-                print("📖 Estudiante eligió DIRECTO via botón")
-                memory.socratic_disabled = True
-                memory.socratic_mode = False
-                query_for_generation = memory.original_query if memory.original_query else query
-                # Continuar al flujo de respuesta directa abajo
-        
-        # Verificar si el usuario quiere volver al modo socrático
-        # SOLO si NO estamos saliendo del socrático
-        if not exiting_socratic and query.strip() not in ("[SOCRATIC]", "[DIRECTO]"):
-            enter_intent = await self._detect_socratic_intent(query, is_in_socratic_mode=False)
-            if enter_intent == "ENTRAR":
-                print("🎓 El usuario decidió volver al modo socrático.")
-                memory.socratic_disabled = False
-        
-        # Si el modo socrático está deshabilitado, entablar diálogo normal
-        if memory.socratic_disabled:
-            yield {
-                'is_task_complete': False,
-                'require_user_input': False,
-                'content': f'💬 Entablando diálogo normal sin socrático...',
-                'status': 'normal_dialogue'
-            }
             visual_findings, image_embedding = await self._get_visual_findings(images, context_id)
-            if images and len(images) > 0:
-                yield {
-                    'is_task_complete': False,
-                    'require_user_input': False,
-                    'content': '✅ Fenómenos físicos identificados.',
-                    'status': 'analyzing_images'
-                }
             
-            yield {
-                'is_task_complete': False,
-                'require_user_input': False,
-                'content': '📚 Analizando consulta...',
-                'status': 'classifying'
-            }
             classification = await self.classify_query(
-                query_for_generation, memory_context, visual_findings
+                query, memory_context, visual_findings
             )
             
-            yield {
-                'is_task_complete': False,
-                'require_user_input': False,
-                'content': '🔎 Buscando información complementaria...',
-                'status': 'searching_documents'
-            }
             search_query = await self.generate_search_query(
-                classification, visual_findings, query_for_generation
+                classification, visual_findings, query
             )
             search_results = await self.search_multimodal(
                 query=search_query,
@@ -1973,79 +1476,143 @@ Responde SOLO: SALIR o CONTINUAR"""
                 for i, r in enumerate(search_results.get('image', []))
             ])
             
-            yield {
-                'is_task_complete': False,
-                'require_user_input': False,
-                'content': '📝 Generando respuesta...',
-                'status': 'generating_response'
-            }
-            
             final_response = await self.generate_physics_response(
-                query_for_generation, memory_context, classification, 
+                query, memory_context, classification, 
                 visual_findings, document_context, image_context,
                 chat_history=memory.chat_history,
                 nams_context=nams_context
             )
             self._save_to_memory(context_id, query, final_response)
-            # Resetear para que la próxima pregunta vuelva al modo socrático
-            memory.socratic_disabled = False
             self._save_memories()
+            print(f"✅ Diálogo directo completado\n")
+            return final_response
             
-            yield {
-                'is_task_complete': True,
-                'require_user_input': False,
-                'content': final_response,
-                'status': 'completed'
-            }
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return f"ERROR: {str(e)}"
 
-        else:
-            # === Activar modo socrático directamente ===
-            print(f"🎓 Iniciando modo socrático...")
-            
-            visual_findings, image_embedding = await self._get_visual_findings(images, context_id)
-            if images and len(images) > 0:
-                yield {
-                    'is_task_complete': False,
-                    'require_user_input': False,
-                    'content': '✅ Fenómenos físicos identificados.',
-                    'status': 'analyzing_images'
-                }
-            
-            memory.socratic_mode = True
-            memory.original_query = query
-            memory.socratic_questions_asked = 0
-            memory.socratic_answers = []
-            
+    @traceable(name="PhysicsMultimodalAgent.stream", run_type="chain")
+    async def stream(self, query: str, context_id: str, 
+                    images: List[dict] = None) -> AsyncIterable[dict[str, Any]]:
+        """
+        🔧 CRÍTICO: Este método DEBE yieldar diccionarios con:
+        - 'is_task_complete': bool
+        - 'require_user_input': bool
+        - 'content': str
+        - 'status': str (opcional)
+        
+        Implementa diálogo directo (modo socrático desactivado).
+        """
+        # Extract NAMS context from query if present
+        nams_context = ""
+        if "[NAMS_CONTEXT]" in query and "[/NAMS_CONTEXT]" in query:
+            start_tag = "[NAMS_CONTEXT]"
+            end_tag = "[/NAMS_CONTEXT]"
+            start_idx = query.find(start_tag)
+            end_idx = query.find(end_tag)
+            nams_context = query[start_idx + len(start_tag):end_idx].strip()
+            remainder = query[end_idx + len(end_tag):]
+            if remainder.startswith("\n\n"):
+                query = remainder[2:]
+            elif remainder.startswith("\n"):
+                query = remainder[1:]
+            else:
+                query = remainder
+
+        print(f"\n{'='*80}")
+        print(f"📚 Consulta (streaming - Directa)")
+        print(f"Query: {query[:100]}...")
+        if nams_context:
+            print(f"NAMS Context: {nams_context[:100]}...")
+        print(f"Imágenes: {len(images) if images else 0}")
+        print(f"{'='*80}\n")
+        
+        memory = self._get_or_create_memory(context_id)
+        memory_context = self._get_memory_context(context_id)
+        
+        # Force direct mode
+        memory.socratic_mode = False
+        memory.socratic_disabled = True
+        memory.socratic_questions_asked = 0
+        memory.socratic_answers = []
+        memory.original_query = ""
+
+        yield {
+            'is_task_complete': False,
+            'require_user_input': False,
+            'content': f'💬 Entablando diálogo normal sin socrático...',
+            'status': 'normal_dialogue'
+        }
+        
+        visual_findings, image_embedding = await self._get_visual_findings(images, context_id)
+        if images and len(images) > 0:
             yield {
                 'is_task_complete': False,
                 'require_user_input': False,
-                'content': '🎓 Iniciando método socrático: te haré 3 preguntas para guiar tu aprendizaje...',
-                'status': 'socratic_init'
+                'content': '✅ Fenómenos físicos identificados.',
+                'status': 'analyzing_images'
             }
-            
-            # Buscar contexto en Qdrant para la primera pregunta socrática
-            print(f"🔎 Buscando contexto en Qdrant para primera pregunta socrática...")
-            doc_ctx, _ = await self._search_qdrant_for_context(
-                query=query,
-                image_embedding=image_embedding,
-                top_k=5
-            )
-            
-            first_question = await self.generate_socratic_question(
-                query, 0, [],
-                visual_findings=self.visual_findings.get(context_id, ""),
-                document_context=doc_ctx,
-                nams_context=nams_context
-            )
-            
-            yield {
-                'is_task_complete': False,
-                'require_user_input': True,
-                'content': first_question + "\n\n<!-- SOCRATIC_EXIT -->",
-                'status': 'socratic_question'
-            }
-            # Persistir memorias al activar modo socrático
-            self._save_memories()
+        
+        yield {
+            'is_task_complete': False,
+            'require_user_input': False,
+            'content': '📚 Analizando consulta...',
+            'status': 'classifying'
+        }
+        classification = await self.classify_query(
+            query, memory_context, visual_findings
+        )
+        
+        yield {
+            'is_task_complete': False,
+            'require_user_input': False,
+            'content': '🔎 Buscando información complementaria...',
+            'status': 'searching_documents'
+        }
+        search_query = await self.generate_search_query(
+            classification, visual_findings, query
+        )
+        search_results = await self.search_multimodal(
+            query=search_query,
+            image_embedding=image_embedding,
+            top_k=5
+        )
+        
+        document_context = "\n".join([
+            f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
+            for i, r in enumerate(search_results.get('text', []))
+        ])
+        
+        image_context = "\n".join([
+            f"--- Imagen {i+1} ---\nPDF: {r['payload'].get('pdf_name', 'N/A')}"
+            for i, r in enumerate(search_results.get('image', []))
+        ])
+        
+        yield {
+            'is_task_complete': False,
+            'require_user_input': False,
+            'content': '📝 Generando respuesta...',
+            'status': 'generating_response'
+        }
+        
+        final_response = await self.generate_physics_response(
+            query, memory_context, classification, 
+            visual_findings, document_context, image_context,
+            chat_history=memory.chat_history,
+            nams_context=nams_context
+        )
+        self._save_to_memory(context_id, query, final_response)
+        self._save_memories()
+        
+        yield {
+            'is_task_complete': True,
+            'require_user_input': False,
+            'content': final_response,
+            'status': 'completed'
+        }
+
 
     async def clear_memory(self, context_id: str):
         """Limpia la memoria de un contexto específico."""

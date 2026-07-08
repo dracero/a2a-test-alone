@@ -95,7 +95,9 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 f"3. If the request asks what you can do or who you are, respond with: DIRECT\n"
                 f"4. For ANY request with images or that needs specialized knowledge, respond with the EXACT agent name.\n"
                 f"5. Look at the actual content of any attached images to decide the best agent.\n\n"
-                f"IMPORTANT: Respond with ONLY the exact agent name or 'DIRECT'. Nothing else."
+                f"First, analyze the user request step-by-step to identify their intent and reason about which agent or DIRECT is best. "
+                f"Finally, output your final selection enclosed inside <route> and </route> tags. "
+                f"Example: <route>Tutor Socrático de Física Multimodal</route> or <route>DIRECT</route>."
             )
             
             # Build the message content - multimodal if images are present
@@ -127,23 +129,29 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             print(f"📥 Groq response type: {type(llm_response)}")
             print(f"📥 Groq response content: {llm_response.content}")
             
-            chosen = str(llm_response.content).strip() if llm_response.content else ""
+            raw_response = str(llm_response.content).strip() if llm_response.content else ""
+            print(f"🎯 Raw chosen: '{raw_response}'")
             
-            if not chosen:
+            if not raw_response:
                 print(f"⚠️ Groq returned empty response, using first agent")
                 state.chosen_agent = state.available_agents[0]['name']
                 return "send_to_agent"
             
-            print(f"🎯 Raw chosen: '{chosen}'")
-            
-            # Clean up the response
-            chosen = chosen.replace('"', '').replace("'", '').strip()
-            if chosen and chosen[0].isdigit():
-                parts = chosen.split('.', 1)
-                if len(parts) > 1:
-                    chosen = parts[1].strip()
-            
-            print(f"🎯 Cleaned chosen: '{chosen}'")
+            # Extract choice from <route> tags
+            import re
+            match = re.search(r'<route>(.*?)</route>', raw_response, re.DOTALL | re.IGNORECASE)
+            if match:
+                chosen = match.group(1).strip()
+                print(f"🎯 Extracted choice: '{chosen}'")
+            else:
+                lines = [line.strip() for line in raw_response.split('\n') if line.strip()]
+                chosen = lines[-1] if lines else ""
+                chosen = chosen.replace('"', '').replace("'", '').strip()
+                if chosen and chosen[0].isdigit():
+                    parts = chosen.split('.', 1)
+                    if len(parts) > 1:
+                        chosen = parts[1].strip()
+                print(f"🎯 Fallback chosen: '{chosen}'")
             
             # Check if should respond directly
             if chosen.upper() == 'DIRECT':
