@@ -45,6 +45,10 @@ const nextConfig = {
         source: '/nams/:path*',
         destination: 'http://127.0.0.1:12000/nams/:path*',
       },
+      {
+        source: '/correct',
+        destination: 'http://127.0.0.1:12000/correct',
+      },
     ];
   },
 };
