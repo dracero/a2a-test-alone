@@ -90,11 +90,13 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             
             classification_text += (
                 f"RULES:\n"
-                f"1. If the request is a simple greeting (hello, hi, hola, hey, etc.) with NO images, respond with: DIRECT\n"
-                f"2. If the request is small talk or general conversation with NO images, respond with: DIRECT\n"
-                f"3. If the request asks what you can do or who you are, respond with: DIRECT\n"
-                f"4. For ANY request with images or that needs specialized knowledge, respond with the EXACT agent name.\n"
-                f"5. Look at the actual content of any attached images to decide the best agent.\n\n"
+                f"1. If the request is a simple greeting (hello, hi, hola, hey, etc.) or small talk with NO images, respond with: DIRECT\n"
+                f"2. If the request is about general capabilities or help, respond with: DIRECT\n"
+                f"3. Route the message to a specialized agent based strictly on the semantic domain and intent of the request:\n"
+                f"   - **Asistente Médico**: Route ANY request related to medicine, biology, histology, anatomy, tissues, organs, cells, or clinical topics here. This includes requests to search, show, or retrieve microscopic images or figures, as well as medical text questions.\n"
+                f"   - **Tutor Socrático de Física Multimodal**: Route any request related to physics, equations, mechanics, or physical science problems here.\n"
+                f"   - **Image Generator Agent**: Route requests here ONLY if the user explicitly asks to generate, create, draw, or paint a generic, artistic, creative, or non-medical synthetic image (e.g., 'draw a red cat', 'generate an image of a beach'). Never route medical or microscopic image retrieval/search requests here.\n"
+                f"4. Look at the actual content of any attached images to help identify the domain.\n\n"
                 f"First, analyze the user request step-by-step to identify their intent and reason about which agent or DIRECT is best. "
                 f"Finally, output your final selection enclosed inside <route> and </route> tags. "
                 f"Example: <route>Tutor Socrático de Física Multimodal</route> or <route>DIRECT</route>."

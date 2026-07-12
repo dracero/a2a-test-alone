@@ -5,7 +5,13 @@ if sys.platform.startswith('win'):
 
 import logging
 import os
-import sys
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from project root at the very beginning (6 levels up)
+root_dir = Path(__file__).resolve().parents[5]
+env_path = root_dir / '.env'
+load_dotenv(dotenv_path=env_path, override=True)
 
 import click
 import httpx
@@ -19,15 +25,6 @@ from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 from app.agent import MedicalAgent
 from app.agent_executor import MedicalAgentExecutor
 from app.custom_request_handler import MedicalAgentExecutorWrapper
-from dotenv import load_dotenv
-from pathlib import Path
-
-# Load .env from project root (6 levels up: __main__.py -> app -> medical_Images -> agents -> python -> samples -> root)
-root_dir = Path(__file__).resolve().parents[5]
-env_path = root_dir / '.env'
-
-# Force override existing environment variables
-load_result = load_dotenv(dotenv_path=env_path, override=True)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -120,18 +117,79 @@ def main(host, port):
         
         logger.info("✅ Executor wrapper configurado correctamente")
         
-        # Crear aplicación
+        # Mount static directory for images
+        os.makedirs("histopatologia_data", exist_ok=True)
+        
+        from contextlib import asynccontextmanager
+        @asynccontextmanager
+        async def lifespan_handler(app):
+            logger.info("🚀 Iniciando backend y cargando modelos para MedicalAgent...")
+            
+            # Limpiar uploads al inicio
+            uploads_dir = Path("uploads")
+            if uploads_dir.exists():
+                logger.info(f"🧹 Limpiando directorio {uploads_dir}...")
+                for file in uploads_dir.glob("*"):
+                    if file.is_file():
+                        try:
+                            file.unlink()
+                        except:
+                            pass
+            
+            # Inicializar componentes del agente
+            real_executor.agent.inicializar_componentes()
+            logger.info("✅ Modelos del agente cargados.")
+            
+            # Indexación automática de PDFs si la colección está vacía
+            try:
+                pdf_dir = Path("./pdfs")
+                if not pdf_dir.exists() or not list(pdf_dir.glob("*.pdf")):
+                    # Fallback a multimodal PDF usando root_dir
+                    multi_pdfs = root_dir / "samples" / "python" / "agents" / "multimodal" / "PDF"
+                    if multi_pdfs.exists() and list(multi_pdfs.glob("*.pdf")):
+                        pdf_dir = multi_pdfs
+                        
+                pdfs = list(pdf_dir.glob("*.pdf"))
+                if pdfs:
+                    logger.info(f"📦 Se encontraron {len(pdfs)} PDFs en {pdf_dir}. Verificando indexación...")
+                    client = real_executor.agent.qdrant_client
+                    col_name = real_executor.agent.gestor_qdrant.content_mv_collection
+                    
+                    try:
+                        count = await client.count(col_name)
+                        if count.count == 0:
+                            logger.info("⚠️ Colección vacía. Iniciando indexación automática de PDFs...")
+                            await real_executor.agent.procesar_pdfs([str(f) for f in pdfs])
+                        else:
+                            logger.info(f"✅ Colección {col_name} tiene {count.count} documentos. Saltando indexación.")
+                    except Exception as e:
+                        logger.info(f"⚠️ Colección no encontrada o error ({e}). Iniciando indexación automática...")
+                        await real_executor.agent.procesar_pdfs([str(f) for f in pdfs])
+                else:
+                    logger.warning("⚠️ No se encontraron PDFs para indexar. Por favor, coloca PDFs en './pdfs' o en 'samples/python/agents/multimodal/PDF'.")
+            except Exception as e:
+                logger.error(f"❌ Error en auto-indexación: {e}", exc_info=True)
+            
+            yield
+            logger.info("🛑 Deteniendo backend...")
+
+        # Crear aplicación con lifespan
         server = A2AStarletteApplication(
             agent_card=agent_card, 
             http_handler=request_handler
         )
+        app = server.build(lifespan=lifespan_handler)
+        
+        # Mount static directory for images
+        from starlette.staticfiles import StaticFiles
+        app.mount("/histopatologia_data", StaticFiles(directory="histopatologia_data"), name="histopatologia_data")
         
         logger.info(f"🏥 Iniciando Asistente Médico en http://{host}:{port}")
-        logger.info(f"📋 Capacidades: Análisis de imágenes, Búsqueda médica, Memoria conversacional")
-        logger.info(f"🔧 Modo: Executor con wrapper para inline_data")
+        logger.info(f"📋 Capacidades: Colpali RAG, Fallback Búsqueda médica, Memoria conversacional")
+        logger.info(f"🔧 Modo: Executor con wrapper para inline_data y StaticFiles montado")
         
         # Ejecutar servidor
-        uvicorn.run(server.build(), host=host, port=port)
+        uvicorn.run(app, host=host, port=port)
     
     except MissingAPIKeyError as e:
         logger.error(f'❌ Error: {e}')
