@@ -1167,42 +1167,46 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" o "REQUIE
 
         # CASE 2: Text query requesting image
         elif requiere_imagen:
-            print("   🔍 Búsqueda local por descripción de imagen...")
+            print("   🔍 Búsqueda semántica por descripción (ColPali MaxSim)...")
             query_mv = self.procesador.generar_embedding_texto(state['consulta_optimizada'])
             if query_mv is not None:
-                query_fde = self.procesador.generar_query_muvera(query_mv)
-                figuras_filtro = self._extraer_figuras_de_texto(state['consulta_optimizada'])
-
-                resultados_texto, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
-                    query_mv, query_fde, min_score=0.0, figuras_filtro=figuras_filtro, filtro_tipo="texto"
+                # 1. Recuperar chunks de texto más relevantes
+                resultados_texto, _ = await self.gestor_qdrant.buscar_muvera_2stage(
+                    query_mv, self.procesador.generar_query_muvera(query_mv), min_score=0.1, filtro_tipo="texto"
                 )
-
-                # Identificar documento principal y buscar imágenes asociadas
+                
+                # 2. Identificar documento principal
                 doc_scores = {}
                 for r in resultados_texto:
                     doc = r.get('payload', {}).get('nombre_archivo', '')
                     if doc:
                         doc_scores[doc] = doc_scores.get(doc, 0.0) + r.get('score', 0.0)
-                
-                doc_principal = max(doc_scores, key=doc_scores.get) if doc_scores else ''
-                imagenes_encontradas = []
 
-                if doc_principal:
-                    try:
-                        client = self.gestor_qdrant.client
-                        scroll_res = await client.scroll(
+                doc_principal = max(doc_scores, key=doc_scores.get) if doc_scores else ''
+                print(f"   📖 Documento principal: {doc_principal} (score acumulado: {doc_scores.get(doc_principal, 0):.2f})")
+
+                # 3. Scroll de texto del doc principal → recopilar etiquetas "Imagen N: desc" indexadas por página
+                paginas_con_etiqueta = {}  # page -> [{numero, descripcion}]
+                imagenes_encontradas = []
+                client = self.gestor_qdrant.client
+                try:
+                    from qdrant_client.models import MatchValue
+                    if doc_principal:
+                        scroll_texto = await client.scroll(
                             collection_name=self.gestor_qdrant.content_mv_collection,
                             scroll_filter=Filter(
                                 must=[
-                                    FieldCondition(key="tipo", match={"value": "texto"}),
-                                    FieldCondition(key="nombre_archivo", match={"value": doc_principal})
+                                    FieldCondition(key="tipo", match=MatchValue(value="texto")),
+                                    FieldCondition(key="nombre_archivo", match=MatchValue(value=doc_principal)),
                                 ]
                             ),
-                            limit=1000
+                            limit=1000,
+                            with_payload=True,
+                            with_vectors=False,
                         )
-                        chunks_doc = scroll_res[0] if scroll_res else []
-                        paginas_con_etiqueta = {}
-                        
+                        chunks_doc = scroll_texto[0] if scroll_texto else []
+                        print(f"   📄 {len(chunks_doc)} chunks de texto en {doc_principal}")
+
                         for chunk in chunks_doc:
                             cp = chunk.payload or {}
                             texto_chunk = cp.get('texto', '')
@@ -1210,74 +1214,135 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" o "REQUIE
                             matches = re.findall(r'[Ii]magen\s+(\d+(?:[\.\-·]\d+)?)\s*:\s*([^\n]{1,100})', texto_chunk)
                             for num, desc in matches:
                                 if pg_chunk is not None:
-                                    paginas_con_etiqueta.setdefault(pg_chunk, []).append({'numero': num, 'descripcion': desc.strip()})
+                                    paginas_con_etiqueta.setdefault(pg_chunk, []).append({
+                                        'numero': num,
+                                        'descripcion': desc.strip(),
+                                    })
 
-                        # Rerank y asociar con imágenes
-                        scroll_img = await client.scroll(
-                            collection_name=self.gestor_qdrant.content_mv_collection,
-                            scroll_filter=Filter(must=[FieldCondition(key="tipo", match={"value": "imagen"})]),
-                            limit=1000
-                        )
-                        all_images = scroll_img[0] if scroll_img else []
+                        if paginas_con_etiqueta:
+                            print(f"   🏷️ Etiquetas encontradas en {doc_principal}:")
+                            for pg, etiquetas in sorted(paginas_con_etiqueta.items()):
+                                for et in etiquetas:
+                                    print(f"      Pg {pg}: Imagen {et['numero']}: {et['descripcion']}")
+                except Exception as e:
+                    print(f"   ⚠️ Error buscando etiquetas de texto: {e}")
 
-                        paginas_usadas = set()
-                        for pg, ets in paginas_con_etiqueta.items():
-                            for et in ets:
-                                for img_point in all_images:
-                                    payload = img_point.payload or {}
-                                    if payload.get('nombre_archivo') == doc_principal and payload.get('numero_pagina') == pg:
-                                        img_path = payload.get('imagen_path', '')
-                                        if img_path and os.path.exists(img_path) and pg not in paginas_usadas:
-                                            imagenes_encontradas.append({
-                                                "path": img_path,
-                                                "descripcion": f"Imagen {et['numero']}: {et['descripcion']}",
-                                                "caption_completo": payload.get('texto', '')
-                                            })
-                                            paginas_usadas.add(pg)
-                    except Exception as e:
-                        print(f"⚠️ Error buscando etiquetas: {e}")
+                # 4. Rerank etiquetas con ColPali MaxSim (Late Interaction) usando consulta RESUELTA
+                query_mv_para_rerank = self.procesador.generar_embedding_texto(state['consulta_resuelta'])
+                if query_mv_para_rerank is None:
+                    query_mv_para_rerank = query_mv
+                else:
+                    print(f"   🎯 Usando embedding de consulta resuelta para rerank de etiquetas")
 
-                # Rerank: ordenar todas las imágenes candidatas por relevancia a la consulta del usuario
-                if len(imagenes_encontradas) > 1:
-                    consulta_lower = state['consulta_usuario'].lower()
-                    consulta_tokens = set(consulta_lower.split())
-                    
-                    def _score_imagen(img):
-                        """Score de similitud textual simple entre caption y consulta"""
-                        desc = (img.get('descripcion', '') + ' ' + img.get('caption_completo', '')).lower()
-                        # Coincidencia exacta de la consulta en la descripción
-                        if consulta_lower in desc:
-                            return 100
-                        # Coincidencia de tokens individuales
-                        desc_tokens = set(desc.split())
-                        overlap = len(consulta_tokens & desc_tokens)
-                        return overlap
-                    
-                    imagenes_encontradas.sort(key=_score_imagen, reverse=True)
-                    print(f"   📊 Reranked {len(imagenes_encontradas)} imágenes candidatas:")
-                    for idx, img in enumerate(imagenes_encontradas):
-                        print(f"      {idx+1}. score={_score_imagen(img)} | {img['descripcion'][:80]}")
+                etiquetas_rankeadas = []
+                if paginas_con_etiqueta:
+                    for pg, etiquetas in paginas_con_etiqueta.items():
+                        for et in etiquetas:
+                            texto_etiqueta = f"Imagen {et['numero']}: {et['descripcion']}"
+                            emb = self.procesador.generar_embedding_texto(texto_etiqueta)
+                            if emb is not None:
+                                q = np.asarray(query_mv_para_rerank, dtype=np.float64)
+                                c = np.asarray(emb, dtype=np.float64)
+                                if q.ndim == 2 and c.ndim == 2:
+                                    sim_matrix = np.dot(q, c.T)
+                                    sim = float(np.sum(np.max(sim_matrix, axis=1)))
+                                else:
+                                    q_mean = q.mean(axis=0) if q.ndim == 2 else q
+                                    c_mean = c.mean(axis=0) if c.ndim == 2 else c
+                                    q_norm = np.linalg.norm(q_mean)
+                                    c_norm = np.linalg.norm(c_mean)
+                                    q_mean = q_mean / q_norm if q_norm > 0 else q_mean
+                                    c_mean = c_mean / c_norm if c_norm > 0 else c_mean
+                                    sim = float(np.dot(q_mean, c_mean))
+
+                                etiquetas_rankeadas.append({
+                                    'pagina': pg,
+                                    'numero': et['numero'],
+                                    'descripcion': et['descripcion'],
+                                    'similitud': sim,
+                                })
+                                print(f"      📊 Imagen {et['numero']}: {et['descripcion'][:50]} → sim={sim:.4f}")
+
+                    etiquetas_rankeadas.sort(key=lambda x: x['similitud'], reverse=True)
+
+                # 5. Scroll de TODAS las imágenes
+                all_image_points = []
+                try:
+                    from qdrant_client.models import MatchValue as MV2
+                    scroll_result = await client.scroll(
+                        collection_name=self.gestor_qdrant.content_mv_collection,
+                        scroll_filter=Filter(
+                            must=[FieldCondition(key="tipo", match=MV2(value="imagen"))]
+                        ),
+                        limit=1000,
+                        with_payload=True,
+                        with_vectors=False,
+                    )
+                    all_image_points = scroll_result[0] if scroll_result else []
+                except Exception as e:
+                    print(f"   ⚠️ Error obteniendo imágenes de Qdrant: {e}")
+
+                # 6. Para las top 3 etiquetas → imagen del doc principal en la misma página
+                paginas_usadas = set()
+                if etiquetas_rankeadas:
+                    for et in etiquetas_rankeadas[:3]:
+                        pg_target = et['pagina']
+                        if pg_target in paginas_usadas:
+                            continue
+                        for punto in all_image_points:
+                            payload = punto.payload or {}
+                            if (payload.get('nombre_archivo', '') == doc_principal
+                                    and payload.get('numero_pagina') == pg_target):
+                                img_path = payload.get('imagen_path', '')
+                                if img_path and os.path.exists(img_path):
+                                    desc = f"Imagen {et['numero']}: {et['descripcion']}"
+                                    imagenes_encontradas.append({
+                                        "path": img_path,
+                                        "descripcion": desc[:300]
+                                    })
+                                    paginas_usadas.add(pg_target)
+                                    print(f"      ✅ Imagen seleccionada: {os.path.basename(img_path)} (Imagen {et['numero']}: {et['descripcion'][:50]})")
+                                    break
+
+                # 7. Fallback por caption si no hubo match por etiquetas
+                if not imagenes_encontradas and all_image_points:
+                    print(f"   🔄 Fallback: rerank por caption de imágenes de {doc_principal}")
+                    candidatas_fallback = []
+                    for punto in all_image_points:
+                        payload = punto.payload or {}
+                        if payload.get('nombre_archivo', '') != doc_principal:
+                            continue
+                        caption_directo = (payload.get('texto', '') or '').strip()
+                        contexto_pagina = (payload.get('contexto_texto', '') or '').strip()
+                        caption_combinado = f"{caption_directo} {contexto_pagina}".strip()
+                        if not caption_combinado:
+                            continue
+                        emb = self.procesador.generar_embedding_texto(caption_combinado)
+                        if emb is not None:
+                            candidatas_fallback.append({
+                                "id": punto.id,
+                                "payload": payload,
+                                "caption_embedding": emb,
+                            })
+                    if candidatas_fallback:
+                        imagenes_reranked = rerank_imagenes_por_caption(query_mv, candidatas_fallback, umbral=0.0)
+                        for r in imagenes_reranked[:1]:
+                            img_path = r.get("payload", {}).get("imagen_path", "")
+                            caption = r.get("payload", {}).get("texto", "") or r.get("payload", {}).get("contexto_texto", "")
+                            if img_path and os.path.exists(img_path):
+                                imagenes_encontradas.append({
+                                    "path": img_path,
+                                    "descripcion": caption[:300]
+                                })
+                                print(f"      ✅ Imagen seleccionada (fallback): {os.path.basename(img_path)}")
 
                 if imagenes_encontradas:
                     state["imagenes_relevantes"] = imagenes_encontradas[:1]
+                    print(f"   📋 1 imagen relevante seleccionada (de {len(imagenes_encontradas)} candidatas).")
                 else:
-                    # Fallback: buscar directamente imágenes por embedding si no hubo match por etiquetas
-                    print("   🔍 No se encontraron imágenes por etiquetas, buscando directamente por embedding de imagen...")
-                    resultados_img, _ = await self.gestor_qdrant.buscar_muvera_2stage(
-                        query_mv, query_fde, min_score=0.0, filtro_tipo="imagen"
-                    )
-                    for r in resultados_img:
-                        p = r.get('payload', {})
-                        if p.get('tipo') == 'imagen' and p.get('imagen_path'):
-                            img_path = p['imagen_path']
-                            if os.path.exists(img_path):
-                                caption = p.get('texto', '') or p.get('contexto_texto', '')[:300]
-                                imagenes_encontradas.append({"path": img_path, "descripcion": caption})
-                    if imagenes_encontradas:
-                        state["imagenes_relevantes"] = imagenes_encontradas[:1]
-                        print(f"   ✅ Encontrada imagen por embedding directo: {imagenes_encontradas[0]['path']}")
-                    else:
-                        state["imagenes_relevantes"] = []
+                    state["imagenes_relevantes"] = []
+                    print(f"   📋 No se encontraron imágenes relevantes.")
+
                 resultados = resultados_texto
 
         # CASE 3: Text query
