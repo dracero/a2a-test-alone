@@ -3,7 +3,7 @@ name = "a2a-samples"
 version = "0.1.0"
 description = "Agent2Agent samples"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "a2a-sdk>=0.3.0,<1.0.0",
     "httpx>=0.28.1",
@@ -19,6 +19,17 @@ dependencies = [
 
 [tool.uv]
 package = false
+index-url = "https://pypi.org/simple"
+index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
 
 [tool.uv.workspace]
 members = [
@@ -29,8 +40,6 @@ members = [
 
 [tool.hatch.metadata]
 allow-direct-references = true
-
-
 
 [dependency-groups]
 dev = ["pytest>=8.3.5", "pytest-mock>=3.14.0", "ruff>=0.12.8"]

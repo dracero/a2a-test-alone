@@ -210,7 +210,8 @@ class PhysicsMultimodalAgent:
         self.multimodal_collection = "documentos_multimodal"
         
         # Modelo CLIP (para imágenes y búsqueda de imágenes con texto)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Forzar CPU para dejar VRAM libre para ColPali del agente médico
+        device = "cpu"
         self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
         self.clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
         

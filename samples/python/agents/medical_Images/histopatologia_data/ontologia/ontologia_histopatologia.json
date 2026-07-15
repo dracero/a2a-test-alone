@@ -1,73 +1,57 @@
 {
-  "sistemas_anatomicos": {
-    "organos": [
-      "Testículo"
+  "SISTEMAS ANATÓMICOS": {
+    "Órganos": [
+      "Esófago",
+      "Timo"
     ],
-    "tejidos": [
-      "Tejido testicular",
-      "Tejido conectivo laxo"
+    "Tejidos": [
+      "Tejido conectivo",
+      "Músculo liso",
+      "Tejido epitelial"
     ],
-    "estructuras": [
-      "Túbulos seminíferos",
-      "Lobulillos",
-      "Túnica albugínea",
-      "Cápsula fibromuscular"
+    "Estructuras": [
+      "Arteria muscular",
+      "Arteria muscular pequeña",
+      "Vénula",
+      "Arteriola"
     ]
   },
-  "terminologia_histolologica": {
-    "tipos_celulares": [
-      "Espermatogonias A claras",
-      "Espermatogonias A oscuras",
-      "Espermatogonias B",
-      "Espermatocitos primarios",
-      "Espermatocitos secundarios",
-      "Espermatides inmaduras",
-      "Espermatides maduras",
-      "Células de Sertoli",
-      "Células de Leydig",
-      "Células peritubulares o mioides"
+  "TERMINOLOGÍA HISTOLÓGICA": {
+    "Tipos celulares": [
+      "Células endoteliales",
+      "Fibroblastos",
+      "Fibrocitos",
+      "Células musculares lisas"
     ],
-    "componentes_tisulares": [
-      "Epitelio seminífero",
-      "Lámina basal",
-      "Cromatina",
-      "Nucléolos",
-      "Citoplasma",
-      "Membrana basal"
+    "Componentes tisulares": [
+      "Lámina elástica interna",
+      "Lámina elástica externa",
+      "Túnica íntima",
+      "Túnica media",
+      "Túnica adventicia",
+      "Fibras colágenas"
     ]
   },
-  "tecnicas_y_tinciones": {
-    "metodos_de_procesamiento": [
-      "Fijación de Bouin",
-      "Tinción hematoxilina-eosina"
-    ],
-    "coloraciones": [
-      "Hematoxilina-eosina"
+  "TÉCNICAS Y TINCIONES": {
+    "Métodos de procesamiento": [],
+    "Coloraciones": [
+      "Hematoxilina-Eosina (H&E)"
     ]
   },
-  "figuras": {
-    "1": "Vista panorámica del parénquima testicular a 40x",
-    "2": "No existe descripción para la figura 2",
-    "3": "No existe descripción para la figura 3",
-    "4": "No existe descripción para la figura 4",
-    "5": "No existe descripción para la figura 5",
-    "6": "No existe descripción para la figura 6",
-    "7": "No existe descripción para la figura 7",
-    "8": "No existe descripción para la figura 8",
-    "9": "No existe descripción para la figura 9",
-    "10": "Vista panorámica del parénquima testicular a 40x",
-    "11": "Vista de mayor aumento de un túbulo seminífero en corte transversal",
-    "12": "Espermatogonia A clara",
-    "13": "Espermatogonia A Oscura",
-    "14": "Espermatogonia B",
-    "15": "Espermatocito",
-    "16": "Espermatocito secundario",
-    "17": "Espermatide temprana"
+  "FIGURAS": {
+    "1": "Arteria muscular en corte transversal",
+    "2": "Arteria muscular en corte transversal, detalle histológico",
+    "3": "Esófago",
+    "4": "Arteria muscular pequeña en corte longitudinal",
+    "5": "Detalle de otra incidencia de corte (corte longitudinal)",
+    "6": "Corte transversal – comparación con otros vasos sanguíneos",
+    "7": "Corte oblicuo de una arteria muscular pequeña",
+    "8": "Corte transversal de una arteria muscular – con láminas elásticas interna y externa"
   },
-  "patologias": [],
+  "PATOLOGÍAS": [],
   "metadata": {
-    "fecha": "2026-07-12 19:11:09",
+    "fecha": "2026-07-13 20:11:29",
     "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
-    "num_imagenes": 13
+    "num_imagenes": 8
   }
 }
