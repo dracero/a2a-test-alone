@@ -158,6 +158,12 @@ class Config:
         for dir_path in [cls.EMBEDDINGS_DIR, cls.ONTOLOGY_DIR, cls.CACHE_DIR]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
+def normalizar_ruta_imagen(ruta: str) -> str:
+    if not ruta:
+        return ""
+    nombre_base = os.path.basename(ruta)
+    return str(Config.EMBEDDINGS_DIR / nombre_base)
+
 def setup_langsmith():
     """Configurar LangSmith para telemetría"""
     if not LANGSMITH_API_KEY:
@@ -906,13 +912,17 @@ class GestorQdrantMuvera:
             for r in mv_response.points:
                 score = float(r.score)
                 tiene_figura_exacta = False
-                if figuras_filtro and r.payload and "figuras" in r.payload:
-                    if any(f in r.payload["figuras"] for f in figuras_filtro):
+                payload = r.payload or {}
+                if "imagen_path" in payload:
+                    payload = dict(payload)
+                    payload["imagen_path"] = normalizar_ruta_imagen(payload["imagen_path"])
+                if figuras_filtro and "figuras" in payload:
+                    if any(f in payload["figuras"] for f in figuras_filtro):
                         tiene_figura_exacta = True
                 todos_candidatos.append({
                     "id": r.id,
                     "score": score,
-                    "payload": r.payload or {},
+                    "payload": payload,
                     "tiene_figura_exacta": tiene_figura_exacta,
                     "vector": r.vector
                 })
@@ -1752,6 +1762,9 @@ Ejemplo:
                         with_vectors=False,
                     )
                     all_image_points = scroll_result[0] if scroll_result else []
+                    for punto in all_image_points:
+                        if punto.payload and "imagen_path" in punto.payload:
+                            punto.payload["imagen_path"] = normalizar_ruta_imagen(punto.payload["imagen_path"])
                 except Exception as e:
                     print(f"   ⚠️ Error obteniendo imágenes de Qdrant: {e}")
 
