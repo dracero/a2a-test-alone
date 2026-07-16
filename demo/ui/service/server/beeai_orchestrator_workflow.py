@@ -121,8 +121,14 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                         })
                         print(f"🖼️ Image {idx} included for visual classification: {mime_type}")
                 
-                print(f"🔍 Sending MULTIMODAL classification prompt to Groq ({len(state.image_data_list)} images)...")
-                llm_response = await llm.ainvoke([HumanMessage(content=content)])
+                classification_llm = getattr(manager, 'vision_llm', None) or llm
+                print(f"🔍 Sending MULTIMODAL classification prompt to Groq ({len(state.image_data_list)} images) using model: {getattr(classification_llm, 'model', 'unknown')}...")
+                try:
+                    llm_response = await classification_llm.ainvoke([HumanMessage(content=content)])
+                except Exception as vision_err:
+                    print(f"⚠️ Vision model failed: {vision_err}")
+                    print(f"🔄 Falling back to text-only LLM for classification...")
+                    llm_response = await llm.ainvoke([HumanMessage(content=classification_text)])
             else:
                 # Text-only classification
                 print(f"🔍 Sending text-only classification prompt to Groq...")
@@ -208,8 +214,25 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 return "send_to_agent"
                 
         except Exception as e:
+            print(f"❌ Error during classification: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # Assign a sensible default instead of failing
+            if state.available_agents:
+                if state.has_images:
+                    # Try to find the physics or medical agent for image queries
+                    for agent in state.available_agents:
+                        name_lower = agent['name'].lower()
+                        if 'física' in name_lower or 'physics' in name_lower or 'multimodal' in name_lower:
+                            state.chosen_agent = agent['name']
+                            break
+                    if not state.chosen_agent:
+                        state.chosen_agent = state.available_agents[0]['name']
+                else:
+                    state.chosen_agent = state.available_agents[0]['name']
+                print(f"🔄 Fallback: routing to {state.chosen_agent}")
+                return "send_to_agent"
             state.error = f"Error during classification: {str(e)}"
-            print(f"❌ {state.error}")
             return None
     
     # Step 3: Send the message to the chosen agent
@@ -229,11 +252,21 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
         print(f"📤 Step 3: Sending message to {state.chosen_agent}...")
         
         if not state.chosen_agent:
-            # This should not happen if classify_and_choose worked correctly
-            # Generate a fallback response
-            print(f"⚠️ No agent chosen, generating fallback response")
-            state.agent_response = "Lo siento, no pude determinar qué agente especializado usar para tu consulta. ¿Podrías reformular tu pregunta?"
-            return None
+            # Try to recover by using the first available agent
+            if state.available_agents:
+                if state.has_images:
+                    for agent in state.available_agents:
+                        name_lower = agent['name'].lower()
+                        if 'física' in name_lower or 'physics' in name_lower or 'multimodal' in name_lower:
+                            state.chosen_agent = agent['name']
+                            break
+                if not state.chosen_agent and state.available_agents:
+                    state.chosen_agent = state.available_agents[0]['name']
+                print(f"🔄 Recovered: routing to {state.chosen_agent}")
+            else:
+                print(f"⚠️ No agent chosen and no agents available, generating fallback response")
+                state.agent_response = "Lo siento, no pude determinar qué agente especializado usar para tu consulta. ¿Podrías reformular tu pregunta?"
+                return None
         
         try:
             from service.server.beeai_host_manager import \

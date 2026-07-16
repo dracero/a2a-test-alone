@@ -26,6 +26,7 @@ VENTAJAS vs versión con ColBERT:
 """
 
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import re
 import json
 import time
@@ -151,7 +152,17 @@ class Config:
     TOP_K_RESULTS = int(os.getenv("TOP_K_RESULTS", "5"))
 
     # Cuantización: 8 = mejor precisión en scores (~870+), 4 = menos VRAM (~800 scores)
-    QUANTIZATION_BITS = int(os.getenv("QUANTIZATION_BITS", "8"))
+    _default_bits = "8"
+    try:
+        import torch
+        if torch.cuda.is_available():
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            if vram_gb < 7.0:
+                _default_bits = "4"
+                print(f"ℹ️ GPU VRAM detectada ({vram_gb:.2f} GB) es menor a 7 GB. Forzando default QUANTIZATION_BITS=4 para evitar CUDA OOM.")
+    except Exception:
+        pass
+    QUANTIZATION_BITS = int(os.getenv("QUANTIZATION_BITS", _default_bits))
 
     @classmethod
     def setup_directories(cls):
@@ -337,7 +348,7 @@ class ProcesadorColPaliPuro:
         print("\n🖼️ Inicializando ColPali Puro + MUVERA...")
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-
+        
         # SOLO ColPali - para texto E imágenes
         bits = Config.QUANTIZATION_BITS
         print(f"   📚 Cargando ColPali v1.2 ({bits}-bit, texto + imágenes)...")
@@ -359,7 +370,8 @@ class ProcesadorColPaliPuro:
                 quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_quant_type="nf4"
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True
                 )
             elif bits == 8:
                 quantization_config = BitsAndBytesConfig(
@@ -588,11 +600,11 @@ class ProcesadorColPaliPuro:
         """Preprocesamiento específico para histopatología"""
         image = Image.open(imagen_path).convert("RGB")
 
-        # Magnificar imágenes pequeñas a mínimo 868px (mismo tratamiento
-        # que la extracción del PDF para mantener simetría en embeddings)
+        # Ajustar tamaño de la imagen para que su lado más largo sea exactamente 868px.
+        # Esto optimiza el consumo de VRAM y evita CUDA OOM en imágenes muy grandes (fotos, capturas de pantalla, etc.)
         width, height = image.size
         target_size = 868
-        if max(width, height) < target_size:
+        if max(width, height) != target_size:
             scale = target_size / max(width, height)
             new_width = int(width * scale)
             new_height = int(height * scale)

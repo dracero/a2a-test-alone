@@ -544,6 +544,13 @@ class BeeAIHostManager(ApplicationManager):
             temperature=0.3,
             max_tokens=4096
         )
+        # Initialize the LangChain Groq Vision Model specifically for images
+        self.vision_llm = ChatGroq(
+            model="qwen/qwen3.6-27b",
+            api_key=self.api_key,
+            temperature=0.1,
+            max_tokens=1024
+        )
         # Wrap it for BeeAI
         self.chat_model = LangChainChatModel(self.llm)
 

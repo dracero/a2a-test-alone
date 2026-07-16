@@ -434,7 +434,7 @@ def main():
         print("❌ GROQ_API_KEY not set. Please set it in .env or environment.")
         sys.exit(1)
 
-    model_name = args.model or "groq/meta-llama/llama-4-scout-17b-16e-instruct"
+    model_name = args.model or "meta-llama/llama-4-scout-17b-16e-instruct"
     print(f"   Model: {model_name}")
     print(f"   Temperature: {args.temperature}")
 

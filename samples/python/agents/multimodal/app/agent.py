@@ -189,10 +189,17 @@ class PhysicsMultimodalAgent:
     def __init__(self, qdrant_url: str = None, qdrant_api_key: str = None):
         """Inicializar el agente de física."""
         from langchain_groq import ChatGroq
+        # Using Meta Llama 4 Scout as the text model
         self.llm = ChatGroq(
-            model=GROQ_MODEL,
+            model='meta-llama/llama-4-scout-17b-16e-instruct',
             temperature=0.3,
             max_tokens=4096,
+            api_key=os.getenv('GROQ_API_KEY')
+        )
+        self.vision_llm = ChatGroq(
+            model="qwen/qwen3.6-27b",
+            temperature=0.1,
+            max_tokens=2048,
             api_key=os.getenv('GROQ_API_KEY')
         )
         
@@ -810,15 +817,22 @@ Contenido:
 
         content = [{
             "type": "text",
-            "text": f"""{prompt_prefix}Analiza estas {len(images)} imágenes de física. 
-Si eres un modelo de solo texto y no puedes ver la imagen físicamente, utiliza el texto del material de la materia proporcionado arriba para deducir qué fenómeno se representa en la imagen y descríbelo según estos puntos:
+            "text": f"""{prompt_prefix}Eres un experto en Física. Observa esta(s) {len(images)} imagen(es) y describí con MÁXIMO DETALLE VISUAL todo lo que ves.
 
-1. FENÓMENO FÍSICO observado (ej: cilindro/disco rodando con/sin rozamiento, resorte, oscilaciones. Sé muy preciso y fiel al texto asociado. NO inventes cañones u otros dispositivos si no se mencionan en el texto).
-2. PRINCIPIOS FÍSICOS aplicables (ej: rodadura sin deslizar, conservación de la energía, fuerza elástica, dinámica de rotación, etc.)
-3. ECUACIONES RELEVANTES (ej: torque, conservación de energía elástica y cinética, energía cinética de rotación y traslación).
-4. DESCRIPCIÓN DETALLADA (ej: coeficiente de rozamiento, tramo sin fricción, tramo con fricción, longitud natural L0, elongación A).
+1. **ELEMENTOS VISIBLES**: Enumerá TODOS los objetos, cuerpos, dispositivos, símbolos, flechas, letras, números y etiquetas que aparecen en la imagen. No omitas nada.
 
-Sé técnico y preciso."""
+2. **CONEXIONES Y RELACIONES**: Describí cómo están conectados o relacionados los elementos entre sí (qué toca qué, qué está encima/debajo/dentro de qué, qué está unido a qué, qué pasa por dónde).
+
+3. **GEOMETRÍA Y DISPOSICIÓN**: Ángulos, orientaciones, posiciones relativas, simetrías, direcciones de flechas o vectores si los hay.
+
+4. **DATOS Y VARIABLES**: Cualquier valor numérico, variable, ecuación o texto escrito en la imagen.
+
+5. **INTERPRETACIÓN FÍSICA**: Basándote en lo que VES, ¿qué fenómeno o problema físico representa la imagen? ¿Qué principios y leyes serían aplicables?
+
+REGLAS:
+- Describí ÚNICAMENTE lo que ves. No inventes elementos que no estén en la imagen.
+- Sé exhaustivo: es mejor describir de más que omitir algo.
+- Si hay fuerzas, tensiones, pesos, reacciones, corrientes, campos, ondas, o cualquier magnitud representada, mencionala explícitamente."""
         }]
         
         for idx, img in enumerate(images):
@@ -846,7 +860,7 @@ Sé técnico y preciso."""
                 print(f"❌ Error imagen {idx}: {e}")
         
         try:
-            response = self.llm.invoke([HumanMessage(content=content)])
+            response = self.vision_llm.invoke([HumanMessage(content=content)])
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
