@@ -77,7 +77,7 @@ from colpali_engine.models import ColPali as ColPaliModel
 from colpali_engine.models import ColPaliProcessor
 
 # LangChain
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 # LangGraph
@@ -85,17 +85,47 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.message import add_messages
 
-# Groq para extracción de ontología
-from groq import Groq as GroqClient
+# Google GenAI para extracción de ontología
+from google import genai as GoogleGenAIClient
 
 # Configuración de credenciales local
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_KEY = os.getenv("QDRANT_KEY")
 LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
 
 nest_asyncio.apply()
 warnings.filterwarnings('ignore', category=FutureWarning)
+
+def redimensionar_y_codificar_imagen(img_path: str, max_dim: int = 384) -> str:
+    """Abre una imagen, la redimensiona manteniendo el aspect ratio, y la devuelve en base64."""
+    try:
+        with Image.open(img_path) as img:
+            # Convertir a RGB
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # Redimensionar si supera max_dim
+            w, h = img.size
+            if max(w, h) > max_dim:
+                if w > h:
+                    new_w = max_dim
+                    new_h = int(h * (max_dim / w))
+                else:
+                    new_h = max_dim
+                    new_w = int(w * (max_dim / h))
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                
+            # Guardar en buffer como JPEG comprimido
+            buffer = BytesIO()
+            img.save(buffer, format="JPEG", quality=75)
+            return base64.b64encode(buffer.getvalue()).decode("utf-8")
+    except Exception as e:
+        print(f"⚠️ Error redimensionando imagen {img_path}: {e}")
+        # Fallback al archivo crudo en base64 si falla PIL
+        with open(img_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
 
 # ============================================================================
 # CONFIGURACIÓN
@@ -202,15 +232,15 @@ def cleanup_memory():
 # ============================================================================
 
 class ExtractorOntologia:
-    """Extrae ontología histopatológica usando Groq"""
+    """Extrae ontología histopatológica usando Google Gemini"""
 
     def __init__(self, api_key: str):
         if not api_key:
-            print("⚠️ API Key de Groq no proporcionada para ExtractorOntologia")
+            print("⚠️ API Key de Google no proporcionada para ExtractorOntologia")
             self.model = None
             return
-        self._groq_client = GroqClient(api_key=api_key)
-        self.model = "meta-llama/llama-4-scout-17b-16e-instruct"
+        self._gemini_client = GoogleGenAIClient.Client(api_key=api_key)
+        self.model = "gemini-2.5-flash"
 
     @staticmethod
     def extraer_caption_imagen(page_fitz, img_bbox, texto_pagina_completo: str) -> str:
@@ -264,12 +294,25 @@ Responde SOLAMENTE con un JSON válido, sin texto adicional ni explicaciones."""
             try:
                 prompt_actual = prompt if intento == 0 else \
                     f"Extrae una ontología en formato JSON puro (sin markdown) del siguiente texto de histopatología:\n{contenido[:5000]}"
-                response = self._groq_client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt_actual}],
-                    temperature=0
-                )
-                ontologia_texto = response.choices[0].message.content.strip()
+                
+                # Retry loop for rate limits (429)
+                for attempt in range(5):
+                    try:
+                        response = self._gemini_client.models.generate_content(
+                            model=self.model,
+                            contents=prompt_actual,
+                        )
+                        break
+                    except Exception as e:
+                        err_str = str(e)
+                        if any(term in err_str.lower() for term in ["429", "rate limit", "rate_limit_exceeded"]) and attempt < 4:
+                            wait_t = 2.0 * (2 ** attempt)
+                            print(f"⚠️ [Gemini Rate Limit - Ontología] Reintentando en {wait_t:.1f}s... (Intento {attempt+1}/5)")
+                            time.sleep(wait_t)
+                        else:
+                            raise e
+                            
+                ontologia_texto = response.text.strip()
                 # Limpiar markdown code blocks
                 if '```' in ontologia_texto:
                     # Extraer contenido entre los primeros ``` y los últimos ```
@@ -286,7 +329,7 @@ Responde SOLAMENTE con un JSON válido, sin texto adicional ni explicaciones."""
 
                 ontologia["metadata"] = {
                     "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
+                    "modelo": self.model,
                     "num_imagenes": num_imagenes
                 }
 
@@ -622,7 +665,8 @@ class ProcesadorColPaliPuro:
 
     def generar_embedding_imagen(self, imagen_path: str) -> Optional[np.ndarray]:
         """
-        Genera embedding ColPali multi-vector para imagen
+        Genera embedding ColPali multi-vector para imagen.
+        Si falla por CUDA OOM, reintenta moviendo temporalmente a CPU.
         """
         if self.colpali_model is None:
             print("⚠️ ColPali no disponible")
@@ -647,14 +691,11 @@ class ProcesadorColPaliPuro:
             multivector = image_embeddings[0].cpu().float().numpy()
 
             # Normalización L2 por vector
-            # Convierte dot product (magnitud variable por GPU) en cosine similarity.
-            # Activa con NORMALIZE_EMBEDDINGS=true en .env (default: true).
             if Config.NORMALIZE_EMBEDDINGS:
                 norms = np.linalg.norm(multivector, axis=-1, keepdims=True)
                 norms = np.where(norms < 1e-8, 1.0, norms)
                 multivector = multivector / norms
 
-            # Debug: score máximo esperado si query == document (útil para calibrar threshold)
             print(f"   📊 [Debug] Embedding imagen: shape={multivector.shape} "
                   f"| norm_media={np.linalg.norm(multivector, axis=-1).mean():.4f} "
                   f"| normalizado={Config.NORMALIZE_EMBEDDINGS}")
@@ -663,6 +704,51 @@ class ProcesadorColPaliPuro:
             cleanup_memory()
             return multivector
 
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower() or "CUDA" in str(e):
+                print(f"⚠️ CUDA OOM al generar embedding imagen, reintentando en CPU...")
+                cleanup_memory()
+                try:
+                    # Mover inputs a CPU y ejecutar en CPU
+                    image = self._preprocesar_imagen(imagen_path)
+                    batch_images = self.colpali_processor.process_images([image])
+                    batch_images = {k: v.to("cpu") for k, v in batch_images.items()}
+                    
+                    # Temporalmente mover modelo a CPU
+                    original_device = self.colpali_model.device
+                    self.colpali_model = self.colpali_model.to("cpu")
+                    
+                    with torch.no_grad():
+                        image_embeddings = self.colpali_model(**batch_images)
+                    
+                    multivector = image_embeddings[0].cpu().float().numpy()
+                    
+                    if Config.NORMALIZE_EMBEDDINGS:
+                        norms = np.linalg.norm(multivector, axis=-1, keepdims=True)
+                        norms = np.where(norms < 1e-8, 1.0, norms)
+                        multivector = multivector / norms
+                    
+                    print(f"   ✅ Embedding generado en CPU (fallback): shape={multivector.shape}")
+                    
+                    del image, batch_images, image_embeddings
+                    
+                    # Intentar mover modelo de vuelta a GPU
+                    try:
+                        cleanup_memory()
+                        self.colpali_model = self.colpali_model.to(original_device)
+                    except Exception:
+                        print("   ⚠️ No se pudo devolver modelo a GPU, se queda en CPU")
+                        self.device = "cpu"
+                    
+                    return multivector
+                except Exception as cpu_err:
+                    print(f"❌ Error generando embedding imagen en CPU fallback: {cpu_err}")
+                    cleanup_memory()
+                    return None
+            else:
+                print(f"❌ Error generando embedding imagen: {e}")
+                cleanup_memory()
+                return None
         except Exception as e:
             print(f"❌ Error generando embedding imagen: {e}")
             cleanup_memory()
@@ -670,7 +756,8 @@ class ProcesadorColPaliPuro:
 
     def generar_embedding_texto(self, texto: str) -> Optional[np.ndarray]:
         """
-        Genera embedding ColPali multi-vector para TEXTO
+        Genera embedding ColPali multi-vector para TEXTO.
+        Si falla por CUDA OOM, reintenta en CPU.
         """
         if self.colpali_model is None:
             print("⚠️ ColPali no disponible")
@@ -703,6 +790,47 @@ class ProcesadorColPaliPuro:
             cleanup_memory()
             return multivector
 
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower() or "CUDA" in str(e):
+                print(f"⚠️ CUDA OOM al generar embedding texto, reintentando en CPU...")
+                cleanup_memory()
+                try:
+                    batch_queries = self.colpali_processor.process_queries([texto])
+                    batch_queries = {k: v.to("cpu") for k, v in batch_queries.items()}
+                    
+                    original_device = self.colpali_model.device
+                    self.colpali_model = self.colpali_model.to("cpu")
+                    
+                    with torch.no_grad():
+                        text_embeddings = self.colpali_model(**batch_queries)
+                    
+                    multivector = text_embeddings[0].cpu().float().numpy()
+                    
+                    if Config.NORMALIZE_EMBEDDINGS:
+                        norms = np.linalg.norm(multivector, axis=-1, keepdims=True)
+                        norms = np.where(norms < 1e-8, 1.0, norms)
+                        multivector = multivector / norms
+                    
+                    print(f"   ✅ Embedding texto generado en CPU (fallback)")
+                    
+                    del batch_queries, text_embeddings
+                    
+                    try:
+                        cleanup_memory()
+                        self.colpali_model = self.colpali_model.to(original_device)
+                    except Exception:
+                        print("   ⚠️ No se pudo devolver modelo a GPU, se queda en CPU")
+                        self.device = "cpu"
+                    
+                    return multivector
+                except Exception as cpu_err:
+                    print(f"❌ Error generando embedding texto en CPU fallback: {cpu_err}")
+                    cleanup_memory()
+                    return None
+            else:
+                print(f"❌ Error generando embedding texto: {e}")
+                cleanup_memory()
+                return None
         except Exception as e:
             print(f"❌ Error generando embedding texto: {e}")
             cleanup_memory()
@@ -1245,6 +1373,32 @@ class SistemaRAGColPaliPuro:
             os.environ["GROQ_API_KEY"] = GROQ_API_KEY
         setup_langsmith()
 
+    async def _llm_ainvoke(self, messages: List[Any]) -> Any:
+        """
+        Invoca a Gemini y maneja rate limits con retry.
+        """
+        intentos = 5
+        delay = 2.0
+        for intento in range(intentos):
+            try:
+                response = await self.llm.ainvoke(messages)
+                return response
+            except Exception as e:
+                err_str = str(e)
+                es_rate_limit = any(term in err_str.lower() for term in ["429", "rate limit", "rate_limit_exceeded", "quota"])
+                if es_rate_limit and intento < intentos - 1:
+                    # Intentar extraer el tiempo de espera sugerido por la API
+                    match = re.search(r"(?:try again in|in) (\d+\.?\d*)s", err_str, re.IGNORECASE)
+                    if match:
+                        wait_time = float(match.group(1)) + 1.0
+                    else:
+                        wait_time = delay * (2 ** intento)
+                        
+                    print(f"⚠️ [Gemini Rate Limit] Reintentando en {wait_time:.2f}s... (Intento {intento+1}/{intentos})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    raise e
+
     def inicializar_componentes(self):
         """Inicializar todos los componentes"""
         if getattr(self, "_componentes_inicializados", False):
@@ -1255,11 +1409,13 @@ class SistemaRAGColPaliPuro:
         print("="*80)
 
         # LLM
-        self.llm = ChatGroq(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
             temperature=0,
-            api_key=GROQ_API_KEY
+            google_api_key=GOOGLE_API_KEY
         )
+        self.llm_text = self.llm
+        self.llm_vision = self.llm
 
         # Configurar directorio de uploads para imágenes temporales
         self.uploads_dir = Path("uploads")
@@ -1279,7 +1435,7 @@ class SistemaRAGColPaliPuro:
         )
 
         # Extractor de ontología
-        self.extractor_ontologia = ExtractorOntologia(GROQ_API_KEY)
+        self.extractor_ontologia = ExtractorOntologia(GOOGLE_API_KEY)
         self.ontologia = self.extractor_ontologia.cargar_ontologia()
 
         # LangGraph
@@ -1391,7 +1547,7 @@ Responde ÚNICAMENTE con la consulta reescrita, sin explicaciones, introduccione
                     SystemMessage(content="Eres un asistente que reescribe consultas para resolver correferencias basándose en el historial de chat. Tu respuesta debe ser estrictamente la consulta resuelta, nada más."),
                     HumanMessage(content=prompt_resolucion)
                 ]
-                resolucion_response = await self.llm.ainvoke(messages)
+                resolucion_response = await self._llm_ainvoke(messages)
                 resolved = resolucion_response.content.strip()
                 if resolved:
                     if (resolved.startswith('"') and resolved.endswith('"')) or (resolved.startswith("'") and resolved.endswith("'")):
@@ -1433,7 +1589,7 @@ Si el usuario hace una pregunta teórica, o usa palabras como "ver" o "imagen" s
 Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usuario desea que le muestres una imagen, o "REQUIERE_IMAGEN: FALSE" si es solo una pregunta o comentario."""),
             HumanMessage(content=f"CONSULTA: {state['consulta_usuario']}{info_imagen}\nCONTEXTO ONTOLÓGICO:\n{state['contexto_ontologico']}")
         ]
-        response = await self.llm.ainvoke(messages)
+        response = await self._llm_ainvoke(messages)
         state["clasificacion"] = response.content
 
         # Determine requiere_imagen using priority chain:
@@ -1471,7 +1627,7 @@ Ejemplo:
 """),
             HumanMessage(content=f"CONSULTA: {state['consulta_resuelta']}\nCONTEXTO ONTOLÓGICO: {state['contexto_ontologico'][:500]}")
         ]
-        response = await self.llm.ainvoke(messages)
+        response = await self._llm_ainvoke(messages)
         state["consulta_optimizada"] = response.content.strip()
         print(f"   🔧 Consulta optimizada: {state['consulta_optimizada'][:200]}")
         state["trayectoria"].append({"nodo": "optimizar_consulta", "timestamp": time.time()})
@@ -2171,7 +2327,7 @@ CONTEXTO RECUPERADO DE LA BASE DE DATOS
 (Esta es la ÚNICA fuente de verdad para tu respuesta)
 ========================================
 
-{state["contexto_documentos"][:10000]}
+{state["contexto_documentos"][:4000]}
 
 ========================================
 
@@ -2182,12 +2338,12 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
                 "text": texto_mensaje
             })
             
-            # Determinar límite de imágenes según restricción de API (max 5 total)
-            max_imagenes_recuperadas = 4 if (state.get('imagen_consulta') and os.path.exists(state['imagen_consulta'])) else 5
+            # Determinar límite de imágenes según restricción de API (máximo 2 imágenes totales en free tier para no superar el TPM)
+            max_imagenes_recuperadas = 1 if (state.get('imagen_consulta') and os.path.exists(state['imagen_consulta'])) else 2
             imagenes_a_procesar = state["imagenes_relevantes"][:max_imagenes_recuperadas]
             
             if len(state["imagenes_relevantes"]) > max_imagenes_recuperadas:
-                print(f"   ⚠️ Limitando a {max_imagenes_recuperadas} imágenes (de {len(state['imagenes_relevantes'])}) por restricción de API.")
+                print(f"   ⚠️ Limitando a {max_imagenes_recuperadas} imágenes de contexto (de {len(state['imagenes_relevantes'])}) para evitar límite de tokens de Groq.")
             
             # Añadir imágenes recuperadas al mensaje
             imagenes_cargadas_exitosamente = 0
@@ -2196,8 +2352,7 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
                     # Soportar tanto dict (nuevo) como string (legacy)
                     img_path = img_item["path"] if isinstance(img_item, dict) else img_item
                     if os.path.exists(img_path):
-                        with open(img_path, "rb") as image_file:
-                            image_data = base64.b64encode(image_file.read()).decode("utf-8")
+                        image_data = redimensionar_y_codificar_imagen(img_path, max_dim=384)
                         
                         user_content.append({
                             "type": "text", 
@@ -2217,8 +2372,7 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
             # Si el usuario subió una imagen, también la adjuntamos
             if state.get('imagen_consulta') and os.path.exists(state['imagen_consulta']):
                 try:
-                    with open(state['imagen_consulta'], "rb") as image_file:
-                        query_image_data = base64.b64encode(image_file.read()).decode("utf-8")
+                    query_image_data = redimensionar_y_codificar_imagen(state['imagen_consulta'], max_dim=384)
                     user_content.append({
                         "type": "text",
                         "text": "\n[IMAGEN DE CONSULTA DEL USUARIO]"
@@ -2297,7 +2451,7 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
         ]
 
         # 6. Invocar LLM y generar respuesta
-        response = await self.llm.ainvoke(messages)
+        response = await self._llm_ainvoke(messages)
         state["respuesta_final"] = response.content
 
         print("   ✅ Respuesta generada")
@@ -2321,7 +2475,7 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
                     SystemMessage(content="Eres un asistente que resume interacciones. Escribe un resumen MUY BREVE (1-3 oraciones) de lo que preguntó el usuario y lo que respondiste o concluiste."),
                     HumanMessage(content=f"USUARIO: {consulta_usuario_val}\nASISTENTE: {respuesta_corta}")
                 ]
-                resume_response = await self.llm.ainvoke(messages)
+                resume_response = await self._llm_ainvoke(messages)
                 summary = resume_response.content
                 
                 self.memoria.add_interaction_summary(
@@ -2613,8 +2767,7 @@ class MedicalAgent(SistemaRAGColPaliPuro):
         if imagen_path and os.path.exists(imagen_path):
             print("   📸 Extrayendo hallazgos de imagen para consulta web...")
             try:
-                with open(imagen_path, "rb") as img_f:
-                    img_b64 = base64.b64encode(img_f.read()).decode("utf-8")
+                img_b64 = redimensionar_y_codificar_imagen(imagen_path, max_dim=384)
                 
                 content = [
                     {
@@ -2626,7 +2779,7 @@ class MedicalAgent(SistemaRAGColPaliPuro):
                         "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
                     }
                 ]
-                res = await self.llm.ainvoke([HumanMessage(content=content)])
+                res = await self._llm_ainvoke([HumanMessage(content=content)])
                 hallazgos_visuales = res.content
             except Exception as e:
                 print(f"   ⚠️ Error de visión en fallback: {e}")
@@ -2641,7 +2794,7 @@ class MedicalAgent(SistemaRAGColPaliPuro):
                 SystemMessage(content=system_query_prompt),
                 HumanMessage(content=user_query_prompt)
             ]
-            res = await self.llm.ainvoke(messages)
+            res = await self._llm_ainvoke(messages)
             search_query = res.content.strip()
         except Exception:
             search_query = state.get("consulta_optimizada") or state["consulta_usuario"]
@@ -2678,7 +2831,7 @@ RESULTADOS DE BÚSQUEDA WEB:
 {search_info}"""
 
         try:
-            res = await self.llm.ainvoke([
+            res = await self._llm_ainvoke([
                 SystemMessage(content=system_response_prompt),
                 HumanMessage(content=user_response_prompt)
             ])

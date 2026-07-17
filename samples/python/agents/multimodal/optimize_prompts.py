@@ -364,7 +364,7 @@ def main():
         "--model",
         type=str,
         default=None,
-        help="LLM model identifier (e.g. groq/llama-4-scout-17b-16e-instruct)",
+        help="LLM model identifier (e.g. groq/llama-3.3-70b-versatile)",
     )
     parser.add_argument(
         "--reflection-model",
@@ -434,7 +434,7 @@ def main():
         print("❌ GROQ_API_KEY not set. Please set it in .env or environment.")
         sys.exit(1)
 
-    model_name = args.model or "meta-llama/llama-4-scout-17b-16e-instruct"
+    model_name = args.model or "llama-3.3-70b-versatile"
     print(f"   Model: {model_name}")
     print(f"   Temperature: {args.temperature}")
 

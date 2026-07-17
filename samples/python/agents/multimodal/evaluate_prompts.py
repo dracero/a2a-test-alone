@@ -90,7 +90,7 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate GEPA-optimized prompts vs baseline")
     parser.add_argument("--examples", type=Path, default=DEFAULT_EXAMPLES, help="Path to examples JSON")
     parser.add_argument("--optimized", type=Path, default=OPTIMIZED_PROMPTS_FILE, help="Path to optimized_prompts.json")
-    parser.add_argument("--model", type=str, default="meta-llama/llama-4-scout-17b-16e-instruct", help="LLM model (must match optimize_prompts)")
+    parser.add_argument("--model", type=str, default="llama-3.3-70b-versatile", help="LLM model (must match optimize_prompts)")
     parser.add_argument("--num-threads", type=int, default=4, help="Threads for evaluation")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()

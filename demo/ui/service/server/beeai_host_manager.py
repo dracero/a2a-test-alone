@@ -24,7 +24,7 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter.emitter import Emitter
 from beeai_framework.memory.unconstrained_memory import UnconstrainedMemory
 from beeai_framework.tools.tool import Tool
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from neo4j_agent_memory import MemoryClient, MemorySettings, ExtractionConfig, ExtractorType
 from neo4j_agent_memory.llm.adapters.sentence_transformers import SentenceTransformersProvider
 from pydantic import BaseModel, Field, SecretStr
@@ -530,6 +530,7 @@ class BeeAIHostManager(ApplicationManager):
         self._active_sessions: dict[str, str] = {}
 
         self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
+        self.google_api_key = os.getenv("GOOGLE_API_KEY", "")
         # Guardar sesiones y conversaciones localmente (no /tmp)
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self._sessions_file = os.path.join(base_dir, "beeai_active_sessions.json")
@@ -537,20 +538,15 @@ class BeeAIHostManager(ApplicationManager):
         self._load_sessions()
         self._load_conversations()
 
-        # Initialize the LangChain Groq Model
-        self.llm = ChatGroq(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
-            api_key=self.api_key,
+        # Initialize the LangChain Google Gemini Model
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=self.google_api_key,
             temperature=0.3,
             max_tokens=4096
         )
-        # Initialize the LangChain Groq Vision Model specifically for images
-        self.vision_llm = ChatGroq(
-            model="qwen/qwen3.6-27b",
-            api_key=self.api_key,
-            temperature=0.1,
-            max_tokens=1024
-        )
+        # Initialize the LangChain Google Gemini Vision Model specifically for images
+        self.vision_llm = self.llm
         # Wrap it for BeeAI
         self.chat_model = LangChainChatModel(self.llm)
 

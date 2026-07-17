@@ -79,11 +79,23 @@ def generate_image_tool(
     return _generate_image_internal(prompt, session_id, artifact_id)
 
 
+# List of models to try in order (fallback strategy)
+# Using inference providers for better free-tier availability
+_MODELS_TO_TRY = [
+    # Provider-based models (more reliable, use HF's $0.10/mo free credits)
+    {"model": "black-forest-labs/FLUX.1-schnell", "provider": "fal-ai", "label": "FLUX.1-schnell via fal"},
+    {"model": "black-forest-labs/FLUX.1-schnell", "provider": "replicate", "label": "FLUX.1-schnell via replicate"},
+    # Direct serverless (free tier, may have limits)
+    {"model": "stabilityai/stable-diffusion-xl-base-1.0", "provider": None, "label": "SDXL direct"},
+    {"model": "black-forest-labs/FLUX.1-schnell", "provider": None, "label": "FLUX.1-schnell direct"},
+]
+
+
 @traceable(name="image_generation_internal", run_type="tool")
 def _generate_image_internal(
     prompt: str, session_id: str, artifact_file_id: str = None
 ) -> str:
-    """Internal image generation logic with LangSmith tracing using Hugging Face Stable Diffusion."""
+    """Internal image generation logic with LangSmith tracing using Hugging Face models with fallback."""
     if not prompt:
         raise ValueError('Prompt cannot be empty')
 
@@ -111,109 +123,140 @@ def _generate_image_internal(
     if artifact_file_id:
         print(f'⚠️ Reference image {artifact_file_id} - editing not yet implemented')
 
-    print('🆕 Generating new image with Hugging Face Stable Diffusion')
+    print('🆕 Generating new image with Hugging Face (multi-model fallback)')
 
-    try:
-        # Use Hugging Face Inference API with Stable Diffusion XL
-        # Model: stabilityai/stable-diffusion-xl-base-1.0
-        hf_token = os.getenv('HUGGINGFACEHUB_API_TOKEN') or os.getenv('HF_TOKEN')
-        
-        if not hf_token:
-            error_msg = 'HUGGINGFACEHUB_API_TOKEN or HF_TOKEN not set'
-            logger.error(error_msg)
-            print(f'❌ {error_msg}')
-            return f"ERROR: {error_msg}"
-        
-        # Enhanced prompt for better image quality
-        enhanced_prompt = (
-            f"{prompt}, "
-            f"high quality, detailed, professional, 4k, masterpiece"
-        )
-        
-        print(f'🚀 Calling Hugging Face Inference API...')
-        print(f'📝 Enhanced prompt: {enhanced_prompt}')
-        
-        from huggingface_hub import InferenceClient
-        
-        client = InferenceClient(token=hf_token)
-        model_id = "stabilityai/stable-diffusion-xl-base-1.0"
-        
-        # Make request to Hugging Face
-        image = client.text_to_image(
-            prompt=enhanced_prompt,
-            model=model_id,
-            num_inference_steps=50,
-            guidance_scale=7.5,
-            negative_prompt="blurry, bad quality, watermark, text, signature, low resolution"
-        )
-        
-        img_byte_arr = BytesIO()
-        image.save(img_byte_arr, format='PNG')
-        image_data_bytes = img_byte_arr.getvalue()
-        
-        if not image_data_bytes or len(image_data_bytes) < 100:
-            error_msg = 'No valid image data in Hugging Face response'
-            logger.error(error_msg)
-            print(f'❌ {error_msg}')
-            return f"ERROR: {error_msg}"
-        
-        print(f'✅ Image data received: {len(image_data_bytes)} bytes')
-        
-        # Store image in cache
-        data = Imagedata(
-            bytes=base64.b64encode(image_data_bytes).decode('utf-8'),
-            mime_type='image/png',
-            name='generated_image.png',
-            id=uuid4().hex,
-        )
-        
-        session_data = cache.get(session_id)
-        if session_data is None:
-            cache.set(session_id, {data.id: data})
-        else:
-            session_data[data.id] = data
-
-        print(f'✅ Image generated with ID: {data.id}')
-        
-        # Log success to LangSmith
-        if LANGSMITH_ENABLED:
-            try:
-                langsmith_client.create_feedback(
-                    run_id=None,
-                    key="image_generation_success",
-                    value={
-                        "image_id": data.id,
-                        "prompt": prompt,
-                        "session_id": session_id,
-                        "mime_type": data.mime_type,
-                        "model": "stabilityai/stable-diffusion-xl-base-1.0"
-                    }
-                )
-            except:
-                pass
-
-        return data.id
-        
-    except (TimeoutError, Exception) as e:
-        if isinstance(e, TimeoutError):
-            error_msg = 'Hugging Face API timeout - model may be loading, try again in a minute'
-        else:
-            error_msg = str(e)
-        logger.error(f'Error generating image: {error_msg}')
-        print(f'❌ Generation error: {error_msg}')
-        
-        # Log error to LangSmith
-        if LANGSMITH_ENABLED:
-            try:
-                langsmith_client.create_feedback(
-                    run_id=None,
-                    key="image_generation_error",
-                    value={"error": error_msg, "prompt": prompt}
-                )
-            except:
-                pass
-        
+    hf_token = os.getenv('HUGGINGFACEHUB_API_TOKEN') or os.getenv('HF_TOKEN')
+    
+    if not hf_token:
+        error_msg = 'HUGGINGFACEHUB_API_TOKEN or HF_TOKEN not set'
+        logger.error(error_msg)
+        print(f'❌ {error_msg}')
         return f"ERROR: {error_msg}"
+    
+    # Enhanced prompt for better image quality
+    enhanced_prompt = (
+        f"{prompt}, "
+        f"high quality, detailed, professional, 4k, masterpiece"
+    )
+    
+    print(f'📝 Enhanced prompt: {enhanced_prompt}')
+    
+    from huggingface_hub import InferenceClient
+    
+    last_error = None
+    
+    for model_config in _MODELS_TO_TRY:
+        model_id = model_config["model"]
+        provider = model_config["provider"]
+        label = model_config["label"]
+        
+        try:
+            print(f'🚀 Trying: {label}...')
+            
+            # Create client with or without provider
+            if provider:
+                client = InferenceClient(provider=provider, api_key=hf_token)
+            else:
+                client = InferenceClient(token=hf_token)
+            
+            # Build kwargs based on model type
+            kwargs = {
+                "prompt": enhanced_prompt,
+                "model": model_id,
+            }
+            
+            # FLUX models don't support negative_prompt or some params
+            if "FLUX" not in model_id:
+                kwargs["num_inference_steps"] = 50
+                kwargs["guidance_scale"] = 7.5
+                kwargs["negative_prompt"] = "blurry, bad quality, watermark, text, signature, low resolution"
+            
+            # Make request to Hugging Face
+            image = client.text_to_image(**kwargs)
+            
+            img_byte_arr = BytesIO()
+            image.save(img_byte_arr, format='PNG')
+            image_data_bytes = img_byte_arr.getvalue()
+            
+            if not image_data_bytes or len(image_data_bytes) < 100:
+                print(f'⚠️ {label}: Empty or too small response, trying next...')
+                last_error = f'{label}: No valid image data'
+                continue
+            
+            print(f'✅ Image data received from {label}: {len(image_data_bytes)} bytes')
+            
+            # Store image in cache
+            data = Imagedata(
+                bytes=base64.b64encode(image_data_bytes).decode('utf-8'),
+                mime_type='image/png',
+                name='generated_image.png',
+                id=uuid4().hex,
+            )
+            
+            session_data = cache.get(session_id)
+            if session_data is None:
+                cache.set(session_id, {data.id: data})
+            else:
+                session_data[data.id] = data
+
+            print(f'✅ Image generated with ID: {data.id} (model: {label})')
+            
+            # Log success to LangSmith
+            if LANGSMITH_ENABLED:
+                try:
+                    langsmith_client.create_feedback(
+                        run_id=None,
+                        key="image_generation_success",
+                        value={
+                            "image_id": data.id,
+                            "prompt": prompt,
+                            "session_id": session_id,
+                            "mime_type": data.mime_type,
+                            "model": label
+                        }
+                    )
+                except:
+                    pass
+
+            return data.id
+            
+        except Exception as e:
+            error_str = str(e)
+            # Detect specific errors that mean "try next model"
+            is_credits_error = any(kw in error_str.lower() for kw in [
+                'credit', 'depleted', 'quota', 'rate limit', '429', '402',
+                'billing', 'payment', 'subscription', 'pro ', 'upgrade'
+            ])
+            is_model_error = any(kw in error_str.lower() for kw in [
+                'model is not available', 'not found', '404', 'loading',
+                'service unavailable', '503', 'overloaded'
+            ])
+            
+            if is_credits_error or is_model_error:
+                print(f'⚠️ {label}: {error_str[:120]}... trying next model')
+            else:
+                print(f'⚠️ {label} failed: {error_str[:120]}... trying next model')
+            
+            last_error = f'{label}: {error_str}'
+            continue
+    
+    # All models failed
+    error_msg = f'All image generation models failed. Last error: {last_error}'
+    logger.error(error_msg)
+    print(f'❌ {error_msg}')
+    
+    # Log error to LangSmith
+    if LANGSMITH_ENABLED:
+        try:
+            langsmith_client.create_feedback(
+                run_id=None,
+                key="image_generation_error",
+                value={"error": error_msg, "prompt": prompt}
+            )
+        except:
+            pass
+    
+    return f"ERROR: {error_msg}"
 
 
 class ImageGenerationAgent:
@@ -412,8 +455,19 @@ class ImageGenerationAgent:
                     print(f'✅ Extracted image ID from response: {image_id}')
                     return image_id
                 else:
-                    error_msg = f"Invalid response format: {response_str}"
-                    logger.error(error_msg)
+                    # Check if the LLM returned an error message about credits/limits
+                    credits_keywords = ['credit', 'depleted', 'quota', 'limit', 'billing', 'subscription', 'upgrade', 'payment']
+                    is_credits_issue = any(kw in response_str.lower() for kw in credits_keywords)
+                    
+                    if is_credits_issue:
+                        error_msg = "Image generation service temporarily unavailable (credits/quota issue). Please try again later."
+                    else:
+                        # Truncate long LLM responses to avoid confusing error messages
+                        truncated = response_str[:200] + '...' if len(response_str) > 200 else response_str
+                        error_msg = f"Image generation failed: {truncated}"
+                    
+                    logger.error(f"Invalid response format: {response_str[:300]}")
+                    print(f'❌ {error_msg}')
                     return f"ERROR: {error_msg}"
             
         except Exception as e:

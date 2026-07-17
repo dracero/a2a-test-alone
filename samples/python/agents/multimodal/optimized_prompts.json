@@ -1,8 +1,8 @@
 {
   "metadata": {
     "optimizer": "dspy.GEPA",
-    "model": "meta-llama/llama-4-scout-17b-16e-instruct",
-    "reflection_model": "meta-llama/llama-4-scout-17b-16e-instruct",
+    "model": "llama-3.3-70b-versatile",
+    "reflection_model": "llama-3.3-70b-versatile",
     "num_training_examples": 3,
     "budget": "medium",
     "max_metric_calls": null,

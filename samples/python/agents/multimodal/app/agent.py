@@ -37,7 +37,7 @@ from typing import Any, List, Optional
 
 import torch
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langsmith import traceable
 from PIL import Image
 from pydantic import BaseModel
@@ -49,7 +49,7 @@ import torch.nn.functional as F
 
 # ==================== CONFIGURACIÓN ====================
 
-GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 class SemanticMemory:
     """Memoria conversacional con historial de chat real."""
@@ -188,20 +188,15 @@ class PhysicsMultimodalAgent:
     
     def __init__(self, qdrant_url: str = None, qdrant_api_key: str = None):
         """Inicializar el agente de física."""
-        from langchain_groq import ChatGroq
-        # Using Meta Llama 4 Scout as the text model
-        self.llm = ChatGroq(
-            model='meta-llama/llama-4-scout-17b-16e-instruct',
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        # Using Google Gemini as the LLM (handles text and vision)
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
             temperature=0.3,
             max_tokens=4096,
-            api_key=os.getenv('GROQ_API_KEY')
+            google_api_key=os.getenv("GOOGLE_API_KEY")
         )
-        self.vision_llm = ChatGroq(
-            model="qwen/qwen3.6-27b",
-            temperature=0.1,
-            max_tokens=2048,
-            api_key=os.getenv('GROQ_API_KEY')
-        )
+        self.vision_llm = self.llm
         
         # Cargar prompts optimizados (si existen)
         self._optimized_prompts = self._load_optimized_prompts()
