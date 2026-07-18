@@ -88,9 +88,15 @@ from langgraph.graph.message import add_messages
 # Google GenAI para extracción de ontología
 from google import genai as GoogleGenAIClient
 
+# API Key Rotator (proyecto raíz)
+import sys as _sys
+_project_root = str(Path(__file__).resolve().parents[5])
+if _project_root not in _sys.path:
+    _sys.path.insert(0, _project_root)
+from api_key_rotator import google_key_rotator, create_google_llm, _is_quota_error  # noqa: E402
+
 # Configuración de credenciales local
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_KEY = os.getenv("QDRANT_KEY")
 LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
@@ -234,12 +240,15 @@ def cleanup_memory():
 class ExtractorOntologia:
     """Extrae ontología histopatológica usando Google Gemini"""
 
-    def __init__(self, api_key: str):
-        if not api_key:
+    def __init__(self, api_key: str = None, rotator=None):
+        self._rotator = rotator or google_key_rotator
+        resolved_key = api_key or self._rotator.get_key()
+        if not resolved_key:
             print("⚠️ API Key de Google no proporcionada para ExtractorOntologia")
             self.model = None
             return
-        self._gemini_client = GoogleGenAIClient.Client(api_key=api_key)
+        self._current_key = resolved_key
+        self._gemini_client = GoogleGenAIClient.Client(api_key=resolved_key)
         self.model = "gemini-2.5-flash"
 
     @staticmethod
@@ -295,7 +304,7 @@ Responde SOLAMENTE con un JSON válido, sin texto adicional ni explicaciones."""
                 prompt_actual = prompt if intento == 0 else \
                     f"Extrae una ontología en formato JSON puro (sin markdown) del siguiente texto de histopatología:\n{contenido[:5000]}"
                 
-                # Retry loop for rate limits (429)
+                # Retry loop for rate limits (429/403) con rotación de key
                 for attempt in range(5):
                     try:
                         response = self._gemini_client.models.generate_content(
@@ -305,9 +314,14 @@ Responde SOLAMENTE con un JSON válido, sin texto adicional ni explicaciones."""
                         break
                     except Exception as e:
                         err_str = str(e)
-                        if any(term in err_str.lower() for term in ["429", "rate limit", "rate_limit_exceeded"]) and attempt < 4:
+                        if _is_quota_error(e) and attempt < 4:
+                            # Rotar key
+                            self._rotator.report_failure(self._current_key)
+                            new_key = self._rotator.get_key()
+                            self._current_key = new_key
+                            self._gemini_client = GoogleGenAIClient.Client(api_key=new_key)
                             wait_t = 2.0 * (2 ** attempt)
-                            print(f"⚠️ [Gemini Rate Limit - Ontología] Reintentando en {wait_t:.1f}s... (Intento {attempt+1}/5)")
+                            print(f"⚠️ [Gemini Rate Limit - Ontología] Key rotada → ...{new_key[-4:]}. Reintentando en {wait_t:.1f}s... (Intento {attempt+1}/5)")
                             time.sleep(wait_t)
                         else:
                             raise e
@@ -1375,7 +1389,7 @@ class SistemaRAGColPaliPuro:
 
     async def _llm_ainvoke(self, messages: List[Any]) -> Any:
         """
-        Invoca a Gemini y maneja rate limits con retry.
+        Invoca a Gemini con retry y rotación de API key ante rate limits.
         """
         intentos = 5
         delay = 2.0
@@ -1385,8 +1399,20 @@ class SistemaRAGColPaliPuro:
                 return response
             except Exception as e:
                 err_str = str(e)
-                es_rate_limit = any(term in err_str.lower() for term in ["429", "rate limit", "rate_limit_exceeded", "quota"])
+                es_rate_limit = _is_quota_error(e)
                 if es_rate_limit and intento < intentos - 1:
+                    # Rotar key y re-crear LLM
+                    old_key = getattr(self.llm, 'google_api_key', '') or ''
+                    if old_key:
+                        google_key_rotator.report_failure(old_key)
+                    self.llm = create_google_llm(
+                        model="gemini-2.5-flash",
+                        temperature=0,
+                        max_output_tokens=8192
+                    )
+                    self.llm_text = self.llm
+                    self.llm_vision = self.llm
+
                     # Intentar extraer el tiempo de espera sugerido por la API
                     match = re.search(r"(?:try again in|in) (\d+\.?\d*)s", err_str, re.IGNORECASE)
                     if match:
@@ -1394,7 +1420,7 @@ class SistemaRAGColPaliPuro:
                     else:
                         wait_time = delay * (2 ** intento)
                         
-                    print(f"⚠️ [Gemini Rate Limit] Reintentando en {wait_time:.2f}s... (Intento {intento+1}/{intentos})")
+                    print(f"⚠️ [Gemini Rate Limit] Key rotada. Reintentando en {wait_time:.2f}s... (Intento {intento+1}/{intentos})")
                     await asyncio.sleep(wait_time)
                 else:
                     raise e
@@ -1408,12 +1434,11 @@ class SistemaRAGColPaliPuro:
         print("🚀 SISTEMA RAG HISTOPATOLOGÍA - ColPali PURO + MUVERA + LangGraph")
         print("="*80)
 
-        # LLM
-        self.llm = ChatGoogleGenerativeAI(
+        # LLM (con key rotativa)
+        self.llm = create_google_llm(
             model="gemini-2.5-flash",
             temperature=0,
-            max_output_tokens=8192,
-            google_api_key=GOOGLE_API_KEY
+            max_output_tokens=8192
         )
         self.llm_text = self.llm
         self.llm_vision = self.llm
@@ -1435,8 +1460,8 @@ class SistemaRAGColPaliPuro:
             collection_base="histopatologia"
         )
 
-        # Extractor de ontología
-        self.extractor_ontologia = ExtractorOntologia(GOOGLE_API_KEY)
+        # Extractor de ontología (con rotación de keys)
+        self.extractor_ontologia = ExtractorOntologia()
         self.ontologia = self.extractor_ontologia.cargar_ontologia()
 
         # LangGraph

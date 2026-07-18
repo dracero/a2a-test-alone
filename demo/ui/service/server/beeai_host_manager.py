@@ -28,6 +28,13 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from neo4j_agent_memory import MemoryClient, MemorySettings, ExtractionConfig, ExtractorType
 from neo4j_agent_memory.llm.adapters.sentence_transformers import SentenceTransformersProvider
 from pydantic import BaseModel, Field, SecretStr
+
+from .api_key_rotator import (
+    google_key_rotator,
+    create_google_llm,
+    invoke_with_retry,
+    ainvoke_with_retry,
+)
 from service.server.application_manager import ApplicationManager
 from service.types import Conversation, Event
 
@@ -530,7 +537,7 @@ class BeeAIHostManager(ApplicationManager):
         self._active_sessions: dict[str, str] = {}
 
         self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
-        self.google_api_key = os.getenv("GOOGLE_API_KEY", "")
+        self.google_api_key = google_key_rotator.get_key()
         # Guardar sesiones y conversaciones localmente (no /tmp)
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self._sessions_file = os.path.join(base_dir, "beeai_active_sessions.json")
@@ -538,10 +545,9 @@ class BeeAIHostManager(ApplicationManager):
         self._load_sessions()
         self._load_conversations()
 
-        # Initialize the LangChain Google Gemini Model
-        self.llm = ChatGoogleGenerativeAI(
+        # Initialize the LangChain Google Gemini Model (con key rotativa)
+        self.llm = create_google_llm(
             model="gemini-2.5-flash",
-            google_api_key=self.google_api_key,
             temperature=0.3,
             max_output_tokens=8192
         )
@@ -703,7 +709,7 @@ Mensaje del estudiante: "{user_message}"
 
 Responde SOLO: CONTINUAR o CAMBIAR"""
             
-            response = self.llm.invoke([HumanMessage(content=prompt)])
+            response = invoke_with_retry(self.llm, [HumanMessage(content=prompt)])
             result = response.content.strip().upper()
             print(f"🧠 Intención de sesión activa: '{user_message[:50]}...' → {result}")
             
@@ -1231,7 +1237,7 @@ Preferencia: <frase corta>
 (O "NONE" si no hay nada)."""
 
 
-            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            response = await ainvoke_with_retry(self.llm, [HumanMessage(content=prompt)])
             result = response.content.strip()
             
             if "NONE" in result.upper() or not result:

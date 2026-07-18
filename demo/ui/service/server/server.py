@@ -68,8 +68,12 @@ class ConversationServer:
         agent_manager = os.environ.get('A2A_HOST', 'ADK')
         self.manager: ApplicationManager
 
-        # Use GROQ_API_KEY for BeeAI, GOOGLE_API_KEY for ADK
-        api_key = os.environ.get('GROQ_API_KEY' if agent_manager.upper() == 'BEEAI' else 'GOOGLE_API_KEY', '')
+        # Use GROQ_API_KEY for BeeAI, Google key rotator for ADK
+        if agent_manager.upper() == 'BEEAI':
+            api_key = os.environ.get('GROQ_API_KEY', '')
+        else:
+            from .api_key_rotator import google_key_rotator
+            api_key = google_key_rotator.get_key()
         uses_vertex_ai = (
             os.environ.get('GOOGLE_GENAI_USE_VERTEXAI', '').upper() == 'TRUE'
         )

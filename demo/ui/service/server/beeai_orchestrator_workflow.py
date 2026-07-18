@@ -10,6 +10,8 @@ from typing import Any
 from beeai_framework.workflows.workflow import Workflow
 from pydantic import BaseModel
 
+from .api_key_rotator import ainvoke_with_retry
+
 
 class OrchestratorState(BaseModel):
     """State for the orchestration workflow"""
@@ -124,15 +126,15 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 classification_llm = getattr(manager, 'vision_llm', None) or llm
                 print(f"🔍 Sending MULTIMODAL classification prompt to Groq ({len(state.image_data_list)} images) using model: {getattr(classification_llm, 'model', 'unknown')}...")
                 try:
-                    llm_response = await classification_llm.ainvoke([HumanMessage(content=content)])
+                    llm_response = await ainvoke_with_retry(classification_llm, [HumanMessage(content=content)])
                 except Exception as vision_err:
                     print(f"⚠️ Vision model failed: {vision_err}")
                     print(f"🔄 Falling back to text-only LLM for classification...")
-                    llm_response = await llm.ainvoke([HumanMessage(content=classification_text)])
+                    llm_response = await ainvoke_with_retry(llm, [HumanMessage(content=classification_text)])
             else:
                 # Text-only classification
                 print(f"🔍 Sending text-only classification prompt to Groq...")
-                llm_response = await llm.ainvoke([HumanMessage(content=classification_text)])
+                llm_response = await ainvoke_with_retry(llm, [HumanMessage(content=classification_text)])
             
             print(f"📥 Groq response type: {type(llm_response)}")
             print(f"📥 Groq response content: {llm_response.content}")
@@ -186,7 +188,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                     f"Keep your response brief and friendly."
                 )
                 
-                direct_response = await llm.ainvoke([HumanMessage(content=direct_prompt)])
+                direct_response = await ainvoke_with_retry(llm, [HumanMessage(content=direct_prompt)])
                 state.agent_response = direct_response.content
                 state.chosen_agent = "DIRECT"  # Mark that we responded directly
                 print(f"✅ Direct response generated: {state.agent_response[:100]}...")

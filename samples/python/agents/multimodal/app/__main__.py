@@ -28,6 +28,12 @@ import logging
 import os
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from project root at the very beginning (6 levels up)
+root_dir = Path(__file__).resolve().parents[5]
+env_path = root_dir / '.env'
+load_dotenv(dotenv_path=env_path, override=True)
 
 import click
 import httpx
@@ -41,13 +47,6 @@ from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 from app.agent import PhysicsMultimodalAgent
 from app.agent_executor import PhysicsAgentExecutor
 from app.custom_request_handler import PhysicsAgentExecutorWrapper
-from dotenv import load_dotenv
-from pathlib import Path
-
-# Load .env from project root (6 levels up: __main__.py -> app -> multimodal -> agents -> python -> samples -> root)
-root_dir = Path(__file__).resolve().parents[5]
-env_path = root_dir / '.env'
-load_dotenv(dotenv_path=env_path, override=True)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

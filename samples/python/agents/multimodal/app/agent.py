@@ -47,6 +47,13 @@ from qdrant_client.models import Distance, PointStruct, VectorParams
 from transformers import CLIPModel, CLIPProcessor, AutoTokenizer, AutoModel
 import torch.nn.functional as F
 
+# API Key Rotator (proyecto raíz)
+import sys as _sys
+_project_root = str(Path(__file__).resolve().parents[5])
+if _project_root not in _sys.path:
+    _sys.path.insert(0, _project_root)
+from api_key_rotator import google_key_rotator, create_google_llm, invoke_with_retry  # noqa: E402
+
 # ==================== CONFIGURACIÓN ====================
 
 GROQ_MODEL = "llama-3.3-70b-versatile"
@@ -189,12 +196,11 @@ class PhysicsMultimodalAgent:
     def __init__(self, qdrant_url: str = None, qdrant_api_key: str = None):
         """Inicializar el agente de física."""
         from langchain_google_genai import ChatGoogleGenerativeAI
-        # Using Google Gemini as the LLM (handles text and vision)
-        self.llm = ChatGoogleGenerativeAI(
+        # Using Google Gemini as the LLM (con key rotativa)
+        self.llm = create_google_llm(
             model="gemini-2.5-flash",
             temperature=0.3,
-            max_output_tokens=8192,
-            google_api_key=os.getenv("GOOGLE_API_KEY")
+            max_output_tokens=8192
         )
         self.vision_llm = self.llm
         
@@ -563,7 +569,7 @@ Contenido:
         ]
         
         try:
-            response = self.llm.invoke(messages)
+            response = invoke_with_retry(self.llm, messages)
             print(f"✅ Temario extraído ({len(response.content)} caracteres)")
             return response.content
         except Exception as e:
@@ -855,7 +861,7 @@ REGLAS:
                 print(f"❌ Error imagen {idx}: {e}")
         
         try:
-            response = self.vision_llm.invoke([HumanMessage(content=content)])
+            response = invoke_with_retry(self.vision_llm, [HumanMessage(content=content)])
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
@@ -960,7 +966,7 @@ Clasifica según el temario."""
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            response = self.llm.invoke(messages)
+            response = invoke_with_retry(self.llm, messages)
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
@@ -990,7 +996,7 @@ Genera consulta optimizada."""
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            response = self.llm.invoke(messages)
+            response = invoke_with_retry(self.llm, messages)
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
@@ -1069,7 +1075,7 @@ Reglas:
             # El mensaje actual del usuario
             messages.append(HumanMessage(content=query))
             
-            response = self.llm.invoke(messages)
+            response = invoke_with_retry(self.llm, messages)
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
@@ -1088,7 +1094,7 @@ Mensaje del usuario: "{query}"
 
 Responde SOLO con una de estas palabras: SALIR, ENTRAR, CONTINUAR."""
         try:
-            response = self.llm.invoke([HumanMessage(content=prompt)])
+            response = invoke_with_retry(self.llm, [HumanMessage(content=prompt)])
             content = response.content.upper()
             if "SALIR" in content: return "SALIR"
             if "ENTRAR" in content: return "ENTRAR"
@@ -1219,7 +1225,7 @@ Genera la pregunta socrática número {question_number + 1} para guiar al estudi
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            response = self.llm.invoke(messages)
+            response = invoke_with_retry(self.llm, messages)
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
@@ -1322,7 +1328,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            response = self.llm.invoke(messages)
+            response = invoke_with_retry(self.llm, messages)
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
@@ -1410,7 +1416,7 @@ EN CASO DE DUDA → CONTINUAR.
 Mensaje: "{query}"
 Responde SOLO: SALIR o CONTINUAR"""
                 
-                response = self.llm.invoke([HumanMessage(content=prompt)])
+                response = invoke_with_retry(self.llm, [HumanMessage(content=prompt)])
                 result = response.content.strip().upper()
                 print(f"🧠 [LLM] Intent socrático: '{query[:50]}' → {result}")
                 
