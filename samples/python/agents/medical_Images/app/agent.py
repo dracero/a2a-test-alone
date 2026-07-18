@@ -1412,6 +1412,7 @@ class SistemaRAGColPaliPuro:
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             temperature=0,
+            max_output_tokens=8192,
             google_api_key=GOOGLE_API_KEY
         )
         self.llm_text = self.llm

@@ -193,7 +193,7 @@ class PhysicsMultimodalAgent:
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             temperature=0.3,
-            max_tokens=4096,
+            max_output_tokens=8192,
             google_api_key=os.getenv("GOOGLE_API_KEY")
         )
         self.vision_llm = self.llm

@@ -543,7 +543,7 @@ class BeeAIHostManager(ApplicationManager):
             model="gemini-2.5-flash",
             google_api_key=self.google_api_key,
             temperature=0.3,
-            max_tokens=4096
+            max_output_tokens=8192
         )
         # Initialize the LangChain Google Gemini Vision Model specifically for images
         self.vision_llm = self.llm
