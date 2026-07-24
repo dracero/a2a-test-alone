@@ -11,6 +11,7 @@ from a2a.types import (InternalError, InvalidParamsError, Part, TaskState,
 from a2a.utils import new_agent_text_message, new_task
 from a2a.utils.errors import ServerError
 from app.agent import MedicalAgent
+from app.langsmith_config import traceable
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -161,6 +162,7 @@ class MedicalAgentExecutor(AgentExecutor):
         logger.info("✅ Solicitud válida (partes detectadas)")
         return False
     
+    @traceable(name="medical_agent_execution", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def execute(
         self,
         context: RequestContext,

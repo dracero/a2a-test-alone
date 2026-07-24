@@ -109,28 +109,17 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
         # Build the message parts for the remote agent
         parts = []
         
-        # Add any file parts (images) from the original message
-        if current_message:
+        # Add any file/image parts from the original message
+        if current_message and current_message.parts:
             for part in current_message.parts:
-                if part.root.kind == 'file':
-                    # The file part should have bytes (base64) or uri
-                    # We need to ensure we're sending the actual bytes, not a cached URI
-                    file_part = part.root.file
-                    
-                    if isinstance(file_part, FileWithBytes):
-                        # Already has bytes, just add it
-                        parts.append(part)
-                    elif isinstance(file_part, FileWithUri):
-                        # Has URI, need to fetch from cache
-                        # This shouldn't happen in the orchestrator since we process the original message
-                        # but let's handle it just in case
-                        print(f"⚠️ Warning: File part has URI instead of bytes: {file_part.uri}")
-                        # Try to get from cache if available
-                        # For now, skip it as the cache is in the server layer
-                        pass
-                    else:
-                        # Add it anyway
-                        parts.append(part)
+                part_root = getattr(part, 'root', part)
+                part_kind = getattr(part_root, 'kind', None)
+                if isinstance(part_root, dict):
+                    part_kind = part_root.get('kind')
+                
+                if part_kind in ('file', 'image') or hasattr(part_root, 'file') or hasattr(part_root, 'data') or (isinstance(part_root, dict) and ('inline_data' in part_root or 'file' in part_root or 'data' in part_root)):
+                    print(f"🖼️ Forwarding image/file part: kind={part_kind}")
+                    parts.append(part)
         
         # Add the text message
         parts.append(Part(root=TextPart(text=message_text)))

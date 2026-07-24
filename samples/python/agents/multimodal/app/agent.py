@@ -749,7 +749,7 @@ Contenido:
         }
         return mapping.get(content_type, 'image/png')
     
-    @traceable(name="search_qdrant", run_type="retriever")
+    @traceable(name="search_qdrant", run_type="retriever", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def search_multimodal(
         self, 
         query: str = None, 
@@ -806,7 +806,7 @@ Contenido:
             print(f"❌ Error: {e}")
             return results
     
-    @traceable(name="analyze_physics_image", run_type="llm")
+    @traceable(name="analyze_physics_image", run_type="llm", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def analyze_physics_image(self, images: List[dict], pdf_text_context: str = "") -> str:
         """Analiza imágenes de física."""
         if not images:
@@ -928,7 +928,7 @@ REGLAS:
             
         return visual_findings, image_embedding
     
-    @traceable(name="classify_query", run_type="llm")
+    @traceable(name="classify_query", run_type="llm", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def classify_query(self, query: str, context: str, visual_findings: str) -> str:
         """Clasifica la consulta."""
         system_prompt = f"""Profesor de Física I.
@@ -971,7 +971,7 @@ Clasifica según el temario."""
         except Exception as e:
             return f"Error: {str(e)}"
     
-    @traceable(name="generate_search_query", run_type="llm")
+    @traceable(name="generate_search_query", run_type="llm", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def generate_search_query(self, classification: str, visual_findings: str, 
                                    original_query: str) -> str:
         """Genera consulta de búsqueda."""
@@ -1001,7 +1001,7 @@ Genera consulta optimizada."""
         except Exception as e:
             return f"Error: {str(e)}"
     
-    @traceable(name="generate_physics_response", run_type="llm")
+    @traceable(name="generate_physics_response", run_type="llm", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def generate_physics_response(
         self, 
         query: str, 
@@ -1080,7 +1080,7 @@ Reglas:
         except Exception as e:
             return f"Error: {str(e)}"
     
-    @traceable(name="check_socratic_intent", run_type="llm")
+    @traceable(name="check_socratic_intent", run_type="llm", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def check_socratic_intent(self, query: str) -> str:
         """Verifica si el usuario quiere cambiar de modo (salir o entrar al modo socrático)."""
         prompt = f"""Analiza la intención del usuario en el siguiente mensaje.
@@ -1130,7 +1130,7 @@ Responde SOLO con una de estas palabras: SALIR, ENTRAR, CONTINUAR."""
             print(f"⚠️ Error buscando en Qdrant: {e}")
             return "", ""
     
-    @traceable(name="generate_socratic_question", run_type="llm")
+    @traceable(name="generate_socratic_question", run_type="llm", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def generate_socratic_question(
         self,
         original_query: str,
@@ -1230,7 +1230,7 @@ Genera la pregunta socrática número {question_number + 1} para guiar al estudi
         except Exception as e:
             return f"Error: {str(e)}"
     
-    @traceable(name="generate_physics_response_with_socratic", run_type="llm")
+    @traceable(name="generate_physics_response_with_socratic", run_type="llm", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def generate_physics_response_with_socratic(
         self,
         query: str,
@@ -1428,7 +1428,7 @@ Responde SOLO: SALIR o CONTINUAR"""
         return "CONTINUAR"
     
     # ==================== MÉTODOS PRINCIPALES ====================
-    @traceable(name="PhysicsMultimodalAgent.invoke", run_type="chain")
+    @traceable(name="PhysicsMultimodalAgent.invoke", run_type="chain", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def invoke(self, query: str, context_id: str, 
                     images: List[dict] = None) -> str:
         """Procesa consulta completa con diálogo directo (modo socrático desactivado)."""
@@ -1509,7 +1509,7 @@ Responde SOLO: SALIR o CONTINUAR"""
             traceback.print_exc()
             return f"ERROR: {str(e)}"
 
-    @traceable(name="PhysicsMultimodalAgent.stream", run_type="chain")
+    @traceable(name="PhysicsMultimodalAgent.stream", run_type="chain", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def stream(self, query: str, context_id: str, 
                     images: List[dict] = None) -> AsyncIterable[dict[str, Any]]:
         """

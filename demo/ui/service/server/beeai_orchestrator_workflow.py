@@ -11,6 +11,7 @@ from beeai_framework.workflows.workflow import Workflow
 from pydantic import BaseModel
 
 from .api_key_rotator import ainvoke_with_retry
+from .langsmith_config import traceable
 
 
 class OrchestratorState(BaseModel):
@@ -53,6 +54,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             return None
     
     # Step 2: Use Groq to classify and choose the best agent
+    @traceable(name="orchestrator_classify_and_choose", run_type="chain", tags=["agent_type:orchestrator", "orchestrator"])
     async def classify_and_choose(state: OrchestratorState) -> str:
         """Use multimodal LLM to analyze the request (including images) and choose the best agent"""
         print("🤔 Step 2: Classifying request and choosing agent...")
@@ -238,6 +240,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             return None
     
     # Step 3: Send the message to the chosen agent
+    @traceable(name="orchestrator_send_to_agent", run_type="chain", tags=["agent_type:orchestrator", "orchestrator"])
     async def send_to_agent(state: OrchestratorState) -> str:
         """Forward the user's message (with images if any) to the chosen agent"""
         

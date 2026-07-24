@@ -3,6 +3,7 @@
 # Works on Windows, macOS, and Linux without bash/WSL or nc.
 
 import sys
+import os
 import time
 import socket
 import subprocess
@@ -24,7 +25,7 @@ def cleanup(sig=None, frame=None):
                     # Kill the entire process tree on Windows to ensure child node/python processes die
                     subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
-                    p.terminate()
+                    p.kill()
             except Exception:
                 pass
     sys.exit(0)
@@ -49,9 +50,12 @@ def wait_for_port(port, name):
         time.sleep(2)
     print(f"✅ {name} is ready!")
 
-def run_npm_cmd(cmd):
+def run_npm_cmd(cmd, env_vars=None):
     # Use shell=True to support npm commands resolving in Windows/Linux PATH
-    p = subprocess.Popen(cmd, shell=True)
+    env = os.environ.copy()
+    if env_vars:
+        env.update(env_vars)
+    p = subprocess.Popen(cmd, shell=True, env=env)
     processes.append(p)
     return p
 
@@ -60,19 +64,19 @@ def main():
     
     # 1. Start Priority Agent (Multimodal)
     print("Step 1: Starting Priority Agent (10003)...")
-    run_npm_cmd("npm run dev:agent:multimodal")
+    run_npm_cmd("npm run dev:agent:multimodal", {"LANGCHAIN_PROJECT": "a2a-multimodal-tutor"})
     wait_for_port(10003, "Multimodal Agent")
     
     # 2. Start Remaining Agents (Images & Medical)
     print("\nStep 2: Starting Remaining Agents (10001 & 10002)...")
-    run_npm_cmd("npm run dev:agent:images")
-    run_npm_cmd("npm run dev:agent:medical")
+    run_npm_cmd("npm run dev:agent:images", {"LANGCHAIN_PROJECT": "a2a-image-generator"})
+    run_npm_cmd("npm run dev:agent:medical", {"LANGCHAIN_PROJECT": "a2a-medical-assistant"})
     wait_for_port(10001, "Images Agent")
     wait_for_port(10002, "Medical Agent")
     
     # 3. Start Orchestrator
     print("\nStep 3: Starting Orchestrator (Backend)...")
-    run_npm_cmd("npm run dev:backend")
+    run_npm_cmd("npm run dev:backend", {"LANGCHAIN_PROJECT": "a2a-orchestrator"})
     wait_for_port(12000, "Orchestrator")
     
     # 4. Start Frontend

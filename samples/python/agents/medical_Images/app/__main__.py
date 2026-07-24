@@ -25,6 +25,7 @@ from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 from app.agent import MedicalAgent
 from app.agent_executor import MedicalAgentExecutor
 from app.custom_request_handler import MedicalAgentExecutorWrapper
+from app.langsmith_config import setup_langsmith_environment, get_langsmith_status
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,6 +41,14 @@ class MissingAPIKeyError(Exception):
 def main(host, port):
     """Inicia el servidor del Asistente Médico."""
     try:
+        # Configurar e informar estado de LangSmith
+        setup_langsmith_environment("a2a-medical-assistant")
+        ls_status = get_langsmith_status()
+        if ls_status.get("enabled"):
+            logger.info(f"📊 LangSmith Monitoring: ENABLED (Project: {ls_status.get('project')})")
+        else:
+            logger.info("📊 LangSmith Monitoring: DISABLED")
+
         # Verificar Groq API Key
         if not os.getenv('GROQ_API_KEY'):
             raise MissingAPIKeyError(

@@ -91,7 +91,7 @@ _MODELS_TO_TRY = [
 ]
 
 
-@traceable(name="image_generation_internal", run_type="tool")
+@traceable(name="image_generation_internal", run_type="tool", tags=["agent_type:image_generator", "image_generator", "a2a-agent"])
 def _generate_image_internal(
     prompt: str, session_id: str, artifact_file_id: str = None
 ) -> str:
@@ -340,7 +340,7 @@ class ImageGenerationAgent:
         except Exception:
             return ""
 
-    @traceable(name="crew_execution", run_type="chain")
+    @traceable(name="crew_execution", run_type="chain", tags=["agent_type:image_generator", "image_generator", "a2a-agent"])
     async def _execute_crew_with_tracing(self, inputs: dict) -> str:
         """Execute crew with LangSmith tracing."""
         # Log crew start
@@ -377,7 +377,7 @@ class ImageGenerationAgent:
         
         return result
 
-    @traceable(name="generate_image_workflow", run_type="chain")
+    @traceable(name="generate_image_workflow", run_type="chain", tags=["agent_type:image_generator", "image_generator", "a2a-agent"])
     async def invoke(self, query, session_id) -> str:
         """Kickoff CrewAI and return the response with LangSmith monitoring."""
         artifact_file_id = self.extract_artifact_file_id(query)
@@ -454,21 +454,50 @@ class ImageGenerationAgent:
                     image_id = id_match.group(1)
                     print(f'✅ Extracted image ID from response: {image_id}')
                     return image_id
+                
+                # Detectar si el LLM devolvió formato de llamada a función como texto (ej: function=image_generation_tool>{...}</function>)
+                if 'image_generation_tool' in response_str or 'prompt' in response_str:
+                    logger.info("Detectada llamada a herramienta emitida como texto por el LLM. Procesando e invocando generador...")
+                    import json
+                    json_match = re.search(r'\{[^{}]*"prompt"[^{}]*\}', response_str, re.DOTALL)
+                    if not json_match:
+                        json_match = re.search(r'\{.*\}', response_str, re.DOTALL)
+                    
+                    if json_match:
+                        try:
+                            tool_args = json.loads(json_match.group(0))
+                            tool_prompt = tool_args.get("prompt", query)
+                            tool_session_id = tool_args.get("session_id", session_id) or session_id
+                            tool_artifact_id = tool_args.get("artifact_file_id") or artifact_file_id or None
+                            if tool_artifact_id and not str(tool_artifact_id).strip():
+                                tool_artifact_id = None
+                            
+                            print(f'🔧 Fallback por texto de herramienta: ejecutando _generate_image_internal(prompt="{tool_prompt}")')
+                            gen_res = _generate_image_internal(tool_prompt, tool_session_id, tool_artifact_id)
+                            if gen_res:
+                                return gen_res
+                        except Exception as parse_err:
+                            logger.warning(f"Error parseando JSON de llamada a herramienta: {parse_err}")
+
+                # Intentar fallback de generación directa con la consulta recibida
+                print(f'🔧 Fallback final: ejecutando generación directa con query="{query}"')
+                fallback_res = _generate_image_internal(query, session_id, artifact_file_id if artifact_file_id else None)
+                if fallback_res:
+                    return fallback_res
+
+                # Check if the LLM returned an error message about credits/limits
+                credits_keywords = ['credit', 'depleted', 'quota', 'limit', 'billing', 'subscription', 'upgrade', 'payment']
+                is_credits_issue = any(kw in response_str.lower() for kw in credits_keywords)
+                
+                if is_credits_issue:
+                    error_msg = "Image generation service temporarily unavailable (credits/quota issue). Please try again later."
                 else:
-                    # Check if the LLM returned an error message about credits/limits
-                    credits_keywords = ['credit', 'depleted', 'quota', 'limit', 'billing', 'subscription', 'upgrade', 'payment']
-                    is_credits_issue = any(kw in response_str.lower() for kw in credits_keywords)
-                    
-                    if is_credits_issue:
-                        error_msg = "Image generation service temporarily unavailable (credits/quota issue). Please try again later."
-                    else:
-                        # Truncate long LLM responses to avoid confusing error messages
-                        truncated = response_str[:200] + '...' if len(response_str) > 200 else response_str
-                        error_msg = f"Image generation failed: {truncated}"
-                    
-                    logger.error(f"Invalid response format: {response_str[:300]}")
-                    print(f'❌ {error_msg}')
-                    return f"ERROR: {error_msg}"
+                    truncated = response_str[:200] + '...' if len(response_str) > 200 else response_str
+                    error_msg = f"Image generation failed: {truncated}"
+                
+                logger.error(f"Invalid response format: {response_str[:300]}")
+                print(f'❌ {error_msg}')
+                return f"ERROR: {error_msg}"
             
         except Exception as e:
             logger.error(f'Error in crew execution: {e}')

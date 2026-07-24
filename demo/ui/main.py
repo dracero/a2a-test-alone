@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from service.server.server import ConversationServer
+from service.server.langsmith_config import setup_langsmith_environment, get_langsmith_status
 
 # Load .env from project root (2 levels up: ui -> demo -> root)
 root_dir = Path(__file__).resolve().parents[2]
@@ -30,6 +31,13 @@ load_dotenv(dotenv_path=root_dir / '.env', override=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.environ['A2A_HOST'] = 'BEEAI'
+    setup_langsmith_environment("a2a-orchestrator")
+    ls_status = get_langsmith_status()
+    if ls_status.get("enabled"):
+        print(f"📊 Orchestrator LangSmith Monitoring: ENABLED (Project: {ls_status.get('project')})")
+    else:
+        print("📊 Orchestrator LangSmith Monitoring: DISABLED")
+
     httpx_client_wrapper.start()
 
     server = ConversationServer(app, httpx_client_wrapper())

@@ -47,6 +47,7 @@ from io import BytesIO
 # Cargar variables de entorno
 from dotenv import load_dotenv
 load_dotenv()
+from app.langsmith_config import traceable
 
 # PDFs e imágenes
 from PyPDF2 import PdfReader
@@ -187,18 +188,22 @@ class Config:
     NORMALIZE_EMBEDDINGS = os.getenv("NORMALIZE_EMBEDDINGS", "true").lower() == "true"
     TOP_K_RESULTS = int(os.getenv("TOP_K_RESULTS", "5"))
 
-    # Cuantización: 8 = mejor precisión en scores (~870+), 4 = menos VRAM (~800 scores)
-    _default_bits = "8"
+    # Cuantización: 8 = mayor precisión en GPUs >= 7GB, 4 = consumo mínimo VRAM (~1.8GB para GPUs 6GB/4GB)
+    _env_bits_val = os.getenv("QUANTIZATION_BITS")
+    _gpu_vram_gb = 0.0
     try:
         import torch
         if torch.cuda.is_available():
-            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
-            if vram_gb < 7.0:
-                _default_bits = "4"
-                print(f"ℹ️ GPU VRAM detectada ({vram_gb:.2f} GB) es menor a 7 GB. Forzando default QUANTIZATION_BITS=4 para evitar CUDA OOM.")
+            _gpu_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
     except Exception:
         pass
-    QUANTIZATION_BITS = int(os.getenv("QUANTIZATION_BITS", _default_bits))
+
+    if _gpu_vram_gb > 0 and _gpu_vram_gb < 7.0:
+        if _env_bits_val == "8":
+            print(f"ℹ️ VRAM detectada ({_gpu_vram_gb:.2f} GB) es menor a 7 GB. Anulando QUANTIZATION_BITS=8 y forzando 4-bit para evitar CUDA OOM.")
+        QUANTIZATION_BITS = 4
+    else:
+        QUANTIZATION_BITS = int(_env_bits_val) if _env_bits_val else 4
 
     @classmethod
     def setup_directories(cls):
@@ -212,19 +217,10 @@ def normalizar_ruta_imagen(ruta: str) -> str:
     return str(Config.EMBEDDINGS_DIR / nombre_base)
 
 def setup_langsmith():
-    """Configurar LangSmith para telemetría"""
-    if not LANGSMITH_API_KEY:
-        return False
-    try:
-        os.environ["LANGCHAIN_TRACING_V2"] = "true"
-        os.environ["LANGCHAIN_API_KEY"] = LANGSMITH_API_KEY
-        os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-        os.environ["LANGCHAIN_PROJECT"] = "rag_histopatologia_llama_groq"
-        print("✅ LangSmith configurado")
-        return True
-    except:
-        print("⚠️ LangSmith no disponible")
-        return False
+    """Configurar LangSmith para telemetría usando langsmith_config"""
+    from app.langsmith_config import setup_langsmith_environment, LANGSMITH_ENABLED, traceable
+    enabled, _, _ = setup_langsmith_environment("a2a-medical-assistant")
+    return enabled
 
 def cleanup_memory():
     """Liberar memoria GPU/CPU"""
@@ -452,37 +448,25 @@ class ProcesadorColPaliPuro:
             self.colpali_model.eval()
             print(f"   ✅ ColPali cargado ({bits}-bit, {Config.COLPALI_EMBEDDING_DIM}D multi-vector en {self.device})")
         except Exception as e:
-            if bits == 8 or self.device == "cuda":
-                print(f"   ⚠️ Error cargando ColPali en GPU, intentando fallback... ({e})")
+            print(f"   ⚠️ Error cargando ColPali en {self.device}: {e}")
+            if self.device == "cuda":
                 try:
-                    # Liberar la carga parcial
                     if hasattr(self, 'colpali_model') and self.colpali_model is not None:
                         del self.colpali_model
                         self.colpali_model = None
                     cleanup_memory()
-
-                    # Si falló 8-bit pero tenemos GPU, intentamos 4-bit en GPU
-                    if bits == 8 and self.device == "cuda":
-                        print("   🔄 Intentando cargar en 4-bit en GPU...")
-                        quantization_config = BitsAndBytesConfig(
-                            load_in_4bit=True,
-                            bnb_4bit_compute_dtype=torch.float16,
-                            bnb_4bit_quant_type="nf4"
-                        )
-                        self.colpali_model = ColPaliModel.from_pretrained(
-                            "vidore/colpali-v1.2",
-                            quantization_config=quantization_config,
-                            device_map="cuda",
-                            low_cpu_mem_usage=True,
-                        )
-                        self.colpali_processor = ColPaliProcessor.from_pretrained("vidore/colpali-v1.2")
-                        self.colpali_model.eval()
-                        print(f"   ✅ ColPali cargado (4-bit fallback en GPU, {Config.COLPALI_EMBEDDING_DIM}D multi-vector)")
-                    else:
-                        # Si falló 4-bit o no tenemos GPU, intentamos en CPU bfloat16
-                        raise ValueError("Fallback a CPU necesario")
-                except Exception as e2:
-                    print(f"   ⚠️ Error en fallback de GPU, intentando fallback a CPU (bfloat16): {e2}")
+                    print("   🔄 Fallback GPU: Intentando cargar ColPali en GPU con bfloat16 nativo (sin bitsandbytes)...")
+                    self.colpali_model = ColPaliModel.from_pretrained(
+                        "vidore/colpali-v1.2",
+                        torch_dtype=torch.bfloat16,
+                        device_map="cuda",
+                        low_cpu_mem_usage=True,
+                    )
+                    self.colpali_processor = ColPaliProcessor.from_pretrained("vidore/colpali-v1.2")
+                    self.colpali_model.eval()
+                    print(f"   ✅ ColPali cargado (bfloat16 nativo en GPU CUDA, {Config.COLPALI_EMBEDDING_DIM}D multi-vector)")
+                except Exception as e_gpu:
+                    print(f"   ⚠️ Fallback GPU bfloat16 falló: {e_gpu}. Intentando fallback a CPU...")
                     try:
                         if hasattr(self, 'colpali_model') and self.colpali_model is not None:
                             del self.colpali_model
@@ -498,8 +482,8 @@ class ProcesadorColPaliPuro:
                         self.colpali_model.eval()
                         self.device = "cpu"
                         print(f"   ✅ ColPali cargado (CPU bfloat16 fallback, {Config.COLPALI_EMBEDDING_DIM}D multi-vector)")
-                    except Exception as e3:
-                        print(f"   ❌ Error crítico cargando ColPali en CPU: {e3}")
+                    except Exception as e_cpu:
+                        print(f"   ❌ Error crítico cargando ColPali en CPU: {e_cpu}")
                         self.colpali_model = None
                         self.colpali_processor = None
             else:
@@ -653,18 +637,24 @@ class ProcesadorColPaliPuro:
         
         return imagenes
 
-    def _preprocesar_imagen(self, imagen_path: str) -> Image.Image:
-        """Preprocesamiento específico para histopatología"""
+    def _preprocesar_imagen(self, imagen_path: str, max_target_size: Optional[int] = None) -> Image.Image:
+        """Preprocesamiento específico para histopatología adaptado según la VRAM disponible."""
         image = Image.open(imagen_path).convert("RGB")
 
-        # Ajustar tamaño de la imagen para que su lado más largo sea exactamente 868px.
-        # Esto optimiza el consumo de VRAM y evita CUDA OOM en imágenes muy grandes (fotos, capturas de pantalla, etc.)
+        # Ajustar tamaño de la imagen según VRAM disponible
+        # RTX 3050 tiene ~6GB o 4GB VRAM. 448px genera ~256 parches en ColPali evitando CUDA OOM.
+        if max_target_size is None:
+            if torch.cuda.is_available():
+                vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+                max_target_size = 448 if vram_gb <= 6.5 else 868
+            else:
+                max_target_size = 448
+
         width, height = image.size
-        target_size = 868
-        if max(width, height) != target_size:
-            scale = target_size / max(width, height)
-            new_width = int(width * scale)
-            new_height = int(height * scale)
+        if max(width, height) != max_target_size:
+            scale = max_target_size / max(width, height)
+            new_width = max(1, int(width * scale))
+            new_height = max(1, int(height * scale))
             image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
         if Config.ENHANCE_CONTRAST:
@@ -680,7 +670,7 @@ class ProcesadorColPaliPuro:
     def generar_embedding_imagen(self, imagen_path: str) -> Optional[np.ndarray]:
         """
         Genera embedding ColPali multi-vector para imagen.
-        Si falla por CUDA OOM, reintenta moviendo temporalmente a CPU.
+        Si ocurre CUDA OOM, reintenta en GPU con resolución reducida para liberar VRAM.
         """
         if self.colpali_model is None:
             print("⚠️ ColPali no disponible")
@@ -696,7 +686,7 @@ class ProcesadorColPaliPuro:
 
             with torch.no_grad():
                 if "cuda" in str(device):
-                    with torch.cuda.amp.autocast():
+                    with torch.cuda.amp.autocast(dtype=torch.float16):
                         image_embeddings = self.colpali_model(**batch_images)
                 else:
                     image_embeddings = self.colpali_model(**batch_images)
@@ -720,20 +710,21 @@ class ProcesadorColPaliPuro:
 
         except RuntimeError as e:
             if "out of memory" in str(e).lower() or "CUDA" in str(e):
-                print(f"⚠️ CUDA OOM al generar embedding imagen, reintentando en CPU...")
+                print(f"⚠️ CUDA OOM al generar embedding imagen, reintentando con resolución reducida (384px)...")
                 cleanup_memory()
                 try:
-                    # Mover inputs a CPU y ejecutar en CPU
-                    image = self._preprocesar_imagen(imagen_path)
+                    # Reintentar en GPU con menor resolución para reducir consumo de VRAM
+                    image = self._preprocesar_imagen(imagen_path, max_target_size=384)
                     batch_images = self.colpali_processor.process_images([image])
-                    batch_images = {k: v.to("cpu") for k, v in batch_images.items()}
-                    
-                    # Temporalmente mover modelo a CPU
-                    original_device = self.colpali_model.device
-                    self.colpali_model = self.colpali_model.to("cpu")
+                    device = self.colpali_model.device
+                    batch_images = {k: v.to(device) for k, v in batch_images.items()}
                     
                     with torch.no_grad():
-                        image_embeddings = self.colpali_model(**batch_images)
+                        if "cuda" in str(device):
+                            with torch.cuda.amp.autocast(dtype=torch.float16):
+                                image_embeddings = self.colpali_model(**batch_images)
+                        else:
+                            image_embeddings = self.colpali_model(**batch_images)
                     
                     multivector = image_embeddings[0].cpu().float().numpy()
                     
@@ -742,21 +733,12 @@ class ProcesadorColPaliPuro:
                         norms = np.where(norms < 1e-8, 1.0, norms)
                         multivector = multivector / norms
                     
-                    print(f"   ✅ Embedding generado en CPU (fallback): shape={multivector.shape}")
-                    
+                    print(f"   ✅ Embedding generado con resolución reducida (384px): shape={multivector.shape}")
                     del image, batch_images, image_embeddings
-                    
-                    # Intentar mover modelo de vuelta a GPU
-                    try:
-                        cleanup_memory()
-                        self.colpali_model = self.colpali_model.to(original_device)
-                    except Exception:
-                        print("   ⚠️ No se pudo devolver modelo a GPU, se queda en CPU")
-                        self.device = "cpu"
-                    
+                    cleanup_memory()
                     return multivector
-                except Exception as cpu_err:
-                    print(f"❌ Error generando embedding imagen en CPU fallback: {cpu_err}")
+                except Exception as retry_err:
+                    print(f"❌ Error en reintento de embedding imagen: {retry_err}")
                     cleanup_memory()
                     return None
             else:
@@ -771,7 +753,7 @@ class ProcesadorColPaliPuro:
     def generar_embedding_texto(self, texto: str) -> Optional[np.ndarray]:
         """
         Genera embedding ColPali multi-vector para TEXTO.
-        Si falla por CUDA OOM, reintenta en CPU.
+        Si ocurre CUDA OOM, limpia memoria y reintenta con fp16.
         """
         if self.colpali_model is None:
             print("⚠️ ColPali no disponible")
@@ -786,7 +768,7 @@ class ProcesadorColPaliPuro:
             
             with torch.no_grad():
                 if "cuda" in str(device):
-                    with torch.cuda.amp.autocast():
+                    with torch.cuda.amp.autocast(dtype=torch.float16):
                         text_embeddings = self.colpali_model(**batch_queries)
                 else:
                     text_embeddings = self.colpali_model(**batch_queries)
@@ -806,17 +788,16 @@ class ProcesadorColPaliPuro:
 
         except RuntimeError as e:
             if "out of memory" in str(e).lower() or "CUDA" in str(e):
-                print(f"⚠️ CUDA OOM al generar embedding texto, reintentando en CPU...")
+                print(f"⚠️ CUDA OOM al generar embedding texto, limpiando caché de GPU y reintentando...")
                 cleanup_memory()
                 try:
                     batch_queries = self.colpali_processor.process_queries([texto])
-                    batch_queries = {k: v.to("cpu") for k, v in batch_queries.items()}
-                    
-                    original_device = self.colpali_model.device
-                    self.colpali_model = self.colpali_model.to("cpu")
+                    device = self.colpali_model.device
+                    batch_queries = {k: v.to(device) for k, v in batch_queries.items()}
                     
                     with torch.no_grad():
-                        text_embeddings = self.colpali_model(**batch_queries)
+                        with torch.cuda.amp.autocast(dtype=torch.float16):
+                            text_embeddings = self.colpali_model(**batch_queries)
                     
                     multivector = text_embeddings[0].cpu().float().numpy()
                     
@@ -825,20 +806,12 @@ class ProcesadorColPaliPuro:
                         norms = np.where(norms < 1e-8, 1.0, norms)
                         multivector = multivector / norms
                     
-                    print(f"   ✅ Embedding texto generado en CPU (fallback)")
-                    
+                    print(f"   ✅ Embedding texto generado tras limpiar memoria VRAM")
                     del batch_queries, text_embeddings
-                    
-                    try:
-                        cleanup_memory()
-                        self.colpali_model = self.colpali_model.to(original_device)
-                    except Exception:
-                        print("   ⚠️ No se pudo devolver modelo a GPU, se queda en CPU")
-                        self.device = "cpu"
-                    
+                    cleanup_memory()
                     return multivector
-                except Exception as cpu_err:
-                    print(f"❌ Error generando embedding texto en CPU fallback: {cpu_err}")
+                except Exception as retry_err:
+                    print(f"❌ Error en reintento de embedding texto: {retry_err}")
                     cleanup_memory()
                     return None
             else:
@@ -996,6 +969,9 @@ class GestorQdrantMuvera:
         await client.upsert(collection_name=self.content_mv_collection, points=points_mv, wait=True)
         await client.upsert(collection_name=self.content_fde_collection, points=points_fde, wait=True)
 
+    from app.langsmith_config import traceable
+
+    @traceable(name="qdrant_medical_vector_search", run_type="retriever", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def buscar_muvera_2stage(
         self,
         query_multivector: np.ndarray,
@@ -1508,9 +1484,10 @@ class SistemaRAGColPaliPuro:
 
     # ========== NODOS DEL GRAFO ==========
 
+    @traceable(name="medical_node_receive_query", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def _nodo_recepcionar_consulta(self, state: AgentState) -> AgentState:
         """Nodo 0: Recepcionar consulta y procesar imagen Base64 si existe"""
-        print(f"\n📨 Recibiendo consulta: {state['consulta_usuario'][:50]}...")
+        print(f"\n📨 Recibiendo consulta: {state['consulta_usuario']}")
         
         state["trayectoria"] = [{"nodo": "recepcionar_consulta", "timestamp": time.time()}]
         
@@ -1539,6 +1516,7 @@ class SistemaRAGColPaliPuro:
         
         return state
 
+    @traceable(name="medical_node_initialize_memory", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def _nodo_inicializar(self, state: AgentState) -> AgentState:
         state["ontologia"] = self.ontologia or {}
         state["tiempo_inicio"] = time.time()
@@ -1588,6 +1566,7 @@ Responde ÚNICAMENTE con la consulta reescrita, sin explicaciones, introduccione
         state["trayectoria"].append({"nodo": "inicializar", "timestamp": time.time()})
         return state
 
+    @traceable(name="medical_node_ontology_analysis", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def _nodo_analizar_ontologia(self, state: AgentState) -> AgentState:
         if not state["ontologia"]:
             state["contexto_ontologico"] = "No disponible"
@@ -1600,6 +1579,7 @@ Responde ÚNICAMENTE con la consulta reescrita, sin explicaciones, introduccione
         state["trayectoria"].append({"nodo": "analizar_ontologia", "timestamp": time.time()})
         return state
 
+    @traceable(name="medical_node_classify_query", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def _nodo_clasificar(self, state: AgentState) -> AgentState:
         # Priority 1: Image upload override
         imagen_upload = (
@@ -1634,6 +1614,7 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
         state["trayectoria"].append({"nodo": "clasificar", "timestamp": time.time()})
         return state
 
+    @traceable(name="medical_node_optimize_query", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def _nodo_optimizar_consulta(self, state: AgentState) -> AgentState:
         messages = [
             SystemMessage(content="""Eres un optimizador de consultas para un sistema RAG de histopatología.
@@ -1707,13 +1688,14 @@ Ejemplo:
         similarity = 1.0 - (hamming_distance / len(hash1))
         return float(similarity)
 
+    @traceable(name="medical_node_search", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def _nodo_buscar(self, state: AgentState) -> AgentState:
         resultados = []
         has_rejected = False
         state["abortar_reset"] = False  # Default
 
-        print(f"   📝 Consulta original: {state['consulta_usuario'][:150]}")
-        print(f"   📝 Consulta optimizada: {state['consulta_optimizada'][:200]}")
+        print(f"   📝 Consulta original: {state['consulta_usuario']}")
+        print(f"   📝 Consulta optimizada: {state['consulta_optimizada']}")
 
         requiere_imagen = state.get('requiere_imagen', False)
         tiene_imagen_adjunta = (
@@ -2353,7 +2335,7 @@ CONTEXTO RECUPERADO DE LA BASE DE DATOS
 (Esta es la ÚNICA fuente de verdad para tu respuesta)
 ========================================
 
-{state["contexto_documentos"][:4000]}
+{state["contexto_documentos"][:10000]}
 
 ========================================
 
@@ -2440,6 +2422,7 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
         
         return user_content
 
+    @traceable(name="medical_node_generate_response", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def _nodo_generar_respuesta(self, state: AgentState) -> AgentState:
         """Nodo 6: Generar respuesta basada EXCLUSIVAMENTE en contexto recuperado"""
         print("\n💭 Generando respuesta basada en contexto recuperado...")
@@ -2782,6 +2765,7 @@ class MedicalAgent(SistemaRAGColPaliPuro):
             return "fallback"
         return "generar"
 
+    @traceable(name="medical_node_fallback_internet", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def _nodo_fallback_internet(self, state: AgentState) -> AgentState:
         """Nodo de Fallback: búsqueda en internet con Tavily al no encontrar coincidencias locales"""
         print("🌐 FALLBACK: Buscando en internet...")
@@ -2870,6 +2854,7 @@ RESULTADOS DE BÚSQUEDA WEB:
         state["trayectoria"].append({"nodo": "fallback_internet", "timestamp": time.time()})
         return state
 
+    @traceable(name="MedicalAgent.invoke", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def invoke(self, query: str, context_id: str, images: list[dict] = None) -> str:
         """Compatibilidad con ejecución directa"""
         final_text = ""
@@ -2878,6 +2863,7 @@ RESULTADOS DE BÚSQUEDA WEB:
                 final_text = chunk.get('content', '')
         return final_text
 
+    @traceable(name="MedicalAgent.stream", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def stream(self, query: str, context_id: str, images: list[dict] = None) -> AsyncIterable[dict[str, Any]]:
         """Streaming de eventos y respuestas para el Agent SDK UI"""
         self.inicializar_componentes()

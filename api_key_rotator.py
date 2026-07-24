@@ -1,5 +1,5 @@
 """
-Rotador de API Keys de Google — round-robin con cooldown ante errores 403/429.
+Rotador de API Keys de Google — prioriza la key paga y conmuta con cooldown ante 403/429.
 
 Módulo standalone (sin dependencias de proyecto) que puede ser importado
 desde cualquier agente o servicio.
@@ -18,16 +18,25 @@ import os
 import time
 import threading
 import logging
-from typing import Optional
+from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
 
 
-class GoogleApiKeyRotator:
-    """Round-robin rotator para múltiples Google API Keys.
+def _extract_str_key(key_obj: Any) -> str:
+    """Extrae una string pura incluso si key_obj es un SecretStr o None."""
+    if not key_obj:
+        return ""
+    if hasattr(key_obj, "get_secret_value"):
+        return key_obj.get_secret_value()
+    return str(key_obj)
 
-    Lee las keys de la variable de entorno GOOGLE_API_KEYS (separadas por comas).
-    Si no existe, hace fallback a GOOGLE_API_KEY (una sola key, sin rotación).
+
+class GoogleApiKeyRotator:
+    """Rotator para múltiples Google API Keys.
+
+    Prioriza la primera key (paga) y solo conmuta a secundarias (free) si la principal
+    entra en cooldown por límites de cuota (403/429).
     """
 
     COOLDOWN_SECONDS = 60
@@ -35,13 +44,12 @@ class GoogleApiKeyRotator:
     def __init__(self, env_var: str = "GOOGLE_API_KEYS", fallback_var: str = "GOOGLE_API_KEY"):
         self._lock = threading.Lock()
         self._keys: list[str] = []
-        self._index: int = 0
         self._cooldowns: dict[str, float] = {}
         self._env_var = env_var
         self._fallback_var = fallback_var
         self._loaded = False
         
-        # Intentar carga inicial (puede estar vacía si no se llamó a load_dotenv)
+        # Intentar carga inicial
         self.load_keys()
 
     def load_keys(self):
@@ -72,7 +80,7 @@ class GoogleApiKeyRotator:
         return len(self._keys)
 
     def get_key(self) -> str:
-        """Devuelve la siguiente key disponible (round-robin, saltea cooldowns)."""
+        """Devuelve la primera key disponible (priorizando siempre la primera/paga)."""
         if not self._keys:
             self.load_keys()
         if not self._keys:
@@ -80,28 +88,28 @@ class GoogleApiKeyRotator:
 
         with self._lock:
             now = time.time()
-            for _ in range(len(self._keys)):
-                key = self._keys[self._index]
-                self._index = (self._index + 1) % len(self._keys)
-
+            # 1. Priorizar la primera key (paga) o la siguiente activa sin cooldown
+            for key in self._keys:
                 cooldown_ts = self._cooldowns.get(key, 0)
                 if now - cooldown_ts >= self.COOLDOWN_SECONDS:
                     self._cooldowns.pop(key, None)
                     print(f"🔑 Usando Google API Key ...{key[-4:]}")
                     return key
 
+            # 2. Si todas están en cooldown, forzar la que lleve más tiempo esperando
             oldest_key = min(self._keys, key=lambda k: self._cooldowns.get(k, 0))
             self._cooldowns.pop(oldest_key, None)
             print(f"⚠️ Todas las keys en cooldown. Forzando uso de ...{oldest_key[-4:]}")
             return oldest_key
 
-    def report_failure(self, key: str):
+    def report_failure(self, key: Any):
         """Marca una key como fallida (cooldown de COOLDOWN_SECONDS)."""
-        if key not in self._keys:
+        key_str = _extract_str_key(key)
+        if not key_str or key_str not in self._keys:
             return
         with self._lock:
-            self._cooldowns[key] = time.time()
-            print(f"🚫 Key ...{key[-4:]} en cooldown por {self.COOLDOWN_SECONDS}s")
+            self._cooldowns[key_str] = time.time()
+            print(f"🚫 Key ...{key_str[-4:]} en cooldown por {self.COOLDOWN_SECONDS}s")
 
     def clear_cooldowns(self):
         with self._lock:
@@ -144,7 +152,7 @@ def _is_quota_error(exc: Exception) -> bool:
     )
 
 
-def _rebuild_llm(llm, new_key):
+def _rebuild_llm(llm: Any, new_key: str):
     """Re-crea un ChatGoogleGenerativeAI con una nueva key."""
     from langchain_google_genai import ChatGoogleGenerativeAI
     return ChatGoogleGenerativeAI(
@@ -155,7 +163,7 @@ def _rebuild_llm(llm, new_key):
     )
 
 
-def invoke_with_retry(llm, messages, *, rotator=None, max_retries=0, base_wait=2.0):
+def invoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[GoogleApiKeyRotator] = None, max_retries: int = 0, base_wait: float = 2.0):
     """Invoca LLM con retry automático ante 403/429, rotando la API key."""
     if rotator is None:
         rotator = google_key_rotator
@@ -163,7 +171,7 @@ def invoke_with_retry(llm, messages, *, rotator=None, max_retries=0, base_wait=2
         max_retries = max(rotator.total_keys, 1)
 
     last_exc = None
-    current_key = getattr(llm, "google_api_key", "") or ""
+    current_key = _extract_str_key(getattr(llm, "google_api_key", ""))
 
     for attempt in range(max_retries + 1):
         try:
@@ -187,7 +195,7 @@ def invoke_with_retry(llm, messages, *, rotator=None, max_retries=0, base_wait=2
     raise last_exc
 
 
-async def ainvoke_with_retry(llm, messages, *, rotator=None, max_retries=0, base_wait=2.0):
+async def ainvoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[GoogleApiKeyRotator] = None, max_retries: int = 0, base_wait: float = 2.0):
     """Versión async de invoke_with_retry."""
     import asyncio
     if rotator is None:
@@ -196,7 +204,7 @@ async def ainvoke_with_retry(llm, messages, *, rotator=None, max_retries=0, base
         max_retries = max(rotator.total_keys, 1)
 
     last_exc = None
-    current_key = getattr(llm, "google_api_key", "") or ""
+    current_key = _extract_str_key(getattr(llm, "google_api_key", ""))
 
     for attempt in range(max_retries + 1):
         try:

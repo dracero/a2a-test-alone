@@ -1,4 +1,4 @@
-"""LangSmith configuration module for A2A CrewAI agent."""
+"""LangSmith configuration module for Backend Orchestrator."""
 
 import logging
 import os
@@ -7,8 +7,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PROJECT_NAME = "a2a-image-generator"
-DEFAULT_TAGS = ["agent_type:image_generator", "image_generator", "a2a-agent"]
+DEFAULT_PROJECT_NAME = "a2a-orchestrator"
+DEFAULT_TAGS = ["agent_type:orchestrator", "orchestrator"]
 
 LANGSMITH_ENABLED = False
 traceable = None
@@ -25,7 +25,7 @@ def _dummy_traceable(*args, **kwargs):
 
 
 def setup_langsmith_environment(project_name=DEFAULT_PROJECT_NAME):
-    """Configure environment variables for LangSmith tracing.
+    """Configure environment variables for LangSmith tracing for Orchestrator.
     
     Returns:
         tuple: (enabled: bool, traceable: callable, client: Client|None)
@@ -57,7 +57,7 @@ def setup_langsmith_environment(project_name=DEFAULT_PROJECT_NAME):
     
     # Only enable if API key is present
     if not langsmith_config["LANGCHAIN_API_KEY"]:
-        logger.info("⚠️ LANGCHAIN_API_KEY not found - LangSmith disabled")
+        logger.info("⚠️ LANGCHAIN_API_KEY not found - LangSmith disabled for Orchestrator")
         LANGSMITH_ENABLED = False
         traceable = _dummy_traceable
         langsmith_client = None
@@ -79,7 +79,7 @@ def setup_langsmith_environment(project_name=DEFAULT_PROJECT_NAME):
         return True, _ls_traceable, client
         
     except Exception as e:
-        logger.warning(f"⚠️ Error setting up LangSmith: {e}")
+        logger.warning(f"⚠️ Error setting up LangSmith for Orchestrator: {e}")
         logger.info("💡 System will run without LangSmith monitoring")
         LANGSMITH_ENABLED = False
         traceable = _dummy_traceable

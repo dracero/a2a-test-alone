@@ -12,6 +12,7 @@ from typing import Any
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import FilePart, FileWithBytes, Message, Part, TextPart
+from app.langsmith_config import traceable
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -160,6 +161,7 @@ class MedicalAgentExecutorWrapper(AgentExecutor):
         logger.info(f"✅ Mensaje pre-procesado: {len(message.parts)} → {len(new_parts)} partes")
         return processed_message
 
+    @traceable(name="medical_a2a_wrapper_execution", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def execute(
         self,
         context: RequestContext,
