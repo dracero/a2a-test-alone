@@ -273,6 +273,8 @@ def run_medical_agent_evaluation(dataset_name: str = "medical-assistant-test-dat
         ],
         experiment_prefix="medical-custom-eval"
     )
+    print("⏳ Sincronizando resultados pendientes con LangSmith...")
+    client.flush()
     print("✅ Evaluación completada. Los resultados ya están disponibles en tu consola de LangSmith.")
     return results
 

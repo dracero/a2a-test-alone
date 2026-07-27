@@ -233,6 +233,8 @@ def run_agent_evaluation(dataset_name: str = "physics-tutor-test-dataset"):
         ],
         experiment_prefix="physics-custom-eval"
     )
+    print("⏳ Sincronizando resultados pendientes con LangSmith...")
+    client.flush()
     print("✅ Evaluación completada. Los resultados ya están disponibles en tu consola de LangSmith.")
     return results
 
