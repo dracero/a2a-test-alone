@@ -1,5 +1,7 @@
 #!/bin/bash
 
+export NODE_OPTIONS="--no-deprecation"
+
 # Function to wait for a port to be ready
 wait_for_port() {
   local port=$1

@@ -1,6 +1,8 @@
 # start-ordered.ps1
 # Native Windows PowerShell script to start A2A agents and frontend in order.
 
+$env:NODE_OPTIONS = "--no-deprecation"
+
 # Keep track of background processes to clean them up on exit
 $processes = @()
 

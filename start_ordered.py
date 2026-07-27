@@ -60,6 +60,7 @@ def run_npm_cmd(cmd, env_vars=None):
     return p
 
 def main():
+    os.environ["NODE_OPTIONS"] = "--no-deprecation"
     print("🚀 Starting BeeAI Ecosystem in order...")
     
     # 1. Start Priority Agent (Multimodal)

@@ -756,50 +756,28 @@ Contenido:
         image_embedding: List[float] = None,
         top_k: int = 5
     ) -> dict[str, List[dict]]:
-        """Búsqueda en Qdrant."""
+        """Búsqueda en Qdrant (solo texto para el tutor de física)."""
         client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
         results = {"text": [], "image": []}
         
         try:
-            if query and image_embedding:
+            if query:
                 search_embedding_hf = self.generate_hf_text_embedding(query)
-                search_ops = [
-                    (self.text_collection, search_embedding_hf),
-                    (self.image_collection, image_embedding)
-                ]
-            elif query:
-                search_embedding_hf = self.generate_hf_text_embedding(query)
-                search_embedding_clip = self.generate_clip_text_embedding(query)
-                search_ops = [
-                    (self.text_collection, search_embedding_hf),
-                    (self.image_collection, search_embedding_clip)
-                ]
-            elif image_embedding:
-                search_ops = [
-                    (self.image_collection, image_embedding)
-                ]
-            else:
-                return results
-            
-            for collection, s_embedding in search_ops:
-                if not s_embedding:
-                    continue
-                try:
-                    search_results = await client.query_points(
-                        collection_name=collection,
-                        query=s_embedding,
-                        limit=top_k
-                    )
-                    col_type = "text" if "texto" in collection else "image"
-                    # query_points returns a QueryResponse object with a 'points' attribute
-                    points = search_results.points if hasattr(search_results, 'points') else search_results
-                    results[col_type] = [{
-                        "id": r.id,
-                        "score": round(r.score, 4),
-                        "payload": r.payload
-                    } for r in points]
-                except Exception as e:
-                    print(f"⚠️ Error en {collection}: {e}")
+                if search_embedding_hf:
+                    try:
+                        search_results = await client.query_points(
+                            collection_name=self.text_collection,
+                            query=search_embedding_hf,
+                            limit=top_k
+                        )
+                        points = search_results.points if hasattr(search_results, 'points') else search_results
+                        results["text"] = [{
+                            "id": r.id,
+                            "score": round(r.score, 4),
+                            "payload": r.payload
+                        } for r in points]
+                    except Exception as e:
+                        print(f"⚠️ Error en {self.text_collection}: {e}")
             
             return results
         except Exception as e:
@@ -896,7 +874,7 @@ REGLAS:
         return ""
         
     async def _get_visual_findings(self, images: List[dict], context_id: str) -> tuple[str, Optional[List[float]]]:
-        """Analiza la imagen utilizando pre-búsqueda CLIP y lectura directa de PDF."""
+        """Analiza la imagen directamente usando el LLM de visión, sin realizar búsquedas de imágenes en Qdrant."""
         visual_findings = ""
         image_embedding = None
         
@@ -906,22 +884,9 @@ REGLAS:
                 first_image_data = base64.b64decode(first_image_data)
             image_embedding = self.generate_image_embedding(first_image_data)
             
-            pdf_text_context = ""
-            if image_embedding:
-                try:
-                    print("🔎 Pre-buscando contexto de imagen en Qdrant...")
-                    img_search = await self.search_multimodal(image_embedding=image_embedding, top_k=1)
-                    img_matches = img_search.get('image', [])
-                    if img_matches:
-                        match_payload = img_matches[0].get('payload', {})
-                        pdf_path = match_payload.get('pdf_name', '')
-                        img_path = match_payload.get('image_path', '')
-                        if pdf_path and img_path:
-                            pdf_text_context = self._get_pdf_page_text(pdf_path, img_path)
-                except Exception as e:
-                    print(f"⚠️ Error en pre-búsqueda de imagen: {e}")
-            
-            visual_findings = await self.analyze_physics_image(images, pdf_text_context)
+            # El agente multimodal de física no realiza búsquedas de imágenes en la base de datos,
+            # analiza la imagen subida directamente usando el LLM de visión para resolver el ejercicio.
+            visual_findings = await self.analyze_physics_image(images, "")
             self.visual_findings[context_id] = visual_findings
         else:
             visual_findings = self.visual_findings.get(context_id, "No hay imágenes.")
