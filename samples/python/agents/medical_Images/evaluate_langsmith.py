@@ -225,6 +225,7 @@ def run_medical_agent_evaluation(dataset_name: str = "medical-assistant-test-dat
 
     # 1. Initialize Medical Agent (SistemaRAGColPaliPuro)
     agent = SistemaRAGColPaliPuro()
+    agent.inicializar_componentes()
     
     # 2. Define the target function for LangSmith evaluate
     def target(inputs: dict) -> dict:
