@@ -33,7 +33,7 @@ class MedicalContextRelevanceEvaluator(RunEvaluator):
         # Initialize Google Gemini 2.5 Flash as the evaluator judge
         self.llm = create_google_llm(model="gemini-2.5-flash", temperature=0.0)
 
-    def evaluate_run(self, run, example) -> EvaluationResult:
+    def evaluate_run(self, run, example=None, **kwargs) -> EvaluationResult:
         query = run.inputs.get("consulta_usuario") or run.inputs.get("query")
         
         # 1. Traverse child runs to find the retriever (qdrant_medical_vector_search)
@@ -106,7 +106,7 @@ class MedicalContextRecallEvaluator(RunEvaluator):
     def __init__(self):
         self.llm = create_google_llm(model="gemini-2.5-flash", temperature=0.0)
 
-    def evaluate_run(self, run, example) -> EvaluationResult:
+    def evaluate_run(self, run, example=None, **kwargs) -> EvaluationResult:
         # Get ground truth diagnosis response
         ground_truth = (
             example.outputs.get("respuesta_final") or 

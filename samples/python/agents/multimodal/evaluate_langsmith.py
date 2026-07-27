@@ -33,7 +33,7 @@ class PhysicsContextRelevanceEvaluator(RunEvaluator):
         # Initialize Google Gemini 2.5 Flash as the evaluator judge
         self.llm = create_google_llm(model="gemini-2.5-flash", temperature=0.0)
 
-    def evaluate_run(self, run, example) -> EvaluationResult:
+    def evaluate_run(self, run, example=None, **kwargs) -> EvaluationResult:
         query = run.inputs.get("query")
         
         # 1. Traverse child runs to find the retriever run (search_qdrant)
@@ -99,7 +99,7 @@ class PhysicsContextRecallEvaluator(RunEvaluator):
     def __init__(self):
         self.llm = create_google_llm(model="gemini-2.5-flash", temperature=0.0)
 
-    def evaluate_run(self, run, example) -> EvaluationResult:
+    def evaluate_run(self, run, example=None, **kwargs) -> EvaluationResult:
         # Get ground truth response from dataset
         ground_truth = (
             example.outputs.get("professor_response") or 
