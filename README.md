@@ -164,6 +164,32 @@ Su arquitectura divide la cognición en tres subsistemas clave:
 
 ---
 
+## 📊 Evaluación con LangSmith (Métricas de Generación y Recuperación)
+
+Para evaluar y monitorizar el rendimiento de los agentes, se pueden definir evaluadores en LangSmith enfocados en dos áreas clave:
+
+### 1. Métricas de Generación (Generation Metrics)
+Evalúan la calidad y veracidad del texto producido por los LLMs de los agentes.
+*   **Evaluador de Correctitud / QA (Correctness / Accuracy):**
+    *   *Propósito:* Mide si la respuesta generada por el agente es fácticamente correcta comparada con una respuesta de referencia (Ground Truth) de un dataset.
+    *   *Implementación:* Se realiza mediante *LLM-as-a-judge* (usando razonamiento *Chain-of-Thought*). LangSmith provee evaluadores listos como `cot_qa` para contrastar `prediction` y `reference`.
+*   **Evaluador de Fidelidad / Sin Alucinaciones (Faithfulness / Groundedness):**
+    *   *Propósito:* Mide si la respuesta del modelo se basa exclusivamente en los fragmentos de contexto recuperados (evitando invenciones externas).
+    *   *Implementación:* Un evaluador LLM personalizado que califica si cada afirmación de la respuesta generada es soportada directamente por el contexto provisto.
+
+### 2. Métricas de Recuperación (Retrieval Metrics)
+Evalúan el desempeño del buscador (retriever en Qdrant) al extraer los documentos relevantes.
+*   **Evaluador de Relevancia del Contexto (Context Relevance):**
+    *   *Propósito:* Determina si los fragmentos de texto o imágenes recuperados son verdaderamente relevantes para responder la consulta original.
+    *   *Implementación:* Evaluador LLM asistido que lee la consulta del usuario y el contenido de los documentos recuperados para calcular un score de relevancia y descartar el "ruido".
+*   **Métricas de Recuperación Clásicas (MAP / MRR / Recall@K):**
+    *   *Propósito:* Evalúa matemáticamente la posición y cantidad de documentos esperados recuperados en el buscador.
+        *   **Recall@K (Exhaustividad):** Proporción de documentos relevantes encontrados dentro de los primeros $K$ resultados.
+        *   **MRR (Mean Reciprocal Rank):** Posición del primer documento relevante en la lista.
+    *   *Implementación:* Mediante un evaluador personalizado en Python (`Custom RunEvaluator`) que extrae los metadatos de los runs de tipo `retriever` en LangSmith y los compara contra los IDs del dataset de prueba.
+
+---
+
 ## Related Repositories
 
 -   [A2A](https://github.com/a2aproject/A2A) - A2A Specification and documentation.
