@@ -166,27 +166,41 @@ Su arquitectura divide la cognición en tres subsistemas clave:
 
 ## 📊 Evaluación con LangSmith (Métricas de Generación y Recuperación)
 
-Para evaluar y monitorizar el rendimiento de los agentes, se pueden definir evaluadores en LangSmith enfocados en dos áreas clave:
+Para evaluar y monitorizar el rendimiento de los agentes de forma independiente, hemos implementado evaluadores personalizados en Python utilizando la API de LangSmith (opción de evaluador personalizado `RunEvaluator`). Esto permite registrar métricas como **Context Relevance** (Relevancia del Contexto) y **Context Recall** (Exhaustividad del Contexto) directamente en tu consola de LangSmith.
+
+Los evaluadores se dividen en dos áreas clave:
 
 ### 1. Métricas de Generación (Generation Metrics)
-Evalúan la calidad y veracidad del texto producido por los LLMs de los agentes.
-*   **Evaluador de Correctitud / QA (Correctness / Accuracy):**
-    *   *Propósito:* Mide si la respuesta generada por el agente es fácticamente correcta comparada con una respuesta de referencia (Ground Truth) de un dataset.
-    *   *Implementación:* Se realiza mediante *LLM-as-a-judge* (usando razonamiento *Chain-of-Thought*). LangSmith provee evaluadores listos como `cot_qa` para contrastar `prediction` y `reference`.
-*   **Evaluador de Fidelidad / Sin Alucinaciones (Faithfulness / Groundedness):**
-    *   *Propósito:* Mide si la respuesta del modelo se basa exclusivamente en los fragmentos de contexto recuperados (evitando invenciones externas).
-    *   *Implementación:* Un evaluador LLM personalizado que califica si cada afirmación de la respuesta generada es soportada directamente por el contexto provisto.
+*   **Correctness / QA (`cot_qa`):** Mide si la respuesta generada por el agente es fácticamente correcta comparada con una respuesta de referencia/ideal (Ground Truth) utilizando *LLM-as-a-judge*.
+*   **Faithfulness / Groundedness:** Evalúa si la respuesta generada se basa *exclusivamente* en la información recuperada del contexto para descartar alucinaciones.
 
-### 2. Métricas de Recuperación (Retrieval Metrics)
-Evalúan el desempeño del buscador (retriever en Qdrant) al extraer los documentos relevantes.
-*   **Evaluador de Relevancia del Contexto (Context Relevance):**
-    *   *Propósito:* Determina si los fragmentos de texto o imágenes recuperados son verdaderamente relevantes para responder la consulta original.
-    *   *Implementación:* Evaluador LLM asistido que lee la consulta del usuario y el contenido de los documentos recuperados para calcular un score de relevancia y descartar el "ruido".
-*   **Métricas de Recuperación Clásicas (MAP / MRR / Recall@K):**
-    *   *Propósito:* Evalúa matemáticamente la posición y cantidad de documentos esperados recuperados en el buscador.
-        *   **Recall@K (Exhaustividad):** Proporción de documentos relevantes encontrados dentro de los primeros $K$ resultados.
-        *   **MRR (Mean Reciprocal Rank):** Posición del primer documento relevante en la lista.
-    *   *Implementación:* Mediante un evaluador personalizado en Python (`Custom RunEvaluator`) que extrae los metadatos de los runs de tipo `retriever` en LangSmith y los compara contra los IDs del dataset de prueba.
+### 2. Métricas de Recuperación Personalizadas (Retrieval Metrics)
+*   **Context Relevance (`context_relevance`):** Califica (de `0.0` a `1.0`) si los fragmentos de texto o imágenes recuperadas del buscador de Qdrant son útiles y relevantes para responder a la consulta del usuario.
+*   **Context Recall (`context_recall`):** Determina qué proporción de los conceptos, fórmulas y datos clave del Ground Truth (respuesta de referencia) están cubiertos por el contexto recuperado del buscador.
+
+---
+
+### 🚀 Scripts de Evaluación Disponibles
+
+Cada agente cuenta con su propio script de evaluación independiente que define y ejecuta estas métricas personalizadas sobre un dataset de LangSmith:
+
+#### A. Agente Multimodal (Física)
+*   **Archivo:** [evaluate_langsmith.py](file:///run/media/cetec/c182e059-3c92-4885-9b5a-0b2f0aeaadfe/AIProjects/a2a-test-alone/samples/python/agents/multimodal/evaluate_langsmith.py)
+*   **Lógica:** Inspecciona el sub-run `retriever` para extraer los textos obtenidos de los PDFs de física. Utiliza un LLM (Gemini 2.5 Flash con rotador de claves) para actuar como juez experto y puntuar la relevancia y el recall.
+*   **Ejecución:**
+    ```bash
+    cd samples/python/agents/multimodal
+    uv run python evaluate_langsmith.py
+    ```
+
+#### B. Agente Médico (Asistente de Imágenes Médicas)
+*   **Archivo:** [evaluate_langsmith.py](file:///run/media/cetec/c182e059-3c92-4885-9b5a-0b2f0aeaadfe/AIProjects/a2a-test-alone/samples/python/agents/medical_Images/evaluate_langsmith.py)
+*   **Lógica:** Extrae las figuras y descripciones clínicas recuperadas del RAG dual en dos etapas (`buscar_muvera_2stage`). Califica si el contexto de patología recuperado es útil y suficiente para orientar el diagnóstico de referencia.
+*   **Ejecución:**
+    ```bash
+    cd samples/python/agents/medical_Images
+    uv run python evaluate_langsmith.py
+    ```
 
 ---
 
