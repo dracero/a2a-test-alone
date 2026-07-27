@@ -175,7 +175,38 @@ def run_agent_evaluation(dataset_name: str = "physics-tutor-test-dataset"):
     """Runs evaluation on a LangSmith dataset using the custom evaluators."""
     from app.agent import PhysicsMultimodalAgent
     import asyncio
+    from langsmith.utils import LangSmithNotFoundError
     
+    client = Client()
+    
+    # Check if dataset exists, if not create and populate it
+    try:
+        dataset = client.read_dataset(dataset_name=dataset_name)
+        print(f"📦 Dataset '{dataset_name}' encontrado en LangSmith.")
+    except LangSmithNotFoundError:
+        print(f"✨ Dataset '{dataset_name}' no encontrado. Creándolo en LangSmith...")
+        dataset = client.create_dataset(
+            dataset_name=dataset_name,
+            description="Dataset para evaluar el agente multimodal de física."
+        )
+        
+        script_dir = Path(__file__).resolve().parent
+        examples_file = script_dir / "training_examples.json"
+        if examples_file.exists():
+            print(f"📂 Cargando ejemplos desde {examples_file.name}...")
+            with open(examples_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            for item in data:
+                client.create_example(
+                    inputs={"query": item["question"]},
+                    outputs={"professor_response": item["professor_response"]},
+                    dataset_id=dataset.id
+                )
+            print(f"✅ {len(data)} ejemplos subidos exitosamente.")
+        else:
+            print(f"⚠️ No se encontró {examples_file.name}. Dataset creado vacío.")
+
     # 1. Initialize Physics Agent
     agent = PhysicsMultimodalAgent()
     

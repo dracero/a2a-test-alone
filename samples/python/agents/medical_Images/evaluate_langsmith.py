@@ -187,16 +187,49 @@ def run_medical_agent_evaluation(dataset_name: str = "medical-assistant-test-dat
     """Runs evaluation on a LangSmith dataset using the custom evaluators."""
     from app.agent import SistemaRAGColPaliPuro
     import asyncio
+    from langsmith.utils import LangSmithNotFoundError
     
+    client = Client()
+    
+    # Check if dataset exists, if not create and populate it
+    try:
+        dataset = client.read_dataset(dataset_name=dataset_name)
+        print(f"📦 Dataset '{dataset_name}' encontrado en LangSmith.")
+    except LangSmithNotFoundError:
+        print(f"✨ Dataset '{dataset_name}' no encontrado. Creándolo en LangSmith...")
+        dataset = client.create_dataset(
+            dataset_name=dataset_name,
+            description="Dataset para evaluar el agente de imágenes médicas."
+        )
+        
+        # Inline medical diagnostic examples
+        examples = [
+            {
+                "consulta_usuario": "Analizar caso de sospecha de adenocarcinoma gástrico y biomarcadores HER2.",
+                "respuesta_final": "El análisis histopatológico revela adenocarcinoma gástrico moderadamente diferenciado con patrón de crecimiento tubular. Inmunohistoquímica (IHC) positiva para HER2 (score 3+), lo cual sugiere elegibilidad para terapia con trastuzumab."
+            },
+            {
+                "consulta_usuario": "Paciente con biopsia hepática para descartar cirrosis y evaluar grado de fibrosis.",
+                "respuesta_final": "La biopsia hepática con tinción de Tricrómico de Masson muestra puentes portoportales y portocentrales de tejido conectivo fibroso con distorsión de la arquitectura lobulillar, compatible con cirrosis hepática avanzada (Grado F4 según escala METAVIR)."
+            }
+        ]
+        
+        print("📂 Cargando ejemplos de prueba médicos por defecto...")
+        for item in examples:
+            client.create_example(
+                inputs={"consulta_usuario": item["consulta_usuario"]},
+                outputs={"respuesta_final": item["respuesta_final"]},
+                dataset_id=dataset.id
+            )
+        print(f"✅ {len(examples)} ejemplos subidos exitosamente.")
+
     # 1. Initialize Medical Agent (SistemaRAGColPaliPuro)
     agent = SistemaRAGColPaliPuro()
-    # Mocking graph run or calling invoke directly
     
     # 2. Define the target function for LangSmith evaluate
     def target(inputs: dict) -> dict:
         query = inputs.get("consulta_usuario") or inputs.get("query")
-        # Run medical agent workflow synchronously or mock pipeline execution
-        # (The actual pipeline is a LangGraph graph which can be run asynchronously)
+        # Run medical agent workflow synchronously
         loop = asyncio.get_event_loop()
         
         # Simulating run state for agent
@@ -220,7 +253,6 @@ def run_medical_agent_evaluation(dataset_name: str = "medical-assistant-test-dat
         
         # Ensure compiled graph is setup
         if not agent.compiled_graph:
-            # Simple fallback response if graph isn't loaded/compiled
             return {"output": "Error: Sistema RAG no inicializado."}
             
         result_state = loop.run_until_complete(agent.compiled_graph.ainvoke(initial_state))
