@@ -89,18 +89,19 @@ class GoogleApiKeyRotator:
         with self._lock:
             now = time.time()
             # 1. Priorizar la primera key (paga) o la siguiente activa sin cooldown
-            for key in self._keys:
+            for idx, key in enumerate(self._keys):
                 cooldown_ts = self._cooldowns.get(key, 0)
-                if now - cooldown_ts >= self.COOLDOWN_SECONDS:
+                cooldown_limit = 15 if idx == 0 else self.COOLDOWN_SECONDS
+                if now - cooldown_ts >= cooldown_limit:
                     self._cooldowns.pop(key, None)
                     print(f"🔑 Usando Google API Key ...{key[-4:]}")
                     return key
 
-            # 2. Si todas están en cooldown, forzar la que lleve más tiempo esperando
-            oldest_key = min(self._keys, key=lambda k: self._cooldowns.get(k, 0))
-            self._cooldowns.pop(oldest_key, None)
-            print(f"⚠️ Todas las keys en cooldown. Forzando uso de ...{oldest_key[-4:]}")
-            return oldest_key
+            # 2. Si todas están en cooldown, forzar la primera (paga) por prioridad
+            first_key = self._keys[0]
+            self._cooldowns.pop(first_key, None)
+            print(f"⚠️ Todas las keys en cooldown. Forzando uso de la key paga ...{first_key[-4:]}")
+            return first_key
 
     def report_failure(self, key: Any):
         """Marca una key como fallida (cooldown de COOLDOWN_SECONDS)."""

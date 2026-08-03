@@ -25,6 +25,8 @@ class OrchestratorState(BaseModel):
     error: str = ""
     history_text: str = ""
     neo4j_context_text: str = ""
+    context_id: str = ""
+    student_id: str = ""
 
 
 async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
@@ -277,10 +279,61 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             from service.server.beeai_host_manager import \
                 SendMessageToAgentInput
             
+            # Query NAMS context specifically for the chosen agent
+            agent_context_text = ""
+            if manager.neo4j_memory:
+                await manager._ensure_neo4j_connected()
+                if getattr(manager, '_neo4j_connected', False):
+                    try:
+                        student_id = state.student_id or state.context_id
+                        print(f"🧠 Querying student NAMS context for student '{student_id}' and agent '{state.chosen_agent}'...")
+                        ctx = await manager.get_student_context(
+                            state.user_message,
+                            student_id=student_id,
+                            session_id=state.context_id,
+                            agent_name=state.chosen_agent
+                        )
+                        if ctx:
+                            raw_text = str(ctx)
+                            ignore_headers = (
+                                '## conversation history',
+                                '### relevant past messages',
+                                'conversation history',
+                                'relevant past messages'
+                            )
+                            filtered_lines = []
+                            in_chat_history_section = False
+                            for line in raw_text.split('\n'):
+                                line_stripped = line.strip()
+                                line_lower = line_stripped.lower()
+                                if not line_lower:
+                                    continue
+                                if any(h in line_lower for h in ignore_headers):
+                                    in_chat_history_section = True
+                                    continue
+                                if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
+                                    in_chat_history_section = False
+                                    continue
+                                if in_chat_history_section:
+                                    continue
+                                if any(line_lower.startswith(prefix) for prefix in [
+                                    'user:', 'assistant:', 'human:', 'ai:',
+                                    'usuario:', 'asistente:', 'q:', 'a:',
+                                    '- [user]', '- [assistant]', '- [human]', '- [ai]',
+                                    '- [usuario]', '- [asistente]'
+                                ]):
+                                    continue
+                                filtered_lines.append(line)
+                            agent_context_text = '\n'.join(filtered_lines).strip()
+                            if len(agent_context_text) > 3000:
+                                agent_context_text = agent_context_text[:3000] + "\n[... truncado]"
+                    except Exception as e:
+                        print(f"⚠️ Error retrieving Neo4j context for chosen agent {state.chosen_agent}: {e}")
+
             message_text = state.user_message
-            if state.neo4j_context_text:
-                message_text = f"[NAMS_CONTEXT]\n{state.neo4j_context_text}\n[/NAMS_CONTEXT]\n\n{state.user_message}"
-                print(f"🧠 Injected NAMS context into message sent to {state.chosen_agent}")
+            if agent_context_text:
+                message_text = f"[NAMS_CONTEXT]\n{agent_context_text}\n[/NAMS_CONTEXT]\n\n{state.user_message}"
+                print(f"🧠 Injected agent-specific NAMS context into message sent to {state.chosen_agent}")
                 
             send_input = SendMessageToAgentInput(
                 agent_name=state.chosen_agent,

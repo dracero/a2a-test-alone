@@ -420,9 +420,11 @@ class ProcesadorColPaliPuro:
 
             quantization_config = None
             if bits == 4:
+                compute_dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+                print(f"   🧬 BitsAndBytes compute_dtype configurado a: {compute_dtype}")
                 quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_compute_dtype=compute_dtype,
                     bnb_4bit_quant_type="nf4",
                     bnb_4bit_use_double_quant=True
                 )
@@ -646,7 +648,12 @@ class ProcesadorColPaliPuro:
         if max_target_size is None:
             if torch.cuda.is_available():
                 vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
-                max_target_size = 448 if vram_gb <= 6.5 else 868
+                if vram_gb <= 6.0:
+                    max_target_size = 336  # Default a 336 para GPUs de 6GB o menos (evita CUDA OOM al reducir parches a 144)
+                elif vram_gb <= 8.5:
+                    max_target_size = 448  # Default a 448 para GPUs de 8GB (256 parches)
+                else:
+                    max_target_size = 868  # 868 para GPUs grandes (>8GB)
             else:
                 max_target_size = 448
 
@@ -710,11 +717,11 @@ class ProcesadorColPaliPuro:
 
         except RuntimeError as e:
             if "out of memory" in str(e).lower() or "CUDA" in str(e):
-                print(f"⚠️ CUDA OOM al generar embedding imagen, reintentando con resolución reducida (384px)...")
+                print(f"⚠️ CUDA OOM al generar embedding imagen, reintentando con resolución reducida (256px)...")
                 cleanup_memory()
                 try:
-                    # Reintentar en GPU con menor resolución para reducir consumo de VRAM
-                    image = self._preprocesar_imagen(imagen_path, max_target_size=384)
+                    # Reintentar en GPU con menor resolución (256px) para reducir drásticamente el consumo de VRAM
+                    image = self._preprocesar_imagen(imagen_path, max_target_size=256)
                     batch_images = self.colpali_processor.process_images([image])
                     device = self.colpali_model.device
                     batch_images = {k: v.to(device) for k, v in batch_images.items()}
@@ -733,7 +740,7 @@ class ProcesadorColPaliPuro:
                         norms = np.where(norms < 1e-8, 1.0, norms)
                         multivector = multivector / norms
                     
-                    print(f"   ✅ Embedding generado con resolución reducida (384px): shape={multivector.shape}")
+                    print(f"   ✅ Embedding generado con resolución reducida (256px): shape={multivector.shape}")
                     del image, batch_images, image_embeddings
                     cleanup_memory()
                     return multivector
@@ -1733,10 +1740,19 @@ Ejemplo:
                 # ── Verificación por embeddings (embedding + dHash) ──
                 # Verifica CADA imagen individualmente contra la imagen del usuario.
                 try:
-                    UMBRAL_VERIFICACION = float(os.getenv("VERIFICATION_THRESHOLD", "830"))
+                    env_val = os.getenv("VERIFICATION_THRESHOLD")
+                    if env_val:
+                        val = float(env_val)
+                        if val == 830.0 and Config.QUANTIZATION_BITS == 4:
+                            print("ℹ️ Ajustando VERIFICATION_THRESHOLD de 830 a 730 debido a cuantización de 4-bit.")
+                            UMBRAL_VERIFICACION = 730.0
+                        else:
+                            UMBRAL_VERIFICACION = val
+                    else:
+                        UMBRAL_VERIFICACION = 730.0 if Config.QUANTIZATION_BITS == 4 else 830.0
                 except (ValueError, TypeError):
-                    print("⚠️ VERIFICATION_THRESHOLD inválido, usando default 830")
-                    UMBRAL_VERIFICACION = 830.0
+                    print("⚠️ VERIFICATION_THRESHOLD inválido, usando default adaptativo")
+                    UMBRAL_VERIFICACION = 730.0 if Config.QUANTIZATION_BITS == 4 else 830.0
 
 
                 imagenes_a_verificar = [
@@ -1826,7 +1842,7 @@ Ejemplo:
                 t2 = time.time()
                 print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
 
-                # Paso 2: Identificar el documento principal de los resultados
+                # Paso 2: Identificar el documento principal de los resultados (conservado para fallback)
                 doc_scores = {}
                 for r in resultados_texto:
                     payload = r.get('payload', {})
@@ -1834,24 +1850,32 @@ Ejemplo:
                     score = r.get('score', 0.0)
                     if doc:
                         doc_scores[doc] = doc_scores.get(doc, 0.0) + score
-                # Documento con mayor score acumulado
                 doc_principal = max(doc_scores, key=doc_scores.get) if doc_scores else ''
                 print(f"   📖 Documento principal: {doc_principal} (score acumulado: {doc_scores.get(doc_principal, 0):.2f})")
 
-                # Paso 3: Scroll de TODOS los chunks de texto del documento principal
+                # Paso 2b: Identificar todos los documentos de interés de las respuestas de texto
+                docs_interes = set()
+                for r in resultados_texto:
+                    payload = r.get('payload', {})
+                    doc = payload.get('nombre_archivo', '')
+                    if doc:
+                        docs_interes.add(doc)
+                print(f"   📂 Documentos de interés detectados: {list(docs_interes)}")
+
+                # Paso 3: Scroll de TODOS los chunks de texto de los documentos de interés
                 # para buscar etiquetas "Imagen N: descripción"
-                paginas_con_etiqueta = {}  # página -> lista de descripciones de etiqueta
+                paginas_con_etiqueta = {}  # (doc, página) -> lista de descripciones de etiqueta
                 imagenes_encontradas = []
                 try:
                     client = self.gestor_qdrant.client
                     from qdrant_client.models import Filter, FieldCondition, MatchValue
-                    if doc_principal:
+                    for doc in docs_interes:
                         scroll_texto = await client.scroll(
                             collection_name=self.gestor_qdrant.content_mv_collection,
                             scroll_filter=Filter(
                                 must=[
                                     FieldCondition(key="tipo", match=MatchValue(value="texto")),
-                                    FieldCondition(key="nombre_archivo", match=MatchValue(value=doc_principal)),
+                                    FieldCondition(key="nombre_archivo", match=MatchValue(value=doc)),
                                 ]
                             ),
                             limit=1000,
@@ -1859,7 +1883,7 @@ Ejemplo:
                             with_vectors=False,
                         )
                         chunks_doc = scroll_texto[0] if scroll_texto else []
-                        print(f"   📄 {len(chunks_doc)} chunks de texto en {doc_principal}")
+                        print(f"   📄 {len(chunks_doc)} chunks de texto en {doc}")
 
                         # Buscar etiquetas "Imagen N: descripción" en cada chunk
                         for chunk in chunks_doc:
@@ -1870,15 +1894,16 @@ Ejemplo:
                             matches = re.findall(r'[Ii]magen\s+(\d+(?:[\.\-·]\d+)?)\s*:\s*([^\n]{1,100})', texto_chunk)
                             for num, desc in matches:
                                 if pg_chunk is not None:
-                                    paginas_con_etiqueta.setdefault(pg_chunk, []).append({
+                                    paginas_con_etiqueta.setdefault((doc, pg_chunk), []).append({
                                         'numero': num,
                                         'descripcion': desc.strip(),
                                     })
-                        if paginas_con_etiqueta:
-                            print(f"   🏷️ Etiquetas encontradas en {doc_principal}:")
-                            for pg, etiquetas in sorted(paginas_con_etiqueta.items()):
-                                for et in etiquetas:
-                                    print(f"      Pg {pg}: Imagen {et['numero']}: {et['descripcion']}")
+                        
+                    if paginas_con_etiqueta:
+                        print(f"   🏷️ Etiquetas encontradas:")
+                        for (doc, pg), etiquetas in sorted(paginas_con_etiqueta.items()):
+                            for et in etiquetas:
+                                print(f"      [{doc}] Pg {pg}: Imagen {et['numero']}: {et['descripcion']}")
                 except Exception as e:
                     print(f"   ⚠️ Error buscando etiquetas de texto: {e}")
 
@@ -1892,12 +1917,52 @@ Ejemplo:
                 else:
                     print(f"   🎯 Usando embedding de consulta resuelta para rerank de etiquetas")
 
+                def calcular_coincidencia_palabras(query: str, desc: str) -> float:
+                    import re
+                    import unicodedata
+                    def normalizar(t: str) -> str:
+                        t = t.lower()
+                        t = "".join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
+                        t = re.sub(r'[^a-z0-9\s]', ' ', t)
+                        return t
+                    
+                    q_norm = normalizar(query)
+                    d_norm = normalizar(desc)
+                    
+                    q_words = set(w for w in q_norm.split() if len(w) > 3)
+                    d_words = set(w for w in d_norm.split() if len(w) > 3)
+                    
+                    if not q_words or not d_words:
+                        return 0.0
+                        
+                    d_clean_words = d_norm.split()
+                    phrases = []
+                    for i in range(len(d_clean_words) - 1):
+                        phrases.append(f"{d_clean_words[i]} {d_clean_words[i+1]}")
+                    for i in range(len(d_clean_words) - 2):
+                        phrases.append(f"{d_clean_words[i]} {d_clean_words[i+1]} {d_clean_words[i+2]}")
+                        
+                    phrase_match_score = 0.0
+                    for phrase in phrases:
+                        if phrase in q_norm:
+                            phrase_match_score += 10.0
+                            
+                    overlap = q_words.intersection(d_words)
+                    word_match_score = len(overlap) * 2.0
+                    
+                    return phrase_match_score + word_match_score
+
                 etiquetas_rankeadas = []
                 if paginas_con_etiqueta:
-                    for pg, etiquetas in paginas_con_etiqueta.items():
+                    for (doc_name, pg), etiquetas in paginas_con_etiqueta.items():
                         for et in etiquetas:
                             texto_etiqueta = f"Imagen {et['numero']}: {et['descripcion']}"
                             emb = self.procesador.generar_embedding_texto(texto_etiqueta)
+                            
+                            # Calcular coincidencia exacta de palabras con la consulta original del usuario
+                            match_score = calcular_coincidencia_palabras(state['consulta_usuario'], et['descripcion'])
+                            
+                            sim = 0.0
                             if emb is not None:
                                 # Calcular similitud usando MaxSim (Late Interaction) de ColPali
                                 q = np.asarray(query_mv_para_rerank, dtype=np.float64)
@@ -1915,15 +1980,17 @@ Ejemplo:
                                     sim = float(np.dot(q_mean, c_mean))
 
                                 etiquetas_rankeadas.append({
+                                    'documento': doc_name,
                                     'pagina': pg,
                                     'numero': et['numero'],
                                     'descripcion': et['descripcion'],
                                     'similitud': sim,
+                                    'match_score': match_score,
                                 })
-                                print(f"      📊 Imagen {et['numero']}: {et['descripcion'][:50]} → sim={sim:.4f}")
+                                print(f"      📊 [{doc_name}] Imagen {et['numero']}: {et['descripcion'][:50]} → sim={sim:.4f} | keyword_match={match_score:.1f}")
 
-                    # Ordenar por similitud descendente
-                    etiquetas_rankeadas.sort(key=lambda x: x['similitud'], reverse=True)
+                    # Ordenar por coincidencia de palabras exacta (primero) y luego por similitud semántica
+                    etiquetas_rankeadas.sort(key=lambda x: (x['match_score'], x['similitud']), reverse=True)
 
                 # Paso 5: Scroll de TODAS las imágenes y asociar con etiquetas
                 all_image_points = []
@@ -1948,13 +2015,15 @@ Ejemplo:
                 paginas_usadas = set()
                 if etiquetas_rankeadas:
                     for et in etiquetas_rankeadas[:3]:
+                        doc_target = et['documento']
                         pg_target = et['pagina']
-                        if pg_target in paginas_usadas:
+                        target_key = (doc_target, pg_target)
+                        if target_key in paginas_usadas:
                             continue
-                        # Buscar imagen del documento principal en esa página
+                        # Buscar imagen del documento target en esa página
                         for punto in all_image_points:
                             payload = punto.payload or {}
-                            if (payload.get('nombre_archivo', '') == doc_principal
+                            if (payload.get('nombre_archivo', '') == doc_target
                                     and payload.get('numero_pagina') == pg_target):
                                 img_path = payload.get('imagen_path', '')
                                 if img_path and os.path.exists(img_path):
@@ -1963,7 +2032,7 @@ Ejemplo:
                                         "path": img_path,
                                         "descripcion": desc[:300]
                                     })
-                                    paginas_usadas.add(pg_target)
+                                    paginas_usadas.add(target_key)
                                     print(f"      ✅ Imagen seleccionada: {os.path.basename(img_path)} (Imagen {et['numero']}: {et['descripcion'][:50]})")
                                     break
 

@@ -41,10 +41,13 @@ export interface Message {
   context_id: string;
   role: string;
   parts: Part[];
+  recipient?: string;
+  metadata?: any;
 }
 
 export interface Conversation {
   conversation_id: string;
+  name?: string;
   messages?: Message[];
 }
 
@@ -120,7 +123,7 @@ export const chatAPI = {
     });
   },
 
-  correctAgent: async (studentId: string, tema: string, correccion: string): Promise<{ status: string }> => {
+  correctAgent: async (studentId: string, tema: string, correccion: string, agentName?: string): Promise<{ status: string }> => {
     const response = await fetch('/correct', {
       method: 'POST',
       headers: {
@@ -131,6 +134,7 @@ export const chatAPI = {
         student_id: studentId,
         tema: tema,
         correccion: correccion,
+        agent_name: agentName,
       }),
     });
 
@@ -143,11 +147,13 @@ export const chatAPI = {
 
   getNamsConclusions: async (
     studentId?: string,
-    conversationId?: string
+    conversationId?: string,
+    agentName?: string
   ): Promise<{ status: string; conclusions: string[]; deficiencies: string[]; message?: string }> => {
     return postJSON<{ status: string; conclusions: string[]; deficiencies: string[]; message?: string }>('/nams/conclusions', {
       student_id: studentId,
       conversation_id: conversationId,
+      agent_name: agentName,
     });
   },
 };

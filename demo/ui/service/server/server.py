@@ -54,10 +54,12 @@ class CorrectBody(BaseModel):
     student_id: str
     tema: str
     correccion: str
+    agent_name: str | None = None
 
 class NamsConclusionsBody(BaseModel):
     student_id: str | None = None
     conversation_id: str | None = None
+    agent_name: str | None = None
 
 # --- FIN DE MODELOS ---
 
@@ -379,8 +381,29 @@ class ConversationServer:
                 if not student_id:
                     return {'status': 'active', 'conclusions': [], 'deficiencies': []}
 
-                print(f"🔍 Fetching preferences and deficiencies for user_identifier '{student_id}'")
-                prefs = await self.manager.neo4j_memory.long_term.get_preferences_for(student_id)
+                agent_name = body.agent_name
+                if not agent_name and body.conversation_id:
+                    if hasattr(self.manager, '_active_sessions'):
+                        agent_name = self.manager._active_sessions.get(body.conversation_id)
+                    if not agent_name:
+                        conv = self.manager.get_conversation(body.conversation_id)
+                        if conv and conv.messages:
+                            for msg in reversed(conv.messages):
+                                role_str = msg.role.name if hasattr(msg.role, 'name') else str(msg.role)
+                                if role_str == 'agent':
+                                    if hasattr(msg, 'recipient') and msg.recipient:
+                                        agent_name = msg.recipient
+                                        break
+                                    elif isinstance(msg, dict) and msg.get('recipient'):
+                                        agent_name = msg['recipient']
+                                        break
+                
+                if not agent_name:
+                    agent_name = "Tutor Socrático de Física Multimodal"
+
+                user_identifier = f"{student_id}_{agent_name}"
+                print(f"🔍 Fetching preferences and deficiencies for user_identifier '{user_identifier}'")
+                prefs = await self.manager.neo4j_memory.long_term.get_preferences_for(user_identifier)
                 
                 conclusions = []
                 deficiencies = []
@@ -422,7 +445,8 @@ class ConversationServer:
             success = await self.manager.add_deficiency(
                 student_id=body.student_id,
                 tema=body.tema,
-                correccion=body.correccion
+                correccion=body.correccion,
+                agent_name=body.agent_name
             )
             if success:
                 return {'status': 'success'}

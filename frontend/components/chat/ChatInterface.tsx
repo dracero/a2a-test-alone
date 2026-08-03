@@ -42,6 +42,7 @@ export function ChatInterface() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [namsDeficiencies, setNamsDeficiencies] = useState<string[]>([]);
+  const [namsSelectedAgent, setNamsSelectedAgent] = useState<string>('Tutor Socrático de Física Multimodal');
 
   // Correction state variables
   const [isCorrectOpen, setIsCorrectOpen] = useState(false);
@@ -64,10 +65,23 @@ export function ChatInterface() {
   const handleOpenNams = async () => {
     setIsNamsOpen(true);
     setIsLoadingNams(true);
+    
+    // Detect active agent from messages
+    let activeAgentName = 'Tutor Socrático de Física Multimodal';
+    if (messages && messages.length > 0) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'agent' && (messages[i] as any).recipient) {
+          activeAgentName = (messages[i] as any).recipient;
+          break;
+        }
+      }
+    }
+    setNamsSelectedAgent(activeAgentName);
+
     try {
       const activeConv = allConversations.find(c => c.conversation_id === conversationId);
       const studentId = studentName || activeConv?.name || conversationId;
-      const response = await chatAPI.getNamsConclusions(studentId, conversationId);
+      const response = await chatAPI.getNamsConclusions(studentId, conversationId, activeAgentName);
       if (response.status === 'active') {
         setNamsConclusions(response.conclusions || []);
         setNamsDeficiencies(response.deficiencies || []);
@@ -77,6 +91,29 @@ export function ChatInterface() {
       }
     } catch (error) {
       console.error('Failed to fetch NAMS conclusions:', error);
+      setNamsConclusions([]);
+      setNamsDeficiencies([]);
+    } finally {
+      setIsLoadingNams(false);
+    }
+  };
+
+  const handleNamsAgentChange = async (agentName: string) => {
+    setNamsSelectedAgent(agentName);
+    setIsLoadingNams(true);
+    try {
+      const activeConv = allConversations.find(c => c.conversation_id === conversationId);
+      const studentId = studentName || activeConv?.name || conversationId;
+      const response = await chatAPI.getNamsConclusions(studentId, conversationId, agentName);
+      if (response.status === 'active') {
+        setNamsConclusions(response.conclusions || []);
+        setNamsDeficiencies(response.deficiencies || []);
+      } else {
+        setNamsConclusions([]);
+        setNamsDeficiencies([]);
+      }
+    } catch (error) {
+      console.error('Failed to fetch NAMS conclusions for agent:', error);
       setNamsConclusions([]);
       setNamsDeficiencies([]);
     } finally {
@@ -112,12 +149,14 @@ export function ChatInterface() {
     const studentId = studentName || activeConv?.name || conversationId;
     if (!studentId || !correctTema.trim() || !correctExplanation.trim()) return;
     
+    const agentName = (selectedMessageToCorrect as any)?.recipient;
     setIsSubmittingCorrection(true);
     try {
       const response = await chatAPI.correctAgent(
         studentId,
         correctTema.trim(),
-        correctExplanation.trim()
+        correctExplanation.trim(),
+        agentName
       );
       if (response.status === 'success') {
         setIsCorrectOpen(false);
@@ -455,10 +494,10 @@ export function ChatInterface() {
                       if (e.key === 'Enter') handleSaveStudentName();
                     }}
                   />
-                  <Button size="xs" onClick={handleSaveStudentName} className="h-5 px-1.5 text-[10px]">
+                  <Button size="sm" onClick={handleSaveStudentName} className="h-5 px-1.5 text-[10px]">
                     OK
                   </Button>
-                  <Button size="xs" variant="ghost" onClick={() => setIsEditingName(false)} className="h-5 px-1 text-[10px]">
+                  <Button size="sm" variant="ghost" onClick={() => setIsEditingName(false)} className="h-5 px-1 text-[10px]">
                     Cancel
                   </Button>
                 </>
@@ -469,7 +508,7 @@ export function ChatInterface() {
                     {studentName || 'Sin Nombre'}
                   </span>
                   <Button
-                    size="xs"
+                    size="sm"
                     variant="ghost"
                     onClick={() => {
                       setNameInput(studentName);
@@ -595,6 +634,24 @@ export function ChatInterface() {
               Memoria a Largo Plazo (NAMS) - Estudiante: {studentName || 'Sin Nombre'}
             </DialogTitle>
           </DialogHeader>
+
+          <div className="flex items-center gap-3 py-2 px-1 border-b">
+            <span className="text-xs font-bold text-slate-500 uppercase">Seleccionar Agente:</span>
+            <Select
+              value={namsSelectedAgent}
+              onValueChange={handleNamsAgentChange}
+            >
+              <SelectTrigger className="w-[280px] h-8 text-xs font-semibold text-slate-700 border-slate-200">
+                <SelectValue placeholder="Seleccionar Agente" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Tutor Socrático de Física Multimodal">Tutor Socrático de Física Multimodal</SelectItem>
+                <SelectItem value="Asistente Médico">Asistente Médico</SelectItem>
+                <SelectItem value="Image Generator Agent">Image Generator Agent</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
           <div className="mt-4 max-h-[65vh] overflow-y-auto pr-2">
             {isLoadingNams ? (
               <div className="flex flex-col items-center justify-center py-12">

@@ -809,6 +809,7 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
 
         # Extract text from message parts
         text_content = " ".join([p.root.text for p in message.parts if p.root.kind == 'text'])
+        student_id = conversation.name or context_id
         
         # Check if there are any images and extract their data for visual classification
         has_images = any(p.root.kind == 'file' for p in message.parts)
@@ -828,86 +829,27 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                         })
             print(f"🖼️ Extracted {len(image_data_list)} image(s) for visual classification")
 
-        # Retrieve Neo4j context — filtered to avoid duplicate chat history
-        # The agent already maintains its own SemanticMemory.chat_history,
-        # so we filter out short-term NAMS history to avoid duplicate context
-        # that confuses the LLM into answering from memory instead of
-        # the current turn.
-        neo4j_context_text = ""
+        active_agent = self._active_sessions.get(context_id)
+
+        # Save user message to Neo4j Short-Term memory
         if self.neo4j_memory:
             await self._ensure_neo4j_connected()
             if getattr(self, '_neo4j_connected', False):
                 try:
-                    student_id = conversation.name or context_id
-                    print(f"🧠 Querying student NAMS context for student '{student_id}' (session_id={context_id})...")
-                    ctx = await self.get_student_context(text_content, student_id=student_id, session_id=context_id)
-                    if ctx:
-                        raw_text = str(ctx)
-                        # Filter out lines that look like chat history to avoid duplicates
-                        # (the agent already tracks this via SemanticMemory.chat_history)
-                        ignore_headers = (
-                            '## conversation history',
-                            '### relevant past messages',
-                            'conversation history',
-                            'relevant past messages'
-                        )
-                        filtered_lines = []
-                        in_chat_history_section = False
-                        for line in raw_text.split('\n'):
-                            line_stripped = line.strip()
-                            line_lower = line_stripped.lower()
-                            if not line_lower:
-                                continue
-                            if any(h in line_lower for h in ignore_headers):
-                                in_chat_history_section = True
-                                continue
-                            if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
-                                in_chat_history_section = False
-                                continue
-                            if in_chat_history_section:
-                                continue
-                            # Skip lines that look like short-term chat messages
-                            if any(line_lower.startswith(prefix) for prefix in [
-                                'user:', 'assistant:', 'human:', 'ai:',
-                                'usuario:', 'asistente:', 'q:', 'a:',
-                                '- [user]', '- [assistant]', '- [human]', '- [ai]',
-                                '- [usuario]', '- [asistente]'
-                            ]):
-                                continue
-                            filtered_lines.append(line)
-                        neo4j_context_text = '\n'.join(filtered_lines).strip()
-                        # Truncate to avoid dominating the prompt
-                        if len(neo4j_context_text) > 3000:
-                            neo4j_context_text = neo4j_context_text[:3000] + "\n[... truncado]"
-                        print(f"📖 Retrieved filtered Neo4j context: {len(neo4j_context_text)} chars (from {len(raw_text)} original)")
+                    await self.neo4j_memory.short_term.add_message(
+                        session_id=context_id,
+                        role="user",
+                        content=text_content
+                    )
+                    print("💾 Saved user message to Neo4j Short-Term memory")
                 except OSError as pipe_err:
-                    # WinError 233 or other pipe/connection errors — force reconnect next time
-                    print(f"⚠️ Neo4j connection error (will reconnect): {pipe_err}")
+                    print(f"⚠️ Neo4j pipe error saving user message (will reconnect): {pipe_err}")
                     self._neo4j_connected = False
                 except Exception as e:
-                    print(f"⚠️ Error retrieving Neo4j context: {e}")
-
-        # Save user message to Neo4j Short-Term memory
-        if self.neo4j_memory and getattr(self, '_neo4j_connected', False):
-            try:
-                await self.neo4j_memory.short_term.add_message(
-                    session_id=context_id,
-                    role="user",
-                    content=text_content
-                )
-                print("💾 Saved user message to Neo4j Short-Term memory")
-            except OSError as pipe_err:
-                print(f"⚠️ Neo4j pipe error saving user message (will reconnect): {pipe_err}")
-                self._neo4j_connected = False
-            except Exception as e:
-                print(f"⚠️ Error saving user message to Neo4j: {e}")
+                    print(f"⚠️ Error saving user message to Neo4j: {e}")
 
         # Use BeeAI Workflow pattern for Gemini compatibility
         try:
-            # Verificar si hay una sesión activa para este contexto
-            # (ej: sesión socrática en progreso)
-            active_agent = self._active_sessions.get(context_id)
-            
             if active_agent:
                 print(f"🔄 Sesión activa detectada para contexto {context_id[:8]}... → {active_agent}")
                 
@@ -919,6 +861,55 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                     print(f"📤 Continuando sesión activa con {active_agent}")
                     send_tool_instance = SendMessageToAgentTool(self)
                     
+                    # Query NAMS context just-in-time for active_agent
+                    neo4j_context_text = ""
+                    if self.neo4j_memory:
+                        await self._ensure_neo4j_connected()
+                        if getattr(self, '_neo4j_connected', False):
+                            try:
+                                student_id = conversation.name or context_id
+                                print(f"🧠 Querying student NAMS context just-in-time for active session student '{student_id}' and agent '{active_agent}'...")
+                                ctx = await self.get_student_context(text_content, student_id=student_id, session_id=context_id, agent_name=active_agent)
+                                if ctx:
+                                    raw_text = str(ctx)
+                                    ignore_headers = (
+                                        '## conversation history',
+                                        '### relevant past messages',
+                                        'conversation history',
+                                        'relevant past messages'
+                                    )
+                                    filtered_lines = []
+                                    in_chat_history_section = False
+                                    for line in raw_text.split('\n'):
+                                        line_stripped = line.strip()
+                                        line_lower = line_stripped.lower()
+                                        if not line_lower:
+                                            continue
+                                        if any(h in line_lower for h in ignore_headers):
+                                            in_chat_history_section = True
+                                            continue
+                                        if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
+                                            in_chat_history_section = False
+                                            continue
+                                        if in_chat_history_section:
+                                            continue
+                                        if any(line_lower.startswith(prefix) for prefix in [
+                                            'user:', 'assistant:', 'human:', 'ai:',
+                                            'usuario:', 'asistente:', 'q:', 'a:',
+                                            '- [user]', '- [assistant]', '- [human]', '- [ai]',
+                                            '- [usuario]', '- [asistente]'
+                                        ]):
+                                            continue
+                                        filtered_lines.append(line)
+                                    neo4j_context_text = '\n'.join(filtered_lines).strip()
+                                    if len(neo4j_context_text) > 3000:
+                                        neo4j_context_text = neo4j_context_text[:3000] + "\n[... truncado]"
+                            except OSError as pipe_err:
+                                print(f"⚠️ Neo4j pipe error (will reconnect): {pipe_err}")
+                                self._neo4j_connected = False
+                            except Exception as e:
+                                print(f"⚠️ Error retrieving NAMS context: {e}")
+
                     message_text = text_content
                     if neo4j_context_text:
                         message_text = f"[NAMS_CONTEXT]\n{neo4j_context_text}\n[/NAMS_CONTEXT]\n\n{text_content}"
@@ -967,7 +958,9 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                     has_images=has_images,
                     image_data_list=image_data_list,
                     history_text=history_text,
-                    neo4j_context_text=neo4j_context_text
+                    neo4j_context_text="",
+                    context_id=context_id,
+                    student_id=student_id
                 )
                 
                 workflow_run = await workflow.run(initial_state)
@@ -1012,8 +1005,15 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                 except Exception as e:
                     print(f"⚠️ Error saving assistant response to Neo4j: {e}")
 
+            # Determine the agent name for NAMS memory scoping
+            resolved_agent_name = None
+            if active_agent:
+                resolved_agent_name = active_agent
+            elif 'final_state' in locals() and final_state:
+                resolved_agent_name = final_state.chosen_agent
+
             # Run Self-Learning in background to extract and persist user preferences/facts
-            asyncio.create_task(self._learn_user_preferences(text_content, context_id))
+            asyncio.create_task(self._learn_user_preferences(text_content, context_id, resolved_agent_name))
 
         # Build response parts — detect image marker from image agent
         import json as _json
@@ -1049,6 +1049,7 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             message_id=str(uuid.uuid4()),
             context_id=context_id,
             role=Role.agent,
+            recipient=resolved_agent_name,
             parts=response_parts
         )
         self._messages.append(response_msg)
@@ -1064,9 +1065,10 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
         if message.message_id in self._pending_message_ids:
             self._pending_message_ids.remove(message.message_id)
 
-    async def get_student_context(self, query: str, student_id: str, session_id: str, max_items: int = 10) -> str:
-        """Get combined context from memory, but filter long-term preferences strictly by student_id."""
+    async def get_student_context(self, query: str, student_id: str, session_id: str, agent_name: str | None = None, max_items: int = 10) -> str:
+        """Get combined context from memory, but filter long-term preferences strictly by student_id and optionally agent_name."""
         parts = []
+        user_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
 
         # 1. Short-term memory (session-scoped conversation history)
         short_term_context = await self.neo4j_memory.short_term.get_context(
@@ -1077,7 +1079,7 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
         if short_term_context:
             parts.append(f"## Conversation History\n{short_term_context}")
 
-        # 2. Long-term memory - filtered strictly to user_identifier = student_id
+        # 2. Long-term memory - filtered strictly to user_identifier
         embedding = None
         if self.neo4j_memory.long_term._embedder is not None:
             try:
@@ -1103,7 +1105,7 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                         "embedding": embedding,
                         "limit": max_items,
                         "threshold": 0.7,
-                        "user_identifier": student_id
+                        "user_identifier": user_identifier
                     }
                 )
                 for row in results:
@@ -1113,12 +1115,12 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             except Exception as e:
                 print(f"⚠️ Vector search failed, falling back to direct preference query: {e}")
 
-        # Fallback: if vector search failed or returned nothing, fetch student preferences directly
+        # Fallback: if vector search failed or returned nothing, fetch preferences directly
         if not preferences:
             try:
-                preferences = await self.neo4j_memory.long_term.get_preferences_for(student_id)
+                preferences = await self.neo4j_memory.long_term.get_preferences_for(user_identifier)
             except Exception as e:
-                print(f"⚠️ Failed to fetch preferences for user {student_id}: {e}")
+                print(f"⚠️ Failed to fetch preferences for user {user_identifier}: {e}")
 
         if preferences:
             parts.append("## Relevant Knowledge")
@@ -1146,8 +1148,8 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
 
         return "\n\n".join(parts)
 
-    async def add_deficiency(self, student_id: str, tema: str, correccion: str):
-        """Save a deficiency verified by the teacher both semantically and structurally in Neo4j."""
+    async def add_deficiency(self, student_id: str, tema: str, correccion: str, agent_name: str | None = None):
+        """Save a deficiency verified by the teacher both semantically and structurally in Neo4j, scoped per agent."""
         if not self.neo4j_memory:
             print("⚠️ Neo4j Memory Client not initialized. Cannot save deficiency.")
             return False
@@ -1158,21 +1160,24 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                 print("❌ Neo4j not connected. Cannot save deficiency.")
                 return False
 
-            # 1. Save semantically as a Preference node scoped to the student
+            user_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
+
+            # 1. Save semantically as a Preference node scoped to the student + agent
             pref_text = f"El alumno tiene una falencia en '{tema}': {correccion}"
             await self.neo4j_memory.long_term.add_preference(
                 category="falencia",
                 preference=pref_text,
-                user_identifier=student_id
+                user_identifier=user_identifier
             )
-            print(f"✅ Saved semantic deficiency preference for student '{student_id}'")
+            print(f"✅ Saved semantic deficiency preference for user_identifier '{user_identifier}'")
 
             # 2. Save structurally as custom entities and relationships
             # Get or create the Student entity
+            student_entity_name = f"{student_id}_{agent_name}" if agent_name else student_id
             student_entity, _ = await self.neo4j_memory.long_term.add_entity(
-                name=student_id,
+                name=student_entity_name,
                 entity_type="Student",
-                description=f"Perfil del estudiante {student_id}",
+                description=f"Perfil del estudiante {student_id} para el agente {agent_name}",
                 resolve=False,
                 deduplicate=True
             )
@@ -1193,7 +1198,7 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                 relationship_type="TIENE_FALENCIA",
                 description=correccion
             )
-            print(f"✅ Saved structural relationship (Student {student_id}) -[:TIENE_FALENCIA]-> (Concept {tema})")
+            print(f"✅ Saved structural relationship (Student {student_entity_name}) -[:TIENE_FALENCIA]-> (Concept {tema})")
             return True
 
         except Exception as e:
@@ -1202,8 +1207,8 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             traceback.print_exc()
             return False
 
-    async def _learn_user_preferences(self, user_message: str, context_id: str):
-        """Extract and persist user preferences and facts to Neo4j Agent Memory in background."""
+    async def _learn_user_preferences(self, user_message: str, context_id: str, agent_name: str | None = None):
+        """Extract and persist user preferences and facts to Neo4j Agent Memory in background, scoped per agent."""
         if not self.neo4j_memory or not user_message:
             return
             
@@ -1213,14 +1218,14 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             
             prompt = f"""Analiza el siguiente mensaje enviado por un usuario:
 "{user_message}"
-
+ 
 Determina si el usuario está expresando alguna preferencia personal persistente, hábito, estilo de comunicación preferido o dato biográfico relevante (por ejemplo: prefiere respuestas cortas, le gustan las explicaciones con analogías, se llama Diego, estudia ingeniería, etc.).
-
+ 
 IMPORTANTE: No extraigas conclusiones de aprendizaje, correcciones ni conceptos físicos o matemáticos (por ejemplo, NO extraigas afirmaciones sobre leyes físicas, fórmulas o resolución de problemas). Solo debes extraer preferencias de estilo, formato o datos personales.
-
+ 
 Si encuentras alguna preferencia o dato relevante, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El usuario prefiere respuestas concisas").
 Si no encuentras nada relevante o es una pregunta general, responde únicamente con la palabra "NONE".
-
+ 
 Responde en el formato:
 Preferencia: <frase corta>
 (O "NONE" si no hay nada)."""
@@ -1245,13 +1250,14 @@ Preferencia: <frase corta>
             
             conversation = self.get_conversation(context_id)
             student_id = conversation.name or context_id if conversation else context_id
+            user_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
             for pref in preferences:
-                print(f"💾 Self-learning: Extracted preference -> '{pref}' for student '{student_id}'")
+                print(f"💾 Self-learning: Extracted preference -> '{pref}' for user_identifier '{user_identifier}'")
                 # Store preference in Neo4j Long-Term memory
                 await self.neo4j_memory.long_term.add_preference(
                     category="user_preference",
                     preference=pref,
-                    user_identifier=student_id
+                    user_identifier=user_identifier
                 )
                 print(f"✅ Preference persisted in Neo4j Graph")
                 

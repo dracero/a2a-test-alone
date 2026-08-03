@@ -199,8 +199,31 @@ class MedicalAgentExecutorWrapper(AgentExecutor):
 
         # Llamar al executor real con el contexto (modificado o no)
         logger.info("📤 Pasando al executor real...")
-        await self.wrapped_executor.execute(context, event_queue)
-        logger.info("✅ Executor real completado")
+        try:
+            import gc
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            gc.collect()
+            logger.info("🧠 VRAM pre-cleaned before agent execution")
+        except Exception as cleanup_err:
+            logger.warning(f"⚠️ Error cleaning VRAM before agent execution: {cleanup_err}")
+
+        try:
+            await self.wrapped_executor.execute(context, event_queue)
+        finally:
+            logger.info("✅ Executor real completado")
+            try:
+                import gc
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                gc.collect()
+                logger.info("🧠 VRAM post-cleaned after agent execution")
+            except Exception as cleanup_err:
+                logger.warning(f"⚠️ Error cleaning VRAM after agent execution: {cleanup_err}")
 
     async def cancel(
         self,
