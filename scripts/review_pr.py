@@ -61,21 +61,38 @@ def get_agents_rules(workspace_root: Path) -> str:
 
 
 def fetch_pr_diff(repo: str, pr_number: int, github_token: str) -> str:
-    """Fetches the PR diff from GitHub REST API."""
+    """Fetches the PR diff from GitHub REST API with fallbacks."""
     url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
-    headers = {
-        "Accept": "application/vnd.github.v3.diff",
-        "Authorization": f"Bearer {github_token}",
-        "User-Agent": "Gemini-PR-Reviewer",
-    }
     
+    # Try standard GitHub diff media types
+    for media_type in ["application/vnd.github.diff", "application/vnd.github.patch"]:
+        headers = {
+            "Accept": media_type,
+            "Authorization": f"Bearer {github_token}",
+            "User-Agent": "Gemini-PR-Reviewer",
+        }
+        try:
+            response = requests.get(url, headers=headers, timeout=30)
+            if response.status_code == 200 and response.text.strip():
+                return response.text
+        except requests.RequestException as err:
+            print(f"[Warning] Failed fetching diff with header {media_type}: {err}", file=sys.stderr)
+
+    # Fallback to web diff URL
+    web_diff_url = f"https://github.com/{repo}/pull/{pr_number}.diff"
     try:
-        response = requests.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
-        return response.text
+        headers = {
+            "Authorization": f"Bearer {github_token}",
+            "User-Agent": "Gemini-PR-Reviewer",
+        }
+        response = requests.get(web_diff_url, headers=headers, timeout=30)
+        if response.status_code == 200 and response.text.strip():
+            return response.text
     except requests.RequestException as err:
-        print(f"[Error] Failed to download PR diff: {err}", file=sys.stderr)
-        sys.exit(1)
+        print(f"[Warning] Failed fetching web diff URL: {err}", file=sys.stderr)
+
+    print(f"[Error] Could not retrieve diff for PR #{pr_number} in {repo}.", file=sys.stderr)
+    sys.exit(1)
 
 
 def generate_gemini_review(gemini_key: str, rules_text: str, diff_text: str) -> str:
