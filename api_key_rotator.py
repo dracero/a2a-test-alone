@@ -137,6 +137,7 @@ def create_google_llm(
         model=model,
         temperature=temperature,
         max_output_tokens=max_output_tokens,
+        max_tokens=max_output_tokens,
         google_api_key=key,
     )
 
@@ -160,6 +161,7 @@ def _rebuild_llm(llm: Any, new_key: str):
         model=getattr(llm, "model_name", None) or getattr(llm, "model", "gemini-2.5-flash"),
         temperature=getattr(llm, "temperature", 0.3),
         max_output_tokens=getattr(llm, "max_output_tokens", 8192),
+        max_tokens=getattr(llm, "max_tokens", 8192) or getattr(llm, "max_output_tokens", 8192),
         google_api_key=new_key,
     )
 

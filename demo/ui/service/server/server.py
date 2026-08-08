@@ -401,20 +401,25 @@ class ConversationServer:
                 if not agent_name:
                     agent_name = "Tutor Socrático de Física Multimodal"
 
-                user_identifier = f"{student_id}_{agent_name}"
-                print(f"🔍 Fetching preferences and deficiencies for user_identifier '{user_identifier}'")
-                prefs = await self.manager.neo4j_memory.long_term.get_preferences_for(user_identifier)
+                student_identifier = f"{student_id}_{agent_name}"
+                agent_identifier = f"system_{agent_name}"
+                
+                print(f"🔍 Fetching student preferences/insights for '{student_identifier}' and system deficiencies for '{agent_identifier}'")
+                student_prefs = await self.manager.neo4j_memory.long_term.get_preferences_for(student_identifier)
+                agent_prefs = await self.manager.neo4j_memory.long_term.get_preferences_for(agent_identifier)
                 
                 conclusions = []
                 deficiencies = []
-                for p in prefs:
+                
+                # Retrieve student style preferences and knowledge insights
+                for p in student_prefs:
                     pref_str = p.preference if hasattr(p, 'preference') else (p.get('preference', str(p)) if isinstance(p, dict) else str(p))
-                    cat = p.category if hasattr(p, 'category') else (p.get('category', '') if isinstance(p, dict) else '')
+                    conclusions.append(pref_str)
                     
-                    if cat == "falencia":
-                        deficiencies.append(pref_str)
-                    else:
-                        conclusions.append(pref_str)
+                # Retrieve system deficiencies
+                for p in agent_prefs:
+                    pref_str = p.preference if hasattr(p, 'preference') else (p.get('preference', str(p)) if isinstance(p, dict) else str(p))
+                    deficiencies.append(pref_str)
                         
                 return {
                     'status': 'active', 

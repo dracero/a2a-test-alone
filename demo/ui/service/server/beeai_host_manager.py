@@ -1079,7 +1079,7 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
         if short_term_context:
             parts.append(f"## Conversation History\n{short_term_context}")
 
-        # 2. Long-term memory - filtered strictly to user_identifier
+        # 2. Long-term memory - filtered strictly to user_identifiers (student + agent system)
         embedding = None
         if self.neo4j_memory.long_term._embedder is not None:
             try:
@@ -1087,15 +1087,21 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             except Exception as e:
                 print(f"⚠️ Error generating embedding for student context search: {e}")
 
+        # Determine user identifiers to query (student preferences/insights, and system/agent deficiencies)
+        student_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
+        agent_identifier = f"system_{agent_name}" if agent_name else "system"
+        user_identifiers = [student_identifier, agent_identifier]
+
         preferences = []
         if embedding is not None:
             try:
-                # Custom cypher query to enforce User relationship
+                # Custom cypher query to enforce User relationship for both student and system/agent
                 cypher_query = """
                 CALL db.index.vector.queryNodes('preference_embedding_idx', $limit, $embedding)
                 YIELD node, score
                 WHERE score >= $threshold
-                MATCH (u:User {identifier: $user_identifier})-[:HAS_PREFERENCE]->(node)
+                MATCH (u:User)-[:HAS_PREFERENCE]->(node)
+                WHERE u.identifier IN $user_identifiers
                 RETURN node AS p, score
                 ORDER BY score DESC
                 """
@@ -1105,7 +1111,7 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                         "embedding": embedding,
                         "limit": max_items,
                         "threshold": 0.7,
-                        "user_identifier": user_identifier
+                        "user_identifiers": user_identifiers
                     }
                 )
                 for row in results:
@@ -1115,12 +1121,16 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             except Exception as e:
                 print(f"⚠️ Vector search failed, falling back to direct preference query: {e}")
 
-        # Fallback: if vector search failed or returned nothing, fetch preferences directly
+        # Fallback: if vector search failed or returned nothing, fetch preferences directly for all identifiers
         if not preferences:
             try:
-                preferences = await self.neo4j_memory.long_term.get_preferences_for(user_identifier)
+                preferences = []
+                for uid in user_identifiers:
+                    prefs = await self.neo4j_memory.long_term.get_preferences_for(uid)
+                    if prefs:
+                        preferences.extend(prefs)
             except Exception as e:
-                print(f"⚠️ Failed to fetch preferences for user {user_identifier}: {e}")
+                print(f"⚠️ Failed to fetch preferences for user_identifiers {user_identifiers}: {e}")
 
         if preferences:
             parts.append("## Relevant Knowledge")
@@ -1160,10 +1170,10 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                 print("❌ Neo4j not connected. Cannot save deficiency.")
                 return False
 
-            user_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
+            user_identifier = f"system_{agent_name}" if agent_name else "system"
 
-            # 1. Save semantically as a Preference node scoped to the student + agent
-            pref_text = f"El alumno tiene una falencia en '{tema}': {correccion}"
+            # 1. Save semantically as a Preference node scoped to the agent/system
+            pref_text = f"El sistema/agente tiene una falencia en '{tema}': {correccion}"
             await self.neo4j_memory.long_term.add_preference(
                 category="falencia",
                 preference=pref_text,
@@ -1172,33 +1182,33 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             print(f"✅ Saved semantic deficiency preference for user_identifier '{user_identifier}'")
 
             # 2. Save structurally as custom entities and relationships
-            # Get or create the Student entity
-            student_entity_name = f"{student_id}_{agent_name}" if agent_name else student_id
-            student_entity, _ = await self.neo4j_memory.long_term.add_entity(
-                name=student_entity_name,
-                entity_type="Student",
-                description=f"Perfil del estudiante {student_id} para el agente {agent_name}",
+            # Get or create the Agent entity (instead of Student)
+            agent_entity_name = agent_name or "System"
+            agent_entity, _ = await self.neo4j_memory.long_term.add_entity(
+                name=agent_entity_name,
+                entity_type="Agent",
+                description=f"Perfil del agente {agent_name}",
                 resolve=False,
                 deduplicate=True
             )
 
             # Get or create the Concept entity
             concept_entity, _ = await self.neo4j_memory.long_term.add_entity(
-                name=tema,
+                name=f"{tema} ({agent_entity_name})",
                 entity_type="Concept",
-                description=f"Concepto de física: {tema}",
+                description=f"Concepto de física: {tema} (para el agente {agent_entity_name})",
                 resolve=False,
                 deduplicate=True
             )
 
-            # Add TIENE_FALENCIA relationship between Student and Concept
+            # Add TIENE_FALENCIA relationship between Agent and Concept
             await self.neo4j_memory.long_term.add_relationship(
-                source=student_entity.id,
+                source=agent_entity.id,
                 target=concept_entity.id,
                 relationship_type="TIENE_FALENCIA",
                 description=correccion
             )
-            print(f"✅ Saved structural relationship (Student {student_entity_name}) -[:TIENE_FALENCIA]-> (Concept {tema})")
+            print(f"✅ Saved structural relationship (Agent {agent_entity_name}) -[:TIENE_FALENCIA]-> (Concept {tema})")
             return True
 
         except Exception as e:
@@ -1208,7 +1218,7 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             return False
 
     async def _learn_user_preferences(self, user_message: str, context_id: str, agent_name: str | None = None):
-        """Extract and persist user preferences and facts to Neo4j Agent Memory in background, scoped per agent."""
+        """Extract and persist user preferences/facts and student insights to Neo4j Agent Memory in background."""
         if not self.neo4j_memory or not user_message:
             return
             
@@ -1216,50 +1226,59 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             print("🧠 Running self-learning extractor in background...")
             from langchain_core.messages import HumanMessage
             
-            prompt = f"""Analiza el siguiente mensaje enviado por un usuario:
+            prompt = f"""Analiza el siguiente mensaje enviado por un estudiante:
 "{user_message}"
  
-Determina si el usuario está expresando alguna preferencia personal persistente, hábito, estilo de comunicación preferido o dato biográfico relevante (por ejemplo: prefiere respuestas cortas, le gustan las explicaciones con analogías, se llama Diego, estudia ingeniería, etc.).
- 
-IMPORTANTE: No extraigas conclusiones de aprendizaje, correcciones ni conceptos físicos o matemáticos (por ejemplo, NO extraigas afirmaciones sobre leyes físicas, fórmulas o resolución de problemas). Solo debes extraer preferencias de estilo, formato o datos personales.
- 
-Si encuentras alguna preferencia o dato relevante, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El usuario prefiere respuestas concisas").
-Si no encuentras nada relevante o es una pregunta general, responde únicamente con la palabra "NONE".
- 
-Responde en el formato:
-Preferencia: <frase corta>
-(O "NONE" si no hay nada)."""
+Determina si se pueden extraer dos tipos de información:
+1. Preferencias personales o de estilo: Hábitos del usuario, estilo de comunicación preferido o datos biográficos (por ejemplo: prefiere respuestas cortas, le gustan las explicaciones con analogías, se llama Diego, estudia ingeniería, etc.).
+2. Insights o falencias de conocimiento del alumno: Conceptos recurrentes, dudas o temas sobre los cuales el alumno realiza preguntas o demuestra no comprender (por ejemplo: no comprende la diferencia entre masa y peso, tiene dudas recurrentes sobre la conservación de la energía, no sabe cómo aplicar la tercera ley de Newton, etc.).
 
+Si encuentras alguno de estos tipos, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El alumno tiene dudas sobre la conservación de la energía").
+Si no encuentras nada relevante para una categoría, responde NONE para esa categoría.
+
+Responde estrictamente en el formato:
+Preferencia: <frase corta o NONE>
+Insight: <frase corta o NONE>"""
 
             response = await ainvoke_with_retry(self.llm, [HumanMessage(content=prompt)])
             result = response.content.strip()
             
-            if "NONE" in result.upper() or not result:
-                print("🧠 Self-learning: No new persistent preferences detected.")
-                return
-                
-            # Parse preferences
+            # Parse preferences and insights
             preferences = []
+            insights = []
+            
             for line in result.split('\n'):
-                if ":" in line:
+                line = line.strip()
+                if line.startswith("Preferencia:"):
                     pref_val = line.split(":", 1)[1].strip()
                     if pref_val and pref_val.upper() != "NONE":
                         preferences.append(pref_val)
-                elif line.strip() and line.strip().upper() != "NONE":
-                    preferences.append(line.strip())
+                elif line.startswith("Insight:"):
+                    ins_val = line.split(":", 1)[1].strip()
+                    if ins_val and ins_val.upper() != "NONE":
+                        insights.append(ins_val)
             
             conversation = self.get_conversation(context_id)
             student_id = conversation.name or context_id if conversation else context_id
             user_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
+            
             for pref in preferences:
                 print(f"💾 Self-learning: Extracted preference -> '{pref}' for user_identifier '{user_identifier}'")
-                # Store preference in Neo4j Long-Term memory
                 await self.neo4j_memory.long_term.add_preference(
                     category="user_preference",
                     preference=pref,
                     user_identifier=user_identifier
                 )
                 print(f"✅ Preference persisted in Neo4j Graph")
+                
+            for ins in insights:
+                print(f"💾 Self-learning: Extracted student insight -> '{ins}' for user_identifier '{user_identifier}'")
+                await self.neo4j_memory.long_term.add_preference(
+                    category="insight",
+                    preference=ins,
+                    user_identifier=user_identifier
+                )
+                print(f"✅ Insight persisted in Neo4j Graph")
                 
         except Exception as e:
             print(f"⚠️ Error in self-learning extractor: {e}")

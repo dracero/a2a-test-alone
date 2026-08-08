@@ -160,7 +160,7 @@ export function ChatInterface() {
       );
       if (response.status === 'success') {
         setIsCorrectOpen(false);
-        alert('Corrección guardada con éxito como falencia del alumno.');
+        alert('Corrección guardada con éxito como falencia del sistema.');
       } else {
         alert('Error al guardar corrección.');
       }
@@ -661,9 +661,9 @@ export function ChatInterface() {
             ) : namsConclusions.length === 0 && namsDeficiencies.length === 0 ? (
               <div className="text-center py-12 px-4 rounded-xl border border-dashed border-slate-200 bg-slate-50/50">
                 <Brain className="h-10 w-10 text-slate-400 mx-auto mb-2 stroke-1" />
-                <p className="font-semibold text-slate-700 text-sm">No se han registrado aprendizajes ni falencias aún</p>
+                <p className="font-semibold text-slate-700 text-sm">No se han registrado preferencias, insights ni falencias aún</p>
                 <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                  A medida que interactúes con el bot y el profesor registre falencias, esta base de conocimiento se irá poblando de forma personalizada.
+                  A medida que interactúes con el bot y el profesor registre correcciones del sistema, esta base de conocimiento se irá poblando.
                 </p>
               </div>
             ) : (
@@ -671,10 +671,10 @@ export function ChatInterface() {
                 {/* Columna de Preferencias de Estilo */}
                 <div className="space-y-3">
                   <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider border-b pb-1">
-                    Preferencias de Estilo y Pedagogía ({namsConclusions.length})
+                    Preferencias e Insights del Alumno ({namsConclusions.length})
                   </h3>
                   {namsConclusions.length === 0 ? (
-                    <p className="text-xs text-slate-400 italic">No hay preferencias registradas.</p>
+                    <p className="text-xs text-slate-400 italic">No hay preferencias ni insights registrados.</p>
                   ) : (
                     <ul className="space-y-2">
                       {namsConclusions.map((conclusion, idx) => (
@@ -695,7 +695,7 @@ export function ChatInterface() {
                 {/* Columna de Falencias Registradas */}
                 <div className="space-y-3">
                   <h3 className="text-xs font-bold text-purple-700 uppercase tracking-wider border-b pb-1">
-                    Falencias Detectadas por Docentes ({namsDeficiencies.length})
+                    Falencias del Sistema / Agente ({namsDeficiencies.length})
                   </h3>
                   {namsDeficiencies.length === 0 ? (
                     <p className="text-xs text-slate-400 italic">No hay falencias registradas.</p>
@@ -732,7 +732,7 @@ export function ChatInterface() {
           </DialogHeader>
           <div className="mt-4 space-y-4">
             <p className="text-xs text-slate-500 leading-relaxed">
-              Registra una corrección física/conceptual sobre las respuestas del agente. Esta corrección quedará asociada como una falencia de aprendizaje para el estudiante <strong>{studentName || 'Sin Nombre'}</strong> y guiará al tutor en futuras conversaciones.
+              Registra una corrección física/conceptual sobre las respuestas del agente. Esta corrección quedará asociada como una falencia del sistema para el agente y guiará al tutor en futuras conversaciones globales.
             </p>
             
             <div className="space-y-1.5">
