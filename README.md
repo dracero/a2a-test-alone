@@ -250,6 +250,37 @@ Puedes probar el revisor localmente antes de subir tus cambios a GitHub:
 
 ---
 
+## 🔒 Restricción de Fusiones y Control de Pull Requests (PR)
+
+Para asegurar la estabilidad del proyecto y evitar que colaboradores no autorizados escriban cambios directos en las ramas protegidas (como `main`), se puede configurar el siguiente flujo de restricción y aprobación:
+
+### Diagrama del Proceso de Restricción
+
+```mermaid
+graph TD
+    Colab["Colaborador"] -->|"Push Directo"| Push["¿Push a Rama Protegida?"]
+    Push -->|"Sí"| AuthPush{"¿Usuario en Lista de Bypass / Permitidos?"}
+    AuthPush -->|"Sí"| DirectMerge["Push Exitoso"]
+    AuthPush -->|"No"| Rejected["PUSH DENEGADO"]
+    
+    Colab -->|"Crear PR"| PR["Pull Request"]
+    PR -->|"Requiere Aprobación"| Review{"¿Aprobado por Code Owner @tu_usuario?"}
+    Review -->|"Sí"| Approved["PR Fusionado (Merge)"]
+    Review -->|"No / Pendiente"| Blocked["Fusión Bloqueada"]
+```
+
+### Métodos de Configuración en GitHub:
+
+1. **Reglas de Protección de Ramas (Branch Protection Rules):**
+   - Configura la rama `main` en *Settings -> Branches -> Add rule*.
+   - Habilita **Restrict who can push to matching branches** y selecciona únicamente tu usuario para restringir la escritura directa.
+   
+2. **Propietarios del Código (CODEOWNERS):**
+   - Crea un archivo `.github/CODEOWNERS` y define `* @tu_usuario` para hacerte dueño de todos los archivos.
+   - Habilita **Require review from Code Owners** en las reglas de protección de rama. Así, cualquier Pull Request requerirá tu aprobación obligatoria para ser fusionada.
+
+---
+
 ## Related Repositories
 
 -   [A2A](https://github.com/a2aproject/A2A) - A2A Specification and documentation.
