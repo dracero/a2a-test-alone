@@ -1,65 +1,76 @@
-# Tutor Socrático de Física Multimodal
+# Multimodal Physics Agent
 
-Tutor socrático de Física I que usa el método socrático para guiar el aprendizaje. Recibe texto e imágenes, hace 3 preguntas guía y luego da la respuesta completa.
+Este agente actúa como un profesor de física experto (estilo UBA), capaz de responder preguntas analizando contexto (documentos/temario) e imágenes. Implementa un modo de **diálogo socrático** y renderiza ecuaciones matemáticas en formato LaTeX.
 
-## Features
+## DSPy GEPA Prompt Optimization
 
-- **Método socrático**: 3 preguntas guía antes de la respuesta completa
-- Análisis multimodal (texto + imágenes de experimentos/diagramas)
-- Búsqueda vectorial en documentos académicos (Qdrant)
-- Procesamiento e indexación de PDFs
-- Memoria conversacional
-- Streaming responses
-- Alineado al temario de Física I - UBA
+Este proyecto usa **dspy.GEPA (Genetic-Evolutionary Prompt Architecture)** para evolucionar las instrucciones del sistema y alinear matemáticamente el tono del agente con ejemplos reales del profesor de física mediante *reflective prompt evolution*.
 
-## Requirements
+Dado que este optimizador exige DSPy >= 3.0.0 y el workspace principal (`a2a-test-alone`) tiene dependencias de versiones anteriores arraigadas a través de `crewai`, la optimización **debe ejecutarse en su propio entorno virtual aislado**.
 
-- Python >= 3.13
-- Groq API Key (Llama 4)
-- Qdrant instance (cloud or local)
-- PyTorch with CUDA support
-
-## Configuration
-
-Set the following environment variables in the root `.env` file:
-
-```bash
-GROQ_API_KEY=your_groq_api_key
-QDRANT_URL=your_qdrant_url
-QDRANT_KEY=your_qdrant_api_key
-PDF_DIR=/path/to/pdf/documents  # Optional, defaults to /content
-```
-
-## Usage
+### 1. Activar el Entorno Aislado
 
 ```bash
 cd samples/python/agents/multimodal
-uv run python -m app
+
+# Crear el entorno aislado de uv (ya creado)
+uv venv
+
+# Instalar dependencias puras (sin resolver el workspace)
+uv pip install -e .
+
+# Usar SIEMPRE el python de este entorno para evitar conflictos
 ```
 
-Or from the project root:
+### 2. Ejecutar la Optimización GEPA
+
+**¿Cómo funciona?**
+GEPA (Genetic-Evolutionary Prompt Architecture) optimiza los prompts evaluando iterativamente:
+1. Resuelve los ejemplos con las instrucciones actuales.
+2. Un LLM "juez" reflexiona y critica las respuestas obtenidas.
+3. El LLM propone mejoras textuales sobre las instrucciones basándose en las críticas.
+4. Genera un árbol de variaciones de prompts, usando un enfoque de optimización Pareto para quedarse con aquellos prompts que rinden mejor de manera equilibrada en todos los ejemplos.
+
+Para correr el optimizador de prompts, puedes usar diferentes "presupuestos" (budgets) de búsqueda:
 
 ```bash
-npm run dev:agent:multimodal
+# Prueba rápida (Dry Run) - Asegura que el LLM y DSPy funcionen (no optimiza)
+.venv/bin/python optimize_prompts.py --dry-run
+
+# Optimización ligera (rápida, hace pocos intentos/evaluaciones)
+.venv/bin/python optimize_prompts.py --budget light
+
+# Optimización media (recomendada, mayor exploración en el árbol de evolución de prompts)
+.venv/bin/python optimize_prompts.py --budget medium
 ```
+Los prompts optimizados se guardan tanto en `optimized_prompts.json` (estructuras JSON legibles) como en un módulo compilado `.dspy`.
 
-The agent will start on `http://localhost:10003`
+### 3. Ajustando la Optimización (Tuning)
 
-## How it works
+Si la optimización generada de forma automática no es la **deseada** (por ejemplo, el tono no es exactamente como el profesor, o falla en cómo usar LaTeX), puedes guiar y arreglar el optimizador ajustando tres factores principales:
 
-1. **El estudiante envía una consulta** (texto y/o imagen)
-2. **El orquestador** detecta que es una consulta de física y la delega al tutor
-3. **El tutor hace 3 preguntas socráticas** para guiar el pensamiento
-4. **El estudiante responde** cada pregunta
-5. **El tutor genera la respuesta completa** incorporando las respuestas del estudiante
+1. **Editar los Ejemplos de Entrenamiento (`training_examples.json`)**
+   Esta es la parte más importante. Modifica los valores de `professor_response` en el JSON para que reflejen **exactamente** la forma en la que quieres que el modelo conteste. GEPA evolucionará las instrucciones intentando emular este texto (tono, estructura, humor, rigor). Usa pocos ejemplos (5-10) pero de calidad exquisita.
 
-## PDF Processing
+2. **Modificar la Métrica (Juez) en `optimize_prompts.py`**
+   Ve a la función `professor_style_metric()` en el código. 
+   - Puedes cambiar los **pesos** (`DIMENSION_WEIGHTS`) para darle más importancia matemática al `tono` o al `rigor`.
+   - Puedes editar las instrucciones al LM evaluador en el texto del `judge_prompt`. Si quieres que castigue más los errores de LaTeX, indícaselo explícitamente en el texto. El juez devuelve feedback en formato de texto; este texto será lo que la etapa de "reflexión" lea para corregir los prompts iniciales.
 
-On first run, the agent will:
-1. Check if Qdrant collections exist
-2. If not, process PDFs from `PDF_DIR`
-3. Extract text and images from PDFs
-4. Create vector embeddings
-5. Store in Qdrant for fast retrieval
+3. **Ajustar Parámetros de Exploración por Terminal**
+   Puedes modificar parámetros avanzados al correr el script:
+   ```bash
+   # --reflection-temperature más alta (ej: 1.2) provoca modificaciones más drásticas y creativas sobre las instrucciones
+   .venv/bin/python optimize_prompts.py --budget medium --reflection-temperature 1.2
 
-Subsequent runs will skip processing if collections already exist.
+   # Usar un modelo potente exclusivo para reflexionar/evaluar mejora drásticamente las críticas
+   .venv/bin/python optimize_prompts.py --budget medium --model mi-modelo-rapido --reflection-model modelo-mas-grande-y-detallado
+   ```
+
+### 4. Evaluar los Prompts
+
+Puede comparar las métricas precisas del _baseline_ frente al _modelo instruido por GEPA_:
+
+```bash
+.venv/bin/python evaluate_prompts.py
+```

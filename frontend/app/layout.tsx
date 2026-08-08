@@ -1,4 +1,5 @@
 import './globals.css';
+import 'katex/dist/katex.min.css';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 
@@ -16,6 +17,15 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        {/* KaTeX CSS from CDN for reliable font loading */}
+        <link
+          rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+          integrity="sha384-nB0miv6/jRmo5YADR2eE1AD+lkFccFoEgnB6eDRcfl/0X1W9pOCclDWXq4NO2kAC"
+          crossOrigin="anonymous"
+        />
+      </head>
       <body className={inter.className}>{children}</body>
     </html>
   );

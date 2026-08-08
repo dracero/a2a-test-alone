@@ -83,7 +83,7 @@ export function MessageManager() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-slate-900">
-                        {msg.sender}
+                        {msg.role}
                       </p>
                       <p className="text-xs text-slate-500">
                         Context: {msg.context_id ? `${msg.context_id.slice(0, 12)}...` : '—'}

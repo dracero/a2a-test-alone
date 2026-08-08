@@ -1,0 +1,82 @@
+A continuación, te presento el temario estructurado de Física I:
+
+**TEMA 1: Magnitudes escalares y vectoriales**
+- Subtema 1.1: Definición de magnitudes escalares y vectoriales
+- Subtema 1.2: Ejemplos de magnitudes escalares y vectoriales
+
+**TEMA 2: Cinemática de la partícula**
+- Subtema 2.1: Posición de una partícula “P” respecto del observador “O”
+- Subtema 2.2: Sistema de referencia. Encuadre empírico del movimiento
+- Subtema 2.3: Sistemas de coordenadas: cartesianas, polares e intrínsecas
+- Subtema 2.4: Cambio de posición de un punto “P” respecto de un observador fijo “O”
+- Subtema 2.5: Velocidad instantánea de un punto “P” respecto de un observador fijo “O”
+- Subtema 2.6: Vector velocidad en coordenadas polares y transformación a coordenadas cartesianas en 2D
+- Subtema 2.7: Variación del vector velocidad
+- Subtema 2.8: Aceleración instantánea de un punto “P” respecto de un observador fijo “O”
+- Subtema 2.9: Circunferencia osculatriz o círculo osculador: centro de curvatura local y radio de curvatura local de una trayectoria
+
+**TEMA 3: Dinámica de la partícula**
+- Subtema 3.1: Introducción a la dinámica
+- Subtema 3.2: Primera ley: el Principio de Inercia
+- Subtema 3.3: Segunda ley: el Principio de Masa
+- Subtema 3.4: Tercera ley: el Principio de Interacción
+- Subtema 3.5: La interacción gravitatoria
+- Subtema 3.6: Fuerzas derivadas de interacciones eléctricas: la fuerza elástica
+- Subtema 3.7: Fuerzas derivadas de interacciones eléctricas: la fuerza de rozamiento
+- Subtema 3.8: Fuerzas derivadas de interacciones eléctricas: la tensión
+
+**TEMA 4: Trabajo y Energía**
+- Subtema 4.1: Introducción al trabajo y la energía
+- Subtema 4.2: Definición de trabajo mecánico
+- Subtema 4.3: Energía potencial y fuerzas conservativas
+- Subtema 4.4: Fuerzas centrales
+- Subtema 4.5: La energía cinética
+
+**TEMA 5: Sistema de partículas**
+- Subtema 5.1: Modelo sistema de partículas
+- Subtema 5.2: Sistema de referencia laboratorio
+- Subtema 5.3: Centro de masa de un sistema de partículas
+- Subtema 5.4: Velocidad del CM de un sistema de partículas
+- Subtema 5.5: Aceleración del CM de un sistema de partículas
+- Subtema 5.6: Dinámica de un sistema de partículas
+
+**TEMA 6: Cinemática del Cuerpo Rígido**
+- Subtema 6.1: Introducción a la cinemática del cuerpo rígido
+- Subtema 6.2: Determinación del Centro de Masa (CM) del cuerpo rígido
+- Subtema 6.3: Estudio de los posibles movimientos de un Cuerpo Rígido (CR) en un plano perpendicular a su eje de simetría
+
+**TEMA 7: Dinámica del Cuerpo Rígido**
+- Subtema 7.1: Introducción a la dinámica del cuerpo rígido
+- Subtema 7.2: Resultado de trasladar una fuerza al CM
+- Subtema 7.3: Cupla o par de fuerzas
+- Subtema 7.4: Resultante de un sistema de fuerzas y torques aplicados a un CR
+
+**TEMA 8: Dinámica Impulsiva del Cuerpo Rígido**
+- Subtema 8.1: Introducción a la dinámica impulsiva del cuerpo rígido
+- Subtema 8.2: Centro de percusión
+
+**TEMA 9: Hidrodinámica**
+- Subtema 9.1: Discusión de conceptos previos
+- Subtema 9.2: Flujo del fluido ideal
+- Subtema 9.3: Caudal y caudal másico
+
+**TEMA 10: Ondas Mecánicas**
+- Subtema 10.1: Introducción a las ondas mecánicas
+- Subtema 10.2: Características del movimiento ondulatorio
+- Subtema 10.3: Clasificación de las ondas
+
+**TEMA 11: Óptica Geométrica**
+- Subtema 11.1: Introducción a la óptica geométrica
+- Subtema 11.2: Leyes o principio fundamentales de la óptica geométrica
+- Subtema 11.3: Algunas definiciones
+
+**TEMA 12: Óptica Física**
+- Subtema 12.1: Principio de Huygens
+- Subtema 12.2: El concepto de coherencia
+- Subtema 12.3: Interferencia
+
+**TEMA 13: Sistemas de Referencia No Inerciales**
+- Subtema 13.1: Introducción a los sistemas de referencia no inerciales
+- Subtema 13.2: Sistemas de referencia acelerados
+
+Espero que esta estructura te sea de ayuda. ¡Si necesitas algo más, no dudes en preguntar!

@@ -61,7 +61,7 @@ class ImageGenerationAgentExecutor(AgentExecutor):
             except Exception as e:
                 logger.debug(f"LangSmith feedback error: {e}")
 
-    @traceable(name="a2a_request_execution", run_type="chain")
+    @traceable(name="a2a_request_execution", run_type="chain", tags=["agent_type:image_generator", "image_generator", "a2a-agent"])
     async def execute(
         self,
         context: RequestContext,
@@ -413,8 +413,8 @@ class ImageGenerationAgentExecutor(AgentExecutor):
                 logger.debug(f"LangSmith feedback error: {e}")
         
         # Execute the agent using invoke() method with session_id (context_id)
-        # Note: invoke() is synchronous, not async
-        result = self.agent.invoke(query, context_id)
+        # Note: invoke() is now async
+        result = await self.agent.invoke(query, context_id)
         
         if LANGSMITH_ENABLED:
             try:

@@ -217,7 +217,7 @@ async def main() -> None:
         logger.info('EJEMPLO 2: Consulta médica con imagen COMPRIMIDA')
         logger.info('='*80)
 
-        image_path = '/media/dracero/08c67654-6ed7-4725-b74e-50f29ea60cb2/pythonAI-Others/a2a-samples/samples/python/agents/medical_Images/app/imagen.png'
+        image_path = 'app/imagen.png'
 
         if Path(image_path).exists():
             try:

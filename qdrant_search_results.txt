@@ -1,0 +1,29 @@
+
+================ SEARCH FOR 'rozamiento' ================
+Total matches: 37
+ - [arch13.pdf]: Física I – Sistemas de Re ferencia No Inerciales – Rev. 02 1 La obra “Física para estudiantes de Ingenier ía” está protegid a bajo una licencia Creative Commons Atribución -NoComercial -SinDerivadas 4
+ - [arch13.pdf]: es la “relativa” en esos sistemas. Sugerimos que intente despejar el ángulo α desde las ecuaciones de amb os sistemas de referencia, y necesariamente se dará cuenta que en ambos casos llega a la misma
+ - [arch13.pdf]: del carrito 𝑎min y 𝑎max dentro de los cuales el sistema A, B se mueve solidario al mismo, Física I – Sistemas de Re ferencia No Inerciales – Rev. 02 9 La obra “Física para estudiantes de Ingenier ía” 
+ - [arch13.pdf]: una licencia Creative Commons Atribución -NoComercial -SinDerivadas 4.0 Internacional . 𝑥) 𝑇−𝜇0 𝑃𝑎=𝑚𝑎 𝑎𝑚𝑖𝑛 𝑁𝑏=𝑚𝑏 𝑎𝑚𝑖𝑛 𝑦) 𝑁𝑎=𝑃𝑎 𝑇+𝜇0 𝑚𝑏𝑎𝑚𝑖𝑛−𝑃𝑏=0 Ecuaciones en las cuales queda de manifiesto que ambos c
+ - [arch2.pdf]: Física I – Dinámica de la partícula – Rev. 03 La obra “Física para estudiantes de Ingenier ía” está protegid a bajo una licencia Creative Commons Atribución -NoComercial -SinDerivadas 4.0 Internaciona
+ - [arch2.pdf]: la misma función que los dos resortes “reales”. Aplicando la Segunda Ley de Newton tenemos que: 𝑚𝑔−𝑘1𝑥1−𝑘2𝑥2=0 Física I – Dinámica de la partícula – Rev. 03 La obra “Física para estudiantes de Ingenie
+ - [arch2.pdf]: la equilibra. Esta es la fuerza de rozamiento estático 𝐹 𝑒𝑠𝑡, denominada así porque no existe desplazamiento relativo entre el bloque y la superficie de apoyo. Esta fuerza está estrechame nte relacion
+ - [arch2.pdf]: correcta. Consideremos, por ejemplo, una persona que camina llevando una bandeja en una de sus manos. De no exist ir el rozamiento, la bandeja permanecería en reposo, la mano avanza y finalmente la ba
+ - [arch2.pdf]: rozamiento dinámico. Habitualmente, y en concordancia con el gráfico presentado previamente, tenemos que: 𝜇𝑒>𝜇𝑑 8_ (FUERZAS DERIVADAS DE INTERACCIONES ELÉCTRICAS) LA TENSIÓN Consideremos un problema c
+ - [arch2.pdf]: Derivando la expresión anterior d os veces respecto del tiempo, y teniendo en cuenta que L es constante, obtenemos: 0=−𝑎𝐴+𝑎𝐵 Por lo tanto 𝑎𝐴=𝑎𝐵=𝑎. Ahora, veamos un problema en el que ambas aceleracion
+
+================ SEARCH FOR 'L0' ================
+Total matches: 0
+
+================ SEARCH FOR 'longitud natural' ================
+Total matches: 1
+ - [arch2.pdf]: | y colocar a la 𝐹 𝑒 el signo que corresponda según el sistema de coordenadas que hayamos elegido. Movimiento de un sistema masa - resorte  Un bloque de masa m está atado a un resorte, el bloque pued
+
+================ SEARCH FOR 'rodadura' ================
+Total matches: 0
+
+================ SEARCH FOR 'cañón' ================
+Total matches: 0
+
+================ SEARCH FOR 'cañon' ================
+Total matches: 0

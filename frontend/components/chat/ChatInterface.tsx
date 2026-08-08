@@ -5,7 +5,13 @@ import { chatAPI, Message, Part, Conversation } from '@/lib/api';
 import { MessageBubble } from './MessageBubble';
 import { MessageInput } from './MessageInput';
 import { Button } from '@/components/ui/button';
-import { Loader2, Plus, MessageSquare } from 'lucide-react';
+import { Loader2, Plus, MessageSquare, Brain, GraduationCap } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -13,6 +19,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 export function ChatInterface() {
@@ -22,8 +30,147 @@ export function ChatInterface() {
   const [isSending, setIsSending] = useState(false);
   const [isCreatingChat, setIsCreatingChat] = useState(false);
   const [allConversations, setAllConversations] = useState<Conversation[]>([]);
+  const [isNamsOpen, setIsNamsOpen] = useState(false);
+  const [namsConclusions, setNamsConclusions] = useState<string[]>([]);
+  const [isLoadingNams, setIsLoadingNams] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+
+  // New state variables
+  const [role, setRole] = useState<'alumno' | 'profesor'>('alumno');
+  const [studentName, setStudentName] = useState<string>('');
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+  const [namsDeficiencies, setNamsDeficiencies] = useState<string[]>([]);
+  const [namsSelectedAgent, setNamsSelectedAgent] = useState<string>('Tutor Socrático de Física Multimodal');
+
+  // Correction state variables
+  const [isCorrectOpen, setIsCorrectOpen] = useState(false);
+  const [selectedMessageToCorrect, setSelectedMessageToCorrect] = useState<Message | null>(null);
+  const [correctTema, setCorrectTema] = useState('');
+  const [correctExplanation, setCorrectExplanation] = useState('');
+  const [isSubmittingCorrection, setIsSubmittingCorrection] = useState(false);
+
+  // Sync student name when conversationId or allConversations change
+  useEffect(() => {
+    if (conversationId && allConversations.length > 0) {
+      const activeConv = allConversations.find(c => c.conversation_id === conversationId);
+      if (activeConv) {
+        setStudentName(activeConv.name || '');
+        setNameInput(activeConv.name || '');
+      }
+    }
+  }, [conversationId, allConversations]);
+
+  const handleOpenNams = async () => {
+    setIsNamsOpen(true);
+    setIsLoadingNams(true);
+    
+    // Detect active agent from messages
+    let activeAgentName = 'Tutor Socrático de Física Multimodal';
+    if (messages && messages.length > 0) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'agent' && (messages[i] as any).recipient) {
+          activeAgentName = (messages[i] as any).recipient;
+          break;
+        }
+      }
+    }
+    setNamsSelectedAgent(activeAgentName);
+
+    try {
+      const activeConv = allConversations.find(c => c.conversation_id === conversationId);
+      const studentId = studentName || activeConv?.name || conversationId;
+      const response = await chatAPI.getNamsConclusions(studentId, conversationId, activeAgentName);
+      if (response.status === 'active') {
+        setNamsConclusions(response.conclusions || []);
+        setNamsDeficiencies(response.deficiencies || []);
+      } else {
+        setNamsConclusions([]);
+        setNamsDeficiencies([]);
+      }
+    } catch (error) {
+      console.error('Failed to fetch NAMS conclusions:', error);
+      setNamsConclusions([]);
+      setNamsDeficiencies([]);
+    } finally {
+      setIsLoadingNams(false);
+    }
+  };
+
+  const handleNamsAgentChange = async (agentName: string) => {
+    setNamsSelectedAgent(agentName);
+    setIsLoadingNams(true);
+    try {
+      const activeConv = allConversations.find(c => c.conversation_id === conversationId);
+      const studentId = studentName || activeConv?.name || conversationId;
+      const response = await chatAPI.getNamsConclusions(studentId, conversationId, agentName);
+      if (response.status === 'active') {
+        setNamsConclusions(response.conclusions || []);
+        setNamsDeficiencies(response.deficiencies || []);
+      } else {
+        setNamsConclusions([]);
+        setNamsDeficiencies([]);
+      }
+    } catch (error) {
+      console.error('Failed to fetch NAMS conclusions for agent:', error);
+      setNamsConclusions([]);
+      setNamsDeficiencies([]);
+    } finally {
+      setIsLoadingNams(false);
+    }
+  };
+
+  const handleSaveStudentName = async () => {
+    if (!conversationId || !nameInput.trim()) return;
+    try {
+      await chatAPI.updateConversationName(conversationId, nameInput.trim());
+      setStudentName(nameInput.trim());
+      setIsEditingName(false);
+      setAllConversations(prev =>
+        prev.map(c =>
+          c.conversation_id === conversationId ? { ...c, name: nameInput.trim() } : c
+        )
+      );
+    } catch (error) {
+      console.error('Failed to update student name:', error);
+    }
+  };
+
+  const handleOpenCorrectModal = (message: Message) => {
+    setSelectedMessageToCorrect(message);
+    setCorrectTema('');
+    setCorrectExplanation('');
+    setIsCorrectOpen(true);
+  };
+
+  const handleSubmitCorrection = async () => {
+    const activeConv = allConversations.find(c => c.conversation_id === conversationId);
+    const studentId = studentName || activeConv?.name || conversationId;
+    if (!studentId || !correctTema.trim() || !correctExplanation.trim()) return;
+    
+    const agentName = (selectedMessageToCorrect as any)?.recipient;
+    setIsSubmittingCorrection(true);
+    try {
+      const response = await chatAPI.correctAgent(
+        studentId,
+        correctTema.trim(),
+        correctExplanation.trim(),
+        agentName
+      );
+      if (response.status === 'success') {
+        setIsCorrectOpen(false);
+        alert('Corrección guardada con éxito como falencia del sistema.');
+      } else {
+        alert('Error al guardar corrección.');
+      }
+    } catch (error) {
+      console.error('Failed to submit correction:', error);
+      alert('Error de red al guardar la corrección.');
+    } finally {
+      setIsSubmittingCorrection(false);
+    }
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -72,7 +219,7 @@ export function ChatInterface() {
     try {
       const response = await chatAPI.listConversations();
       const convs = response.result || [];
-      const filtered = convs.filter((conv) => conv && conv.conversation_id).reverse();
+      const filtered = (convs as Conversation[]).filter((conv) => conv && conv.conversation_id).reverse();
       setAllConversations(filtered);
       return filtered;
     } catch (error) {
@@ -234,252 +381,62 @@ export function ChatInterface() {
     startPolling(convId);
   };
 
-  // ✅ NORMALIZACIÓN MEJORADA
   function normalizeMessages(msgs: Message[] | undefined): Message[] {
     if (!msgs) return [];
-    return msgs.map((m) => {
-      const normalized = {
-        ...m,
-        parts: (m.parts || []).map(normalizePart).filter(Boolean)
-      };
-
-      console.log('📥 Normalized message:', {
-        messageId: m.message_id,
-        role: m.role,
-        originalPartsCount: m.parts?.length || 0,
-        normalizedPartsCount: normalized.parts.length,
-        parts: normalized.parts.map(p => ({
-          kind: p.kind,
-          hasBytes: p.kind === 'file' ? !!p.file?.bytes : undefined,
-          hasUri: p.kind === 'file' ? !!p.file?.uri : undefined,
-          hasText: p.kind === 'text' ? !!p.text : undefined
-        }))
-      });
-
-      return normalized;
-    });
+    return msgs.map((m) => ({
+      ...m,
+      parts: (m.parts || []).map(normalizePart).filter((p): p is Part => p !== null),
+    }));
   }
 
   function normalizePart(p: any): Part | null {
-    if (!p) {
-      console.warn('⚠️ Null part received');
+    if (!p) return null;
+
+    // Helper: detect base64 image string
+    function asImagePart(text: string): Part | null {
+      if (text.startsWith('data:image/')) {
+        const match = text.match(/^data:(image\/[^;]+);base64,(.+)$/);
+        if (match) return { kind: 'file', file: { mime_type: match[1], bytes: match[2] } };
+      }
+      if (text.length > 1000 && /^[A-Za-z0-9+/=]+$/.test(text)) {
+        return { kind: 'file', file: { mime_type: 'image/png', bytes: text } };
+      }
       return null;
     }
 
-    console.log('🔄 Normalizing part - RAW:', {
-      raw: p,
-      hasKind: !!p.kind,
-      kind: p.kind,
-      hasRoot: !!p.root,
-      hasFile: !!p.file,
-      hasText: p.text !== undefined,
-      structure: Object.keys(p),
-      // Ver TODOS los campos del file si existe
-      fileKeys: p.file ? Object.keys(p.file) : null,
-      // Ver qué hay en root si existe
-      rootKeys: p.root ? Object.keys(p.root) : null
-    });
-
-    // 1. Ya está en la forma esperada
+    // Already normalized
     if (p.kind === 'text' && p.text !== undefined) {
-      // 🔧 NUEVO: Detectar si el texto es realmente una imagen base64
-      const text = p.text;
-      if (typeof text === 'string' && text.length > 100 &&
-        (text.startsWith('data:image/') ||
-          (text.match(/^[A-Za-z0-9+/=]{100,}$/) && text.length > 1000))) {
-        console.log('🔧 Detected base64 image in text part, converting to file part');
-
-        let mimeType = 'image/png';
-        let bytes = text;
-
-        // Si tiene el prefijo data:image/...;base64,
-        if (text.startsWith('data:image/')) {
-          const match = text.match(/^data:(image\/[^;]+);base64,(.+)$/);
-          if (match) {
-            mimeType = match[1];
-            bytes = match[2];
-          }
-        }
-
-        return {
-          kind: 'file',
-          file: {
-            mime_type: mimeType,
-            bytes: bytes
-          }
-        };
-      }
-
-      console.log('✅ Text part (already normalized)');
-      return { kind: 'text', text: p.text };
+      return asImagePart(p.text) ?? { kind: 'text', text: p.text };
     }
-
     if (p.kind === 'file' && p.file) {
-      // CRÍTICO: Verificar todas las posibles ubicaciones del mime_type
-      const mimeType = p.file.mime_type || p.file.mimeType || p.mime_type || p.mimeType;
-
-      console.log('✅ File part (already normalized):', {
-        mimeType: mimeType,
-        file_mime_type: p.file.mime_type,
-        file_mimeType: p.file.mimeType,
-        p_mime_type: p.mime_type,
-        p_mimeType: p.mimeType,
-        hasBytes: !!p.file.bytes,
-        hasUri: !!p.file.uri,
-        bytesLength: p.file.bytes?.length || 0,
-        allFileKeys: Object.keys(p.file),
-        allPKeys: Object.keys(p)
-      });
-
-      return {
-        kind: 'file',
-        file: {
-          mime_type: mimeType,
-          bytes: p.file.bytes,
-          uri: p.file.uri
-        }
-      };
+      const mime = p.file.mime_type || p.file.mimeType || p.mime_type || 'application/octet-stream';
+      return { kind: 'file', file: { mime_type: mime, bytes: p.file.bytes, uri: p.file.uri } };
     }
 
-    // 2. Formato con 'root' (del backend después de cache_content)
+    // Backend 'root' wrapper
     if (p.root) {
-      // root.file contiene el archivo
       if (p.root.file) {
-        const mimeType = p.root.file.mime_type || p.root.file.mimeType || p.root.mime_type || p.mime_type;
-
-        console.log('✅ File part (from root.file):', {
-          mimeType: mimeType,
-          root_file_mime_type: p.root.file.mime_type,
-          root_file_mimeType: p.root.file.mimeType,
-          root_mime_type: p.root.mime_type,
-          hasBytes: !!p.root.file.bytes,
-          hasUri: !!p.root.file.uri,
-          rootFileKeys: Object.keys(p.root.file),
-          rootKeys: Object.keys(p.root)
-        });
-
-        return {
-          kind: 'file',
-          file: {
-            mime_type: mimeType,
-            bytes: p.root.file.bytes,
-            uri: p.root.file.uri
-          }
-        };
+        const mime = p.root.file.mime_type || p.root.file.mimeType || 'application/octet-stream';
+        return { kind: 'file', file: { mime_type: mime, bytes: p.root.file.bytes, uri: p.root.file.uri } };
       }
-
-      // root.text contiene el texto
       if (p.root.text !== undefined) {
-        // 🔧 NUEVO: Detectar si el texto es realmente una imagen base64
-        const text = p.root.text;
-        if (typeof text === 'string' && text.length > 100 &&
-          (text.startsWith('data:image/') ||
-            (text.match(/^[A-Za-z0-9+/=]{100,}$/) && text.length > 1000))) {
-          console.log('🔧 Detected base64 image in root.text, converting to file part');
-
-          let mimeType = 'image/png';
-          let bytes = text;
-
-          // Si tiene el prefijo data:image/...;base64,
-          if (text.startsWith('data:image/')) {
-            const match = text.match(/^data:(image\/[^;]+);base64,(.+)$/);
-            if (match) {
-              mimeType = match[1];
-              bytes = match[2];
-            }
-          }
-
-          return {
-            kind: 'file',
-            file: {
-              mime_type: mimeType,
-              bytes: bytes
-            }
-          };
-        }
-
-        console.log('✅ Text part (from root.text)');
-        return { kind: 'text', text: p.root.text };
+        return asImagePart(p.root.text) ?? { kind: 'text', text: p.root.text };
       }
-
-      // root es directamente el file (con mime_type, bytes o uri)
-      if (p.root.mime_type || p.root.mimeType || p.root.bytes || p.root.uri) {
-        const mimeType = p.root.mime_type || p.root.mimeType;
-
-        console.log('✅ File part (root is file):', {
-          mimeType: mimeType,
-          hasBytes: !!p.root.bytes,
-          hasUri: !!p.root.uri
-        });
-
-        return {
-          kind: 'file',
-          file: {
-            mime_type: mimeType,
-            bytes: p.root.bytes,
-            uri: p.root.uri
-          }
-        };
+      if (p.root.mime_type || p.root.bytes || p.root.uri) {
+        return { kind: 'file', file: { mime_type: p.root.mime_type, bytes: p.root.bytes, uri: p.root.uri } };
       }
     }
 
-    // 3. Tiene 'file' en el nivel superior sin 'kind'
-    if (p.file && (p.file.mime_type || p.file.mimeType || p.file.bytes || p.file.uri)) {
-      const mimeType = p.file.mime_type || p.file.mimeType || p.mime_type || p.mimeType;
-
-      console.log('✅ File part (top level):', {
-        mimeType: mimeType,
-        hasBytes: !!p.file.bytes,
-        hasUri: !!p.file.uri
-      });
-
-      return {
-        kind: 'file',
-        file: {
-          mime_type: mimeType,
-          bytes: p.file.bytes,
-          uri: p.file.uri
-        }
-      };
+    // Top-level file/text without kind
+    if (p.file) {
+      const mime = p.file.mime_type || p.file.mimeType || 'application/octet-stream';
+      return { kind: 'file', file: { mime_type: mime, bytes: p.file.bytes, uri: p.file.uri } };
+    }
+    if (p.text !== undefined) {
+      return asImagePart(p.text) ?? { kind: 'text', text: p.text };
     }
 
-    // 4. Tiene 'text' en el nivel superior sin 'kind'
-    if (p.text !== undefined && !p.file && !p.root) {
-      // 🔧 NUEVO: Detectar si el texto es realmente una imagen base64
-      const text = p.text;
-      if (typeof text === 'string' && text.length > 100 &&
-        (text.startsWith('data:image/') ||
-          (text.match(/^[A-Za-z0-9+/=]{100,}$/) && text.length > 1000))) {
-        console.log('🔧 Detected base64 image in top-level text, converting to file part');
-
-        let mimeType = 'image/png';
-        let bytes = text;
-
-        // Si tiene el prefijo data:image/...;base64,
-        if (text.startsWith('data:image/')) {
-          const match = text.match(/^data:(image\/[^;]+);base64,(.+)$/);
-          if (match) {
-            mimeType = match[1];
-            bytes = match[2];
-          }
-        }
-
-        return {
-          kind: 'file',
-          file: {
-            mime_type: mimeType,
-            bytes: bytes
-          }
-        };
-      }
-
-      console.log('✅ Text part (top level)');
-      return { kind: 'text', text: p.text };
-    }
-
-    // Fallback
-    console.error('❌ Could not normalize part:', p);
-    return { kind: 'text', text: `[Error: Could not parse content: ${JSON.stringify(p)}]` };
+    return { kind: 'text', text: '[Unrecognized content]' };
   }
 
   if (isLoading) {
@@ -509,12 +466,77 @@ export function ChatInterface() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Selector de Rol */}
+          <Select
+            value={role}
+            onValueChange={(val: any) => setRole(val)}
+          >
+            <SelectTrigger className="w-[145px] font-semibold text-slate-700 border-slate-200">
+              <SelectValue placeholder="Rol" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="alumno">👨‍🎓 Alumno</SelectItem>
+              <SelectItem value="profesor">👩‍🏫 Profesor</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Nombre de Estudiante (Edición / Visualización) */}
+          {role === 'alumno' ? (
+            <div className="flex items-center gap-1.5 border rounded-lg px-2.5 py-1 bg-slate-50 border-slate-200 h-9 shadow-sm">
+              {isEditingName ? (
+                <>
+                  <input
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
+                    placeholder="Nombre alumno"
+                    className="w-28 bg-transparent text-xs outline-none px-1 border-b border-blue-400"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveStudentName();
+                    }}
+                  />
+                  <Button size="sm" onClick={handleSaveStudentName} className="h-5 px-1.5 text-[10px]">
+                    OK
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setIsEditingName(false)} className="h-5 px-1 text-[10px]">
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <span className="text-[10px] text-slate-500 font-bold uppercase">Alumno:</span>
+                  <span className="text-xs font-semibold text-slate-700 max-w-24 truncate">
+                    {studentName || 'Sin Nombre'}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setNameInput(studentName);
+                      setIsEditingName(true);
+                    }}
+                    className="h-5 w-5 p-0 text-slate-400 hover:text-slate-600 text-xs flex items-center justify-center"
+                  >
+                    ✏️
+                  </Button>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 border border-purple-100 rounded-lg px-2.5 py-1 bg-purple-50/50 h-9 shadow-sm">
+              <span className="text-[10px] text-purple-600 font-bold uppercase tracking-wider">Estudiante:</span>
+              <span className="text-xs font-bold text-purple-900 max-w-24 truncate">
+                {studentName || 'Conversación ' + conversationId.slice(0, 5)}
+              </span>
+            </div>
+          )}
+
+          {/* Selector de Conversación */}
           <Select
             value={conversationId}
             onValueChange={handleSelectConversation}
             disabled={isCreatingChat}
           >
-            <SelectTrigger className="w-[280px]">
+            <SelectTrigger className="w-[220px]">
               <SelectValue placeholder="Select a conversation" />
             </SelectTrigger>
             <SelectContent>
@@ -528,8 +550,7 @@ export function ChatInterface() {
                     key={conv.conversation_id}
                     value={conv.conversation_id}
                   >
-                    {conv.conversation_id.slice(0, 8)}... (
-                    {conv.messages?.length || 0} msgs)
+                    {conv.name ? `${conv.name} (${conv.conversation_id.slice(0, 5)})` : `${conv.conversation_id.slice(0, 8)}...`} ({conv.messages?.length || 0} msgs)
                   </SelectItem>
                 ))}
             </SelectContent>
@@ -547,6 +568,15 @@ export function ChatInterface() {
               <Plus className="h-4 w-4" />
             )}
             New Chat
+          </Button>
+
+          <Button
+            onClick={handleOpenNams}
+            variant="outline"
+            className="gap-2 border-purple-200 text-purple-700 hover:bg-purple-50 hover:text-purple-800"
+          >
+            <Brain className="h-4 w-4" />
+            Memoria NAMS
           </Button>
         </div>
       </header>
@@ -571,7 +601,13 @@ export function ChatInterface() {
         ) : (
           <div className="max-w-4xl mx-auto">
             {messages.map((message) => (
-              <MessageBubble key={message.message_id} message={message} />
+              <MessageBubble 
+                key={message.message_id} 
+                message={message} 
+                onSend={handleSendMessage}
+                isProfesor={role === 'profesor'}
+                onCorrect={handleOpenCorrectModal}
+              />
             ))}
             {isSending && (
               <div className="flex items-start gap-3 mb-4">
@@ -589,6 +625,168 @@ export function ChatInterface() {
       </div>
 
       <MessageInput onSend={handleSendMessage} disabled={isSending} />
+
+      <Dialog open={isNamsOpen} onOpenChange={setIsNamsOpen}>
+        <DialogContent className="max-w-3xl bg-white sm:rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl font-bold text-purple-900 border-b pb-2">
+              <Brain className="h-6 w-6 text-purple-600 animate-pulse" />
+              Memoria a Largo Plazo (NAMS) - Estudiante: {studentName || 'Sin Nombre'}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="flex items-center gap-3 py-2 px-1 border-b">
+            <span className="text-xs font-bold text-slate-500 uppercase">Seleccionar Agente:</span>
+            <Select
+              value={namsSelectedAgent}
+              onValueChange={handleNamsAgentChange}
+            >
+              <SelectTrigger className="w-[280px] h-8 text-xs font-semibold text-slate-700 border-slate-200">
+                <SelectValue placeholder="Seleccionar Agente" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Tutor Socrático de Física Multimodal">Tutor Socrático de Física Multimodal</SelectItem>
+                <SelectItem value="Asistente Médico">Asistente Médico</SelectItem>
+                <SelectItem value="Image Generator Agent">Image Generator Agent</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="mt-4 max-h-[65vh] overflow-y-auto pr-2">
+            {isLoadingNams ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-purple-600 mb-2" />
+                <p className="text-sm text-slate-500 font-medium">Consultando base de datos de grafos Neo4j Aura DB...</p>
+              </div>
+            ) : namsConclusions.length === 0 && namsDeficiencies.length === 0 ? (
+              <div className="text-center py-12 px-4 rounded-xl border border-dashed border-slate-200 bg-slate-50/50">
+                <Brain className="h-10 w-10 text-slate-400 mx-auto mb-2 stroke-1" />
+                <p className="font-semibold text-slate-700 text-sm">No se han registrado preferencias, insights ni falencias aún</p>
+                <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                  A medida que interactúes con el bot y el profesor registre correcciones del sistema, esta base de conocimiento se irá poblando.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Columna de Preferencias de Estilo */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider border-b pb-1">
+                    Preferencias e Insights del Alumno ({namsConclusions.length})
+                  </h3>
+                  {namsConclusions.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic">No hay preferencias ni insights registrados.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {namsConclusions.map((conclusion, idx) => (
+                        <li 
+                          key={idx} 
+                          className="p-3 rounded-lg border border-slate-100 bg-slate-50 text-slate-700 text-xs leading-relaxed flex items-start gap-2 hover:border-slate-200 transition-all"
+                        >
+                          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[9px] font-bold text-slate-600 mt-0.5">
+                            {idx + 1}
+                          </span>
+                          <p className="flex-1">{conclusion}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                {/* Columna de Falencias Registradas */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-purple-700 uppercase tracking-wider border-b pb-1">
+                    Falencias del Sistema / Agente ({namsDeficiencies.length})
+                  </h3>
+                  {namsDeficiencies.length === 0 ? (
+                    <p className="text-xs text-slate-400 italic">No hay falencias registradas.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {namsDeficiencies.map((deficiency, idx) => (
+                        <li 
+                          key={idx} 
+                          className="p-3 rounded-lg border border-purple-100 bg-purple-50/30 text-slate-800 text-xs leading-relaxed flex items-start gap-2 hover:border-purple-200 transition-all"
+                        >
+                          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-purple-100 text-[9px] font-bold text-purple-700 mt-0.5">
+                            {idx + 1}
+                          </span>
+                          <p className="flex-1 font-medium">{deficiency}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog de Corrección de Profesor */}
+      <Dialog open={isCorrectOpen} onOpenChange={setIsCorrectOpen}>
+        <DialogContent className="max-w-md bg-white sm:rounded-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg font-bold text-purple-900 border-b pb-2">
+              <GraduationCap className="h-5 w-5 text-purple-600" />
+              Corregir Agente / Registrar Falencia
+            </DialogTitle>
+          </DialogHeader>
+          <div className="mt-4 space-y-4">
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Registra una corrección física/conceptual sobre las respuestas del agente. Esta corrección quedará asociada como una falencia del sistema para el agente y guiará al tutor en futuras conversaciones globales.
+            </p>
+            
+            <div className="space-y-1.5">
+              <label htmlFor="tema" className="text-xs font-bold text-slate-700">Tema o Concepto Físico</label>
+              <Input
+                id="tema"
+                value={correctTema}
+                onChange={(e) => setCorrectTema(e.target.value)}
+                placeholder="Ej: Fuerza de rozamiento, Conservación de energía"
+                className="text-sm"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="explicacion" className="text-xs font-bold text-slate-700">Corrección / Concepto a Corregir</label>
+              <Textarea
+                id="explicacion"
+                value={correctExplanation}
+                onChange={(e) => setCorrectExplanation(e.target.value)}
+                placeholder="Ej: En rodadura pura sin deslizar, el rozamiento no es μ*N. Se debe calcular a partir de las ecuaciones de Newton y la relación de aceleraciones."
+                rows={4}
+                className="text-sm"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button
+                variant="outline"
+                onClick={() => setIsCorrectOpen(false)}
+                disabled={isSubmittingCorrection}
+                className="text-xs"
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleSubmitCorrection}
+                disabled={isSubmittingCorrection || !correctTema.trim() || !correctExplanation.trim()}
+                className="bg-purple-600 hover:bg-purple-700 text-white text-xs gap-1.5"
+              >
+                {isSubmittingCorrection ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Guardando...
+                  </>
+                ) : (
+                  <>
+                    Guardar Corrección
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

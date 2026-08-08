@@ -13,6 +13,7 @@ from a2a.types import (InternalError, InvalidParamsError, Part, TaskState,
 from a2a.utils import new_agent_text_message, new_task
 from a2a.utils.errors import ServerError
 from app.agent import PhysicsMultimodalAgent
+from app.langsmith_config import traceable
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,7 +48,52 @@ class PhysicsAgentExecutor(AgentExecutor):
         logger.info(f"DEBUG: Procesando {len(context.message.parts)} partes del mensaje")
 
         for idx, part in enumerate(context.message.parts):
-            part_root = part.root
+            # Obtener dict para soportar Pydantic v2 / inline_data de ADK
+            if hasattr(part, 'model_dump'):
+                part_dict = part.model_dump()
+            elif hasattr(part, 'dict'):
+                part_dict = part.dict()
+            elif isinstance(part, dict):
+                part_dict = part
+            else:
+                part_dict = {}
+
+            # 1. Caso inline_data (formato ADK host)
+            if 'inline_data' in part_dict:
+                inline_data = part_dict['inline_data']
+                if isinstance(inline_data, dict):
+                    image_bytes = inline_data.get('data')
+                    mime_type = inline_data.get('mime_type', 'image/png')
+                else:
+                    image_bytes = getattr(inline_data, 'data', None)
+                    mime_type = getattr(inline_data, 'mime_type', 'image/png')
+                
+                if image_bytes:
+                    if isinstance(image_bytes, bytes):
+                        image_data = base64.b64encode(image_bytes).decode('utf-8')
+                    else:
+                        image_data = str(image_bytes)
+                    images.append({'data': image_data, 'mime_type': mime_type})
+                    logger.info(f"✅ inline_data extraída: {mime_type}, {len(image_data)} chars")
+                    continue
+
+            # 2. Caso dict con root/file
+            if 'root' in part_dict and isinstance(part_dict['root'], dict):
+                root_dict = part_dict['root']
+                if root_dict.get('kind') == 'file' and 'file' in root_dict:
+                    file_dict = root_dict['file']
+                    if isinstance(file_dict, dict) and 'bytes' in file_dict and file_dict['bytes']:
+                        b_data = file_dict['bytes']
+                        m_type = file_dict.get('mime_type', 'image/png')
+                        if isinstance(b_data, bytes):
+                            i_data = base64.b64encode(b_data).decode('utf-8')
+                        else:
+                            i_data = str(b_data)
+                        images.append({'data': i_data, 'mime_type': m_type})
+                        logger.info(f"✅ Dict FilePart extraída: {m_type}, {len(i_data)} chars")
+                        continue
+
+            part_root = getattr(part, 'root', part)
             part_kind = getattr(part_root, 'kind', None)
             part_class_name = type(part_root).__name__
 
@@ -109,7 +155,11 @@ class PhysicsAgentExecutor(AgentExecutor):
                         # FileWithUri
                         elif hasattr(file_obj, 'uri') and hasattr(file_obj, 'mime_type'):
                             try:
-                                host_url = "http://localhost:8080"
+                                ui_host = os.getenv("A2A_UI_HOST", "localhost")
+                                if ui_host == "0.0.0.0":
+                                    ui_host = "localhost"
+                                ui_port = os.getenv("A2A_UI_PORT", "12000")
+                                host_url = f"http://{ui_host}:{ui_port}"
                                 if context.message.metadata:
                                     host_url = context.message.metadata.get('host_base_url', host_url)
 
@@ -176,6 +226,7 @@ class PhysicsAgentExecutor(AgentExecutor):
         logger.info("✅ Solicitud válida (partes detectadas)")
         return False
     
+    @traceable(name="physics_agent_execution", run_type="chain", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def execute(
         self,
         context: RequestContext,
@@ -315,6 +366,62 @@ class PhysicsAgentExecutor(AgentExecutor):
                     )
             
             logger.info(f"📊 Total chunks: {chunk_count}")
+        
+        except OSError as pipe_err:
+            # WinError 233 or other pipe errors — typically from stdout/stderr
+            # pipe breaking when parent process restarts. Not a real agent error.
+            logger.warning(f'⚠️ Pipe/OS error (non-fatal): {pipe_err}')
+            import sys
+            if sys.platform.startswith('win'):
+                try:
+                    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+                    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+                except Exception:
+                    pass
+            # Retry the stream once after fixing pipes
+            try:
+                async for item in self.agent.stream(query, task.context_id, images):
+                    if hasattr(item, 'model_dump'):
+                        item_dict = item.model_dump()
+                    elif isinstance(item, dict):
+                        item_dict = item
+                    else:
+                        continue
+                    
+                    is_complete = item_dict.get('is_task_complete', False)
+                    require_input = item_dict.get('require_user_input', False)
+                    content = item_dict.get('content', '')
+                    
+                    if require_input:
+                        await updater.update_status(
+                            TaskState.input_required,
+                            new_agent_text_message(content, task.context_id, task.id),
+                            final=True,
+                        )
+                        return
+                    elif is_complete:
+                        await updater.add_artifact(
+                            [Part(root=TextPart(text=content))],
+                            name='physics_analysis',
+                        )
+                        await updater.complete()
+                        return
+            except Exception as retry_err:
+                logger.error(f'❌ Retry also failed: {retry_err}')
+                has_error = True
+                try:
+                    await updater.update_status(
+                        TaskState.failed,
+                        new_agent_text_message(
+                            f"Error interno: {str(retry_err)}",
+                            task.context_id,
+                            task.id,
+                        ),
+                        final=True,
+                    )
+                except:
+                    pass
+                raise ServerError(error=InternalError()) from retry_err
         
         except Exception as e:
             logger.error(f'❌ EXCEPCIÓN: {e}', exc_info=True)

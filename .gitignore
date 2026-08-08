@@ -19,7 +19,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
 lib64/
 parts/
 sdist/
@@ -183,3 +183,12 @@ Thumbs.db
 .aidy/
 
 .ruff_cache
+
+# Agent processing state
+.pdf_processing_done
+temario.txt
+extracted_images/
+physics_agent_memories.json
+beeai_active_sessions.json
+beeai_conversations.json
+

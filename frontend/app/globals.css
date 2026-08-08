@@ -1,9 +1,21 @@
+/* KaTeX styles MUST be imported BEFORE @tailwind directives */
+@import 'katex/dist/katex.min.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* KaTeX styles for math rendering */
-@import 'katex/dist/katex.min.css';
+/* KaTeX font-size fix: prevent cascading 1.21em multiplication in chat bubbles */
+.katex {
+  font-size: 1em !important;
+}
+.katex-display {
+  margin: 0.5em 0 !important;
+  font-size: 1.1em !important;
+}
+.katex-display > .katex {
+  font-size: 1em !important;
+}
 
 :root {
   --foreground-rgb: 0, 0, 0;

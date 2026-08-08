@@ -1,0 +1,57 @@
+{
+  "SISTEMAS ANATÓMICOS": {
+    "Órganos": [
+      "Esófago",
+      "Timo"
+    ],
+    "Tejidos": [
+      "Tejido conectivo",
+      "Músculo liso",
+      "Tejido epitelial"
+    ],
+    "Estructuras": [
+      "Arteria muscular",
+      "Arteria muscular pequeña",
+      "Vénula",
+      "Arteriola"
+    ]
+  },
+  "TERMINOLOGÍA HISTOLÓGICA": {
+    "Tipos celulares": [
+      "Células endoteliales",
+      "Fibroblastos",
+      "Fibrocitos",
+      "Células musculares lisas"
+    ],
+    "Componentes tisulares": [
+      "Lámina elástica interna",
+      "Lámina elástica externa",
+      "Túnica íntima",
+      "Túnica media",
+      "Túnica adventicia",
+      "Fibras colágenas"
+    ]
+  },
+  "TÉCNICAS Y TINCIONES": {
+    "Métodos de procesamiento": [],
+    "Coloraciones": [
+      "Hematoxilina-Eosina (H&E)"
+    ]
+  },
+  "FIGURAS": {
+    "1": "Arteria muscular en corte transversal",
+    "2": "Arteria muscular en corte transversal, detalle histológico",
+    "3": "Esófago",
+    "4": "Arteria muscular pequeña en corte longitudinal",
+    "5": "Detalle de otra incidencia de corte (corte longitudinal)",
+    "6": "Corte transversal – comparación con otros vasos sanguíneos",
+    "7": "Corte oblicuo de una arteria muscular pequeña",
+    "8": "Corte transversal de una arteria muscular – con láminas elásticas interna y externa"
+  },
+  "PATOLOGÍAS": [],
+  "metadata": {
+    "fecha": "2026-07-13 20:11:29",
+    "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
+    "num_imagenes": 8
+  }
+}

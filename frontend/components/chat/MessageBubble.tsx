@@ -2,16 +2,21 @@
 
 import { Message, Part } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { hasLatex, renderLatex } from '@/lib/latex';
+import { MarkdownWithLatex } from './MarkdownWithLatex';
 import { User, Bot } from 'lucide-react';
 import Image from 'next/image';
 import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { GraduationCap, BookOpen, XCircle } from 'lucide-react';
 
 interface MessageBubbleProps {
   message: Message;
+  onSend?: (text: string) => Promise<void>;
+  isProfesor?: boolean;
+  onCorrect?: (message: Message) => void;
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onSend, isProfesor, onCorrect }: MessageBubbleProps) {
   const isUser = message.role === 'user';
 
   return (
@@ -44,219 +49,164 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       >
         {message.parts && message.parts.length > 0 ? (
           message.parts.map((part, index) => (
-            <MessagePart key={index} part={part} isUser={isUser} />
+            <MessagePart key={index} part={part} isUser={isUser} onSend={onSend} />
           ))
         ) : (
           <p className="text-sm text-red-500">No content</p>
+        )}
+
+        {!isUser && isProfesor && onCorrect && (
+          <div className="flex justify-end mt-2 pt-2 border-t border-slate-200">
+            <Button
+              onClick={() => onCorrect(message)}
+              variant="outline"
+              size="sm"
+              className="text-purple-600 border-purple-200 hover:bg-purple-50 text-xs px-2.5 py-1 h-auto font-medium rounded-lg flex items-center gap-1.5"
+            >
+              <GraduationCap className="h-3.5 w-3.5" />
+              Corregir Agente / Registrar Falencia
+            </Button>
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-function MessagePart({ part, isUser }: { part: Part; isUser: boolean }) {
+function MessagePart({ part, isUser, onSend }: { part: Part; isUser: boolean; onSend?: (text: string) => Promise<void> }) {
   const [imageError, setImageError] = useState(false);
 
-  // Guard clause
-  if (!part || typeof part.kind === 'undefined') {
-    console.warn('⚠️ Invalid part in MessagePart:', part);
-    return null;
-  }
+  if (!part || typeof part.kind === 'undefined') return null;
 
-  // Texto
+  // ── TEXT ──────────────────────────────────────────────────────────────────
   if (part.kind === 'text') {
-    const text = part.text;
+    let text = part.text ?? '';
 
-    // 🔧 PRIORIDAD 1: Detectar y renderizar fórmulas LaTeX
-    if (typeof text === 'string' && hasLatex(text)) {
-      console.log('🔧 Detected LaTeX formulas, rendering...');
-      const renderedLatex = renderLatex(text);
+    // Detectar marcadores socráticos
+    const hasSocraticChoice = text.includes('<!-- SOCRATIC_CHOICE -->');
+    const hasSocraticExit = text.includes('<!-- SOCRATIC_EXIT -->');
+    
+    // Limpiar marcadores para no renderizarlos
+    if (hasSocraticChoice) text = text.replace('<!-- SOCRATIC_CHOICE -->', '');
+    if (hasSocraticExit) text = text.replace('<!-- SOCRATIC_EXIT -->', '');
 
+    // User messages: plain text, no markdown needed
+    if (isUser) {
       return (
-        <div
-          className="text-sm leading-relaxed break-words"
-          dangerouslySetInnerHTML={{ __html: renderedLatex }}
-        />
+        <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+          {text}
+        </p>
       );
     }
 
-    // 🔧 PRIORIDAD 2: Detectar y parsear HTML con imágenes embebidas
-    if (typeof text === 'string' && text.includes('<img') && text.includes('data:image/')) {
-      console.log('🔧 Detected HTML with embedded images, parsing...');
-
-      // Limpiar y mejorar el HTML para mejor visualización
-      let cleanedHtml = text;
-
-      // Agregar estilos a las imágenes inline para que se vean mejor
-      cleanedHtml = cleanedHtml.replace(
-        /<img([^>]*?)style="([^"]*?)"([^>]*?)>/g,
-        '<img$1style="$2; max-width: 100%; height: auto; display: inline-block; margin: 0 4px;"$3>'
-      );
-
-      // Si no tienen style, agregarlo
-      cleanedHtml = cleanedHtml.replace(
-        /<img(?![^>]*style=)([^>]*?)>/g,
-        '<img$1 style="max-width: 100%; height: auto; display: inline-block; margin: 0 4px; vertical-align: middle;">'
-      );
-
-      // Parsear el HTML y renderizarlo de forma segura
-      return (
-        <div
-          className="text-sm leading-relaxed break-words"
-          dangerouslySetInnerHTML={{ __html: cleanedHtml }}
-        />
-      );
-    }
-
+    // Agent messages: full Markdown + LaTeX via react-markdown + rehype-katex
     return (
-      <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
-        {text}
-      </p>
+      <div className="flex flex-col gap-4 w-full">
+        <MarkdownWithLatex
+          content={text}
+          className="text-sm text-slate-900"
+        />
+        
+        {/* Renderizar botones de elección inicial */}
+        {hasSocraticChoice && onSend && (
+          <div className="flex flex-wrap gap-2 mt-2 pt-2 border-t border-slate-200">
+            <Button 
+              onClick={() => onSend("[SOCRATIC]")} 
+              className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+              size="sm"
+            >
+              <GraduationCap className="h-4 w-4" />
+              Modo Socrático (Guía Paso a Paso)
+            </Button>
+            <Button 
+              onClick={() => onSend("[DIRECTO]")} 
+              variant="outline" 
+              className="gap-2"
+              size="sm"
+            >
+              <BookOpen className="h-4 w-4" />
+              Explicación Directa
+            </Button>
+          </div>
+        )}
+
+        {/* Renderizar botón de salida durante el modo socrático */}
+        {hasSocraticExit && onSend && (
+          <div className="flex justify-end mt-1">
+            <Button 
+              onClick={() => onSend("[DIRECTO]")} 
+              variant="ghost" 
+              size="sm"
+              className="text-slate-500 hover:text-red-600 hover:bg-red-50 gap-1 text-xs"
+            >
+              <XCircle className="h-3 w-3" />
+              Salir del modo socrático
+            </Button>
+          </div>
+        )}
+      </div>
     );
   }
 
-  // Archivo
+  // ── FILE / IMAGE ──────────────────────────────────────────────────────────
   if (part.kind === 'file') {
-    if (!part.file) {
-      console.error('❌ File part without file object:', part);
-      return (
-        <div className="text-sm text-red-500">
-          Error: File part missing file data
-        </div>
-      );
-    }
-
-    // DEBUG CRÍTICO: Ver exactamente qué tiene el file
-    console.log('🔍 File part details:', {
-      file: part.file,
-      mime_type: part.file.mime_type,
-      mimeTypeType: typeof part.file.mime_type,
-      hasBytes: !!part.file.bytes,
-      hasUri: !!part.file.uri,
-      bytesLength: part.file.bytes?.length || 0,
-      keys: Object.keys(part.file)
-    });
+    if (!part.file) return null;
 
     const isImage = part.file.mime_type?.startsWith('image/');
-
-    console.log('🔍 isImage check:', {
-      isImage,
-      mime_type: part.file.mime_type,
-      startsWithImage: part.file.mime_type?.startsWith('image/')
-    });
 
     if (isImage) {
       const file = part.file;
       let imageSrc = '';
 
-      console.log('🖼️ Rendering image:', {
-        mimeType: file.mime_type,
-        hasUri: !!file.uri,
-        hasBytes: !!file.bytes,
-        bytesLength: file.bytes?.length || 0,
-        uriPreview: file.uri?.substring(0, 50)
-      });
-
-      // Prioridad 1: URI (si viene del servidor después del cache)
       if (file.uri) {
         imageSrc = file.uri;
-        console.log('✅ Using URI for image:', imageSrc);
-      }
-      // Prioridad 2: Bytes (base64 directo)
-      else if (file.bytes) {
-        let bytesStr = file.bytes as string;
-
-        // Limpiar el prefijo si viene incluido
-        if (bytesStr.includes('base64,')) {
-          bytesStr = bytesStr.split('base64,')[1];
-          console.log('🔧 Cleaned base64 prefix from bytes');
-        }
-
-        const mime = file.mime_type || 'image/png';
-        imageSrc = `data:${mime};base64,${bytesStr}`;
-        console.log('✅ Using base64 for image:', {
-          mimeType: mime,
-          srcLength: imageSrc.length,
-          srcPreview: imageSrc.substring(0, 100) + '...'
-        });
+      } else if (file.bytes) {
+        const bytesStr = file.bytes.includes('base64,')
+          ? file.bytes.split('base64,')[1]
+          : file.bytes;
+        imageSrc = `data:${file.mime_type || 'image/png'};base64,${bytesStr}`;
       }
 
       if (!imageSrc) {
-        console.error('❌ No image source available:', { file });
-        return (
-          <div className="text-sm text-red-500">
-            Error: No se pudo cargar la imagen (sin URI ni bytes)
-          </div>
-        );
+        return <p className="text-sm text-red-500">Error: imagen sin datos</p>;
       }
 
       if (imageError) {
-        return (
-          <div className={cn('text-sm px-3 py-2 rounded-lg', isUser ? 'bg-blue-700' : 'bg-slate-200')}>
-            <p className="text-red-500">❌ Error cargando imagen</p>
-            <p className="text-xs mt-1 opacity-70">
-              MIME: {file.mime_type}
-              <br />
-              Source: {imageSrc.substring(0, 50)}...
-            </p>
-          </div>
-        );
+        return <p className="text-sm text-red-500">❌ Error cargando imagen</p>;
       }
 
-      // Si es data URL (base64), usar <img> regular
       if (imageSrc.startsWith('data:')) {
         return (
           <div className="rounded-lg overflow-hidden">
             <img
               src={imageSrc}
-              alt="Uploaded content"
+              alt="Generated image"
               className="max-w-full h-auto max-h-96 object-contain"
-              onError={(e) => {
-                console.error('❌ Error loading base64 image:', {
-                  mimeType: file.mime_type,
-                  srcPreview: imageSrc.substring(0, 100) + '...',
-                  error: e
-                });
-                setImageError(true);
-              }}
-              onLoad={() => {
-                console.log('✅ Image loaded successfully (base64)');
-              }}
+              onError={() => setImageError(true)}
             />
           </div>
         );
       }
 
-      // Si es URI, usar Next.js Image (con unoptimized para URIs relativas)
       return (
         <div className="rounded-lg overflow-hidden">
           <Image
             src={imageSrc}
-            alt="Uploaded content"
+            alt="Generated image"
             width={400}
             height={300}
             className="max-w-full h-auto max-h-96 object-contain"
-            unoptimized={true}
-            onError={(e) => {
-              console.error('❌ Error loading image from URI:', {
-                src: imageSrc,
-                mimeType: file.mime_type,
-                error: e
-              });
-              setImageError(true);
-            }}
-            onLoad={() => {
-              console.log('✅ Image loaded successfully (URI)');
-            }}
+            unoptimized
+            onError={() => setImageError(true)}
           />
         </div>
       );
     }
 
-    // Archivo no-imagen
+    // Non-image file
     return (
       <div className={cn('text-sm px-3 py-2 rounded-lg', isUser ? 'bg-blue-700' : 'bg-slate-200')}>
-        📎 File: {part.file.mime_type}
+        📎 {part.file.mime_type || 'File'}
         {part.file.uri && (
           <a
             href={part.file.uri}
@@ -271,11 +221,5 @@ function MessagePart({ part, isUser }: { part: Part; isUser: boolean }) {
     );
   }
 
-  // Tipo desconocido
-  console.error('❌ Unknown part type:', part);
-  return (
-    <div className="text-sm text-red-500">
-      Error: Unknown content type
-    </div>
-  );
+  return null;
 }

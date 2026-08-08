@@ -24,8 +24,17 @@ from beeai_framework.context import RunContext
 from beeai_framework.emitter.emitter import Emitter
 from beeai_framework.memory.unconstrained_memory import UnconstrainedMemory
 from beeai_framework.tools.tool import Tool
-from langchain_groq import ChatGroq
-from pydantic import BaseModel, Field
+from langchain_google_genai import ChatGoogleGenerativeAI
+from neo4j_agent_memory import MemoryClient, MemorySettings, ExtractionConfig, ExtractorType
+from neo4j_agent_memory.llm.adapters.sentence_transformers import SentenceTransformersProvider
+from pydantic import BaseModel, Field, SecretStr
+
+from .api_key_rotator import (
+    google_key_rotator,
+    create_google_llm,
+    invoke_with_retry,
+    ainvoke_with_retry,
+)
 from service.server.application_manager import ApplicationManager
 from service.types import Conversation, Event
 
@@ -100,28 +109,17 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
         # Build the message parts for the remote agent
         parts = []
         
-        # Add any file parts (images) from the original message
-        if current_message:
+        # Add any file/image parts from the original message
+        if current_message and current_message.parts:
             for part in current_message.parts:
-                if part.root.kind == 'file':
-                    # The file part should have bytes (base64) or uri
-                    # We need to ensure we're sending the actual bytes, not a cached URI
-                    file_part = part.root.file
-                    
-                    if isinstance(file_part, FileWithBytes):
-                        # Already has bytes, just add it
-                        parts.append(part)
-                    elif isinstance(file_part, FileWithUri):
-                        # Has URI, need to fetch from cache
-                        # This shouldn't happen in the orchestrator since we process the original message
-                        # but let's handle it just in case
-                        print(f"⚠️ Warning: File part has URI instead of bytes: {file_part.uri}")
-                        # Try to get from cache if available
-                        # For now, skip it as the cache is in the server layer
-                        pass
-                    else:
-                        # Add it anyway
-                        parts.append(part)
+                part_root = getattr(part, 'root', part)
+                part_kind = getattr(part_root, 'kind', None)
+                if isinstance(part_root, dict):
+                    part_kind = part_root.get('kind')
+                
+                if part_kind in ('file', 'image') or hasattr(part_root, 'file') or hasattr(part_root, 'data') or (isinstance(part_root, dict) and ('inline_data' in part_root or 'file' in part_root or 'data' in part_root)):
+                    print(f"🖼️ Forwarding image/file part: kind={part_kind}")
+                    parts.append(part)
         
         # Add the text message
         parts.append(Part(root=TextPart(text=message_text)))
@@ -136,6 +134,7 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
         )
         
         print(f"📤 Sending to {agent_name}:")
+        print(f"   context_id: {context_id[:12] if context_id else 'VACÍO'}...")
         print(f"   Parts: {len(parts)}")
         for i, p in enumerate(parts):
             if p.root.kind == 'file':
@@ -272,6 +271,11 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
                                         elif 'error' in chunk_data:
                                             error_msg = chunk_data['error'].get('message', str(chunk_data['error']))
                                             print(f"❌ Error in chunk: {error_msg}")
+                                            # If the agent doesn't support streaming, fall back to message/send
+                                            if 'not supported' in error_msg.lower() or 'unsupported' in error_msg.lower():
+                                                print(f"⚠️ Agent doesn't support streaming, will fall back")
+                                                streaming_failed = True
+                                                break
                                             return f"❌ Agent error: {error_msg}"
                                             
                                     except json.JSONDecodeError as e:
@@ -313,23 +317,47 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
                     
                     # Use the base URL for JSON-RPC (not /message/send)
                     response = await client.post(card.url, json=jsonrpc_payload)
-                    print(f"📥 Non-streaming response status: {response.status_code}")
-                    
                     if response.status_code == 200:
                         result = response.json()
-                        print(f"✅ Non-streaming response: {json.dumps(result, indent=2)[:500]}...")
+                        print(f"✅ Non-streaming full response: {json.dumps(result, indent=2)[:2000]}")
                         
                         if 'error' in result:
                             error_msg = result['error'].get('message', str(result['error']))
                             return f"❌ Agent error: {error_msg}"
                         elif 'result' in result:
                             rpc_result = result['result']
-                            if isinstance(rpc_result, dict) and 'taskId' in rpc_result:
-                                task_id = rpc_result['taskId']
-                                print(f"📋 Task ID: {task_id}, polling for result...")
-                                return await self._poll_task_result(client, card.url, task_id, agent_name)
-                            else:
-                                return f"✅ Message sent to {agent_name} successfully."
+                            print(f"🔑 rpc_result keys: {list(rpc_result.keys()) if isinstance(rpc_result, dict) else type(rpc_result)}")
+                            
+                            # Case 1: has a taskId → poll for result
+                            task_id_key = rpc_result.get('taskId') or rpc_result.get('id') if isinstance(rpc_result, dict) else None
+                            if task_id_key and isinstance(rpc_result, dict) and 'status' not in rpc_result:
+                                print(f"📋 Task ID (polling): {task_id_key}")
+                                return await self._poll_task_result(client, card.url, task_id_key, agent_name)
+                            
+                            # Case 2: result contains artifacts directly
+                            if isinstance(rpc_result, dict) and 'artifacts' in rpc_result:
+                                all_parts = []
+                                for artifact in (rpc_result['artifacts'] or []):
+                                    if isinstance(artifact, dict):
+                                        all_parts.extend(artifact.get('parts', []))
+                                text_parts, image_parts = self._extract_parts(all_parts)
+                                print(f"📦 Artifact parts — text: {len(text_parts)}, images: {len(image_parts)}")
+                                result_str = self._parts_to_marker(text_parts, image_parts)
+                                if result_str:
+                                    return result_str
+                            
+                            # Case 3: result contains status.message parts
+                            if isinstance(rpc_result, dict) and 'status' in rpc_result:
+                                status = rpc_result['status']
+                                if isinstance(status, dict):
+                                    status_msg = status.get('message')
+                                    if isinstance(status_msg, dict):
+                                        text_parts, image_parts = self._extract_parts(status_msg.get('parts', []))
+                                        result_str = self._parts_to_marker(text_parts, image_parts)
+                                        if result_str:
+                                            return result_str
+                            
+                            return f"✅ Message sent to {agent_name} successfully."
                         else:
                             return f"✅ Message sent to {agent_name}."
                     else:
@@ -346,6 +374,44 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
             import traceback
             traceback.print_exc()
             return f"❌ Error communicating with agent {agent_name}: {str(e)}"
+    
+    def _extract_parts(self, raw_parts: list) -> tuple[list[str], list[dict]]:
+        """Extract text and image parts from A2A artifact parts.
+        
+        Handles both plain parts {'kind': 'file', 'file': {...}}
+        and A2A root-wrapped parts {'root': {'kind': 'file', 'file': {...}}}.
+        Returns (text_parts, image_parts) where image_parts are dicts with mime_type and bytes.
+        """
+        text_parts = []
+        image_parts = []
+        for raw in raw_parts:
+            if not isinstance(raw, dict):
+                continue
+            # Unwrap 'root' if present (A2A SDK serialization)
+            part = raw.get('root', raw)
+            kind = part.get('kind', '')
+            if kind == 'text':
+                txt = part.get('text', '')
+                if txt:
+                    text_parts.append(txt)
+            elif kind == 'file':
+                file_data = part.get('file', {})
+                if file_data.get('bytes'):
+                    image_parts.append({
+                        'mime_type': file_data.get('mime_type', 'image/png'),
+                        'bytes': file_data['bytes']
+                    })
+        return text_parts, image_parts
+    
+    def _parts_to_marker(self, text_parts: list[str], image_parts: list[dict]) -> str | None:
+        """Convert extracted parts into a response string (with __IMAGE_PARTS__ marker if needed)."""
+        if image_parts:
+            import json as _json
+            text_prefix = '\n'.join(text_parts) if text_parts else 'Image generated successfully'
+            return f"{text_prefix}\n__IMAGE_PARTS__:{_json.dumps(image_parts)}"
+        if text_parts:
+            return '\n'.join(text_parts)
+        return None
     
     async def _poll_task_result(self, client, agent_url, task_id, agent_name):
         """Poll for task result when streaming doesn't provide it"""
@@ -381,40 +447,35 @@ class SendMessageToAgentTool(Tool[SendMessageToAgentInput, Any, str]):
                     print(f"📊 Task status: {status} (attempt {attempt + 1}/{max_attempts})")
                     
                     if state == 'completed':
-                        # Try to extract from status message first
+                        # Priority 1: status message parts
                         if status_message and isinstance(status_message, dict):
-                            parts = status_message.get('parts', [])
-                            text_parts = [p.get('text', '') for p in parts 
-                                         if isinstance(p, dict) and p.get('kind') == 'text' and p.get('text')]
-                            if text_parts:
-                                return '\n'.join(text_parts)
+                            t, i = self._extract_parts(status_message.get('parts', []))
+                            r = self._parts_to_marker(t, i)
+                            if r:
+                                return r
                         
-                        # Try to extract from 'response' field
+                        # Priority 2: response field parts
                         response_message = task_data.get('response', {})
                         if isinstance(response_message, dict):
-                            parts = response_message.get('parts', [])
-                            if parts:
-                                text_parts = []
-                                for part in parts:
-                                    if isinstance(part, dict) and part.get('kind') == 'text':
-                                        text_parts.append(part.get('text', ''))
-                                
-                                if text_parts:
-                                    return '\n'.join(text_parts)
+                            t, i = self._extract_parts(response_message.get('parts', []))
+                            r = self._parts_to_marker(t, i)
+                            if r:
+                                return r
                         
-                        # Try to extract from 'artifact' field
-                        artifact = task_data.get('artifact', {})
-                        if isinstance(artifact, dict):
-                            if 'parts' in artifact:
-                                text_parts = []
-                                for part in artifact['parts']:
-                                    if isinstance(part, dict) and part.get('kind') == 'text':
-                                        text_parts.append(part.get('text', ''))
-                                
-                                if text_parts:
-                                    return '\n'.join(text_parts)
-                            elif artifact.get('kind') == 'text':
-                                return artifact.get('text', '')
+                        # Priority 3: artifacts (singular and plural)
+                        all_parts = []
+                        for art_key in ('artifact', 'artifacts'):
+                            val = task_data.get(art_key)
+                            if val:
+                                art_list = val if isinstance(val, list) else [val]
+                                for art in art_list:
+                                    if isinstance(art, dict):
+                                        all_parts.extend(art.get('parts', []))
+                        if all_parts:
+                            t, i = self._extract_parts(all_parts)
+                            r = self._parts_to_marker(t, i)
+                            if r:
+                                return r
                         
                         return f"✅ Agent {agent_name} completed the task."
                     
@@ -465,18 +526,73 @@ class BeeAIHostManager(ApplicationManager):
         self._active_sessions: dict[str, str] = {}
 
         self.api_key = api_key or os.getenv("GROQ_API_KEY", "")
-        self._sessions_file = "/tmp/beeai_active_sessions.json"
+        self.google_api_key = google_key_rotator.get_key()
+        # Guardar sesiones y conversaciones localmente (no /tmp)
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self._sessions_file = os.path.join(base_dir, "beeai_active_sessions.json")
+        self._conversations_file = os.path.join(base_dir, "beeai_conversations.json")
         self._load_sessions()
+        self._load_conversations()
 
-        # Initialize the LangChain Groq Model
-        self.llm = ChatGroq(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
-            api_key=self.api_key,
+        # Initialize the LangChain Google Gemini Model (con key rotativa)
+        self.llm = create_google_llm(
+            model="gemini-2.5-flash",
             temperature=0.3,
-            max_tokens=4096
+            max_output_tokens=8192
         )
+        # Initialize the LangChain Google Gemini Vision Model specifically for images
+        self.vision_llm = self.llm
         # Wrap it for BeeAI
         self.chat_model = LangChainChatModel(self.llm)
+
+        # Initialize Neo4j Agent Memory direct connection to Aura DB
+        uri = os.getenv("NEO4J_URI")
+        username = os.getenv("NEO4J_USERNAME")
+        password = os.getenv("NEO4J_PASSWORD")
+        database = os.getenv("NEO4J_DATABASE")
+
+        if uri and username and password:
+            print(f"🔗 Initializing Neo4j Agent Memory direct connection to: {uri} (db: {database})")
+            try:
+                # Use local SentenceTransformers BAAI/bge-small-en-v1.5 (384 dimensions)
+                embedder = SentenceTransformersProvider(
+                    model="BAAI/bge-small-en-v1.5",
+                    device="cpu"
+                )
+                self.memory_settings = MemorySettings(
+                    neo4j={
+                        "uri": uri,
+                        "username": username,
+                        "password": SecretStr(password),
+                        "database": database or "neo4j"
+                    },
+                    embedding=embedder,
+                    llm="groq/llama-3.3-70b-versatile",
+                    extraction=ExtractionConfig(
+                        extractor_type=ExtractorType.LLM
+                    )
+                )
+                self.neo4j_memory = MemoryClient(self.memory_settings)
+                print("✅ Neo4j Agent Memory client initialized successfully with local embeddings")
+            except Exception as e:
+                print(f"❌ Error initializing Neo4j Agent Memory: {e}")
+                self.neo4j_memory = None
+        else:
+            print("⚠️ Neo4j connection parameters not found in environment. Running without Neo4j Agent Memory.")
+            self.neo4j_memory = None
+
+    async def _ensure_neo4j_connected(self):
+        """Idempotently ensure that the Neo4j Memory Client is connected."""
+        if self.neo4j_memory:
+            if not getattr(self, '_neo4j_connected', False):
+                try:
+                    print("🔌 Connecting Neo4j Agent Memory client...")
+                    await self.neo4j_memory.connect()
+                    self._neo4j_connected = True
+                    print("✅ Connected to Neo4j Agent Memory")
+                except Exception as e:
+                    print(f"❌ Failed to connect to Neo4j Agent Memory: {e}")
+                    self._neo4j_connected = False
 
     def _load_sessions(self):
         """Carga las sesiones activas desde el disco."""
@@ -499,13 +615,119 @@ class BeeAIHostManager(ApplicationManager):
         except Exception as e:
             print(f"Error guardando sesiones: {e}")
 
-    async def create_conversation(self) -> Conversation:
-        conversation_id = str(uuid.uuid4())
+    def _load_conversations(self):
+        """Carga las conversaciones desde el disco para persistencia entre reinicios."""
+        if os.path.exists(self._conversations_file):
+            try:
+                with open(self._conversations_file, 'r') as f:
+                    data = json.load(f)
+                for conv_data in data:
+                    conv_id = conv_data.get('conversation_id', '')
+                    if conv_id and not self.get_conversation(conv_id):
+                        c = Conversation(
+                            conversation_id=conv_id,
+                            is_active=conv_data.get('is_active', True),
+                            name=conv_data.get('name', ''),
+                        )
+                        c._memory = UnconstrainedMemory()
+                        self._conversations.append(c)
+                print(f"📖 Conversaciones cargadas desde disco: {len(self._conversations)}")
+            except Exception as e:
+                print(f"Error cargando conversaciones: {e}")
+        else:
+            print("ℹ️ No se encontró archivo de conversaciones previas.")
+
+    def _save_conversations(self):
+        """Guarda las conversaciones en el disco."""
+        try:
+            data = [
+                {
+                    'conversation_id': c.conversation_id,
+                    'is_active': c.is_active,
+                    'name': c.name,
+                }
+                for c in self._conversations
+            ]
+            with open(self._conversations_file, 'w') as f:
+                json.dump(data, f)
+        except Exception as e:
+            print(f"Error guardando conversaciones: {e}")
+
+    async def _should_continue_active_session(self, user_message: str, active_agent: str) -> bool:
+        """Determina si el mensaje del usuario debe ir al agente activo o al orquestador.
+        
+        Returns True si el mensaje es una respuesta/continuación de la sesión activa.
+        Returns False si el usuario quiere hacer algo diferente.
+        """
+        # Frases que claramente rompen la sesión activa
+        break_keywords = [
+            "genera una imagen", "generá una imagen", "generar imagen",
+            "dibuja", "dibujá", "crear imagen", "creá una imagen",
+            "cambiar de tema", "otro tema", "hablemos de otra cosa",
+            "quiero hablar con otro", "otro agente",
+        ]
+        msg_lower = user_message.lower().strip()
+        if any(kw in msg_lower for kw in break_keywords):
+            return False
+        
+        # Frases que claramente son continuación (respuestas de física, confusión, etc.)
+        continue_keywords = [
+            "no sé", "no se", "creo que", "la respuesta es", "sería",
+            "no entiendo", "me parece", "pienso que", "puede ser",
+        ]
+        if any(kw in msg_lower for kw in continue_keywords):
+            return True
+        
+        # Usar LLM para casos ambiguos
+        try:
+            from langchain_core.messages import HumanMessage
+            
+            prompt = f"""Eres un clasificador de intención. Un estudiante está en una sesión activa 
+con el agente "{active_agent}" (un tutor de física que hace preguntas socráticas).
+
+Determina si el siguiente mensaje del estudiante es:
+- CONTINUAR: Es una respuesta a una pregunta de física, una duda, confusión, o cualquier 
+  interacción relacionada con la sesión de tutoría actual. Incluye también pedidos de 
+  "salir del modo socrático" o "dame la respuesta directa" (el agente de física maneja eso).
+- CAMBIAR: El estudiante quiere hacer algo COMPLETAMENTE diferente, como generar una imagen,
+  hablar de otro tema no relacionado con física, o usar otro servicio.
+
+EN CASO DE DUDA, responde CONTINUAR.
+
+Mensaje del estudiante: "{user_message}"
+
+Responde SOLO: CONTINUAR o CAMBIAR"""
+            
+            response = invoke_with_retry(self.llm, [HumanMessage(content=prompt)])
+            result = response.content.strip().upper()
+            print(f"🧠 Intención de sesión activa: '{user_message[:50]}...' → {result}")
+            
+            return "CAMBIAR" not in result
+        except Exception as e:
+            print(f"⚠️ Error detectando intención de sesión: {e}")
+            return True  # En caso de error, continuar con la sesión activa
+
+    async def create_conversation(self, conversation_id: str = None) -> Conversation:
+        """Crea una nueva conversación, opcionalmente con un ID específico.
+        
+        Si conversation_id es proporcionado (ej: desde el frontend), lo reutiliza
+        para mantener consistencia. Si no, genera uno nuevo.
+        """
+        if not conversation_id:
+            conversation_id = str(uuid.uuid4())
+        
+        # Verificar si ya existe (prevenir duplicados)
+        existing = self.get_conversation(conversation_id)
+        if existing:
+            print(f"♻️ Conversación {conversation_id[:8]}... ya existe, reutilizando.")
+            return existing
+        
         c = Conversation(conversation_id=conversation_id, is_active=True)
         self._conversations.append(c)
         # Store memory for this conversation
-        # Simplified: we use UnconstrainedMemory for simplicity
-        c._memory = UnconstrainedMemory() 
+        c._memory = UnconstrainedMemory()
+        self._save_conversations()
+        print(f"✨ Nueva conversación creada: {conversation_id[:8]}...")
         return c
 
     def sanitize_message(self, message: Message) -> Message:
@@ -559,12 +781,18 @@ class BeeAIHostManager(ApplicationManager):
         self._current_processing_message = message
         
         context_id = message.context_id
+        print(f"📨 process_message: context_id recibido del frontend = '{context_id[:8] if context_id else 'VACÍO'}...'")
+        
         conversation = self.get_conversation(context_id)
         if not conversation:
-            print("Conversation not found. Creating a new one.")
-            conversation = await self.create_conversation()
+            # CRÍTICO: Reutilizar el context_id del frontend en vez de generar uno nuevo.
+            # Esto mantiene la sincronización frontend ↔ backend ↔ agente.
+            print(f"⚠️ Conversación '{context_id[:8] if context_id else '?'}...' no encontrada. Creando con MISMO ID.")
+            conversation = await self.create_conversation(conversation_id=context_id)
             context_id = conversation.conversation_id
             message.context_id = context_id
+        else:
+            print(f"✅ Conversación existente encontrada: {context_id[:8]}...")
 
         if not hasattr(conversation, '_memory'):
             conversation._memory = UnconstrainedMemory()
@@ -581,27 +809,124 @@ class BeeAIHostManager(ApplicationManager):
 
         # Extract text from message parts
         text_content = " ".join([p.root.text for p in message.parts if p.root.kind == 'text'])
+        student_id = conversation.name or context_id
         
-        # Check if there are any images
+        # Check if there are any images and extract their data for visual classification
         has_images = any(p.root.kind == 'file' for p in message.parts)
+        image_data_list = []
+        if has_images:
+            for p in message.parts:
+                if p.root.kind == 'file':
+                    file_obj = p.root.file
+                    mime_type = getattr(file_obj, 'mime_type', 'image/png') or 'image/png'
+                    bytes_b64 = ""
+                    if isinstance(file_obj, FileWithBytes) and file_obj.bytes:
+                        bytes_b64 = file_obj.bytes
+                    if bytes_b64:
+                        image_data_list.append({
+                            "mime_type": mime_type,
+                            "bytes_b64": bytes_b64
+                        })
+            print(f"🖼️ Extracted {len(image_data_list)} image(s) for visual classification")
+
+        active_agent = self._active_sessions.get(context_id)
+
+        # Save user message to Neo4j Short-Term memory
+        if self.neo4j_memory:
+            await self._ensure_neo4j_connected()
+            if getattr(self, '_neo4j_connected', False):
+                try:
+                    await self.neo4j_memory.short_term.add_message(
+                        session_id=context_id,
+                        role="user",
+                        content=text_content
+                    )
+                    print("💾 Saved user message to Neo4j Short-Term memory")
+                except OSError as pipe_err:
+                    print(f"⚠️ Neo4j pipe error saving user message (will reconnect): {pipe_err}")
+                    self._neo4j_connected = False
+                except Exception as e:
+                    print(f"⚠️ Error saving user message to Neo4j: {e}")
 
         # Use BeeAI Workflow pattern for Gemini compatibility
         try:
-            # Verificar si hay una sesión activa para este contexto
-            # (ej: sesión socrática en progreso)
-            active_agent = self._active_sessions.get(context_id)
-            
             if active_agent:
                 print(f"🔄 Sesión activa detectada para contexto {context_id[:8]}... → {active_agent}")
-                print(f"📤 Enviando directamente al agente (bypass del orquestador)")
                 
-                send_tool_instance = SendMessageToAgentTool(self)
-                send_input = SendMessageToAgentInput(
-                    agent_name=active_agent,
-                    message=text_content
-                )
-                resp_text = await send_tool_instance._run(send_input, None, None)
-            else:
+                # Verificar si el usuario quiere salir de la sesión activa
+                # o hacer algo completamente diferente
+                should_bypass = await self._should_continue_active_session(text_content, active_agent)
+                
+                if should_bypass:
+                    print(f"📤 Continuando sesión activa con {active_agent}")
+                    send_tool_instance = SendMessageToAgentTool(self)
+                    
+                    # Query NAMS context just-in-time for active_agent
+                    neo4j_context_text = ""
+                    if self.neo4j_memory:
+                        await self._ensure_neo4j_connected()
+                        if getattr(self, '_neo4j_connected', False):
+                            try:
+                                student_id = conversation.name or context_id
+                                print(f"🧠 Querying student NAMS context just-in-time for active session student '{student_id}' and agent '{active_agent}'...")
+                                ctx = await self.get_student_context(text_content, student_id=student_id, session_id=context_id, agent_name=active_agent)
+                                if ctx:
+                                    raw_text = str(ctx)
+                                    ignore_headers = (
+                                        '## conversation history',
+                                        '### relevant past messages',
+                                        'conversation history',
+                                        'relevant past messages'
+                                    )
+                                    filtered_lines = []
+                                    in_chat_history_section = False
+                                    for line in raw_text.split('\n'):
+                                        line_stripped = line.strip()
+                                        line_lower = line_stripped.lower()
+                                        if not line_lower:
+                                            continue
+                                        if any(h in line_lower for h in ignore_headers):
+                                            in_chat_history_section = True
+                                            continue
+                                        if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
+                                            in_chat_history_section = False
+                                            continue
+                                        if in_chat_history_section:
+                                            continue
+                                        if any(line_lower.startswith(prefix) for prefix in [
+                                            'user:', 'assistant:', 'human:', 'ai:',
+                                            'usuario:', 'asistente:', 'q:', 'a:',
+                                            '- [user]', '- [assistant]', '- [human]', '- [ai]',
+                                            '- [usuario]', '- [asistente]'
+                                        ]):
+                                            continue
+                                        filtered_lines.append(line)
+                                    neo4j_context_text = '\n'.join(filtered_lines).strip()
+                                    if len(neo4j_context_text) > 3000:
+                                        neo4j_context_text = neo4j_context_text[:3000] + "\n[... truncado]"
+                            except OSError as pipe_err:
+                                print(f"⚠️ Neo4j pipe error (will reconnect): {pipe_err}")
+                                self._neo4j_connected = False
+                            except Exception as e:
+                                print(f"⚠️ Error retrieving NAMS context: {e}")
+
+                    message_text = text_content
+                    if neo4j_context_text:
+                        message_text = f"[NAMS_CONTEXT]\n{neo4j_context_text}\n[/NAMS_CONTEXT]\n\n{text_content}"
+                        print(f"🧠 Injected NAMS context into active session message sent to {active_agent}")
+                        
+                    send_input = SendMessageToAgentInput(
+                        agent_name=active_agent,
+                        message=message_text
+                    )
+                    resp_text = await send_tool_instance._run(send_input, None, None)
+                else:
+                    print(f"🔀 Usuario quiere cambiar de tema/agente. Limpiando sesión activa.")
+                    del self._active_sessions[context_id]
+                    self._save_sessions()
+                    active_agent = None  # Caer al flujo del orquestador abajo
+            
+            if not active_agent:
                 from service.server.beeai_orchestrator_workflow import (
                     OrchestratorState, create_orchestrator_workflow)
                 
@@ -615,10 +940,27 @@ class BeeAIHostManager(ApplicationManager):
                     llm=self.llm  # Pass the raw LangChain LLM
                 )
                 
-                # Execute workflow with initial state
+                # Format history for the orchestrator
+                history_texts = []
+                # Get last 5 messages excluding the current one
+                recent_messages = conversation.messages[:-1][-5:]
+                for m in recent_messages:
+                    role = m.role.name if hasattr(m.role, 'name') else str(m.role)
+                    text = " ".join([p.root.text for p in m.parts if p.root.kind == 'text'])
+                    if text:
+                        history_texts.append(f"{role.upper()}: {text}")
+                
+                history_text = "\n".join(history_texts)
+                
+                # Execute workflow with initial state (including image data for visual classification)
                 initial_state = OrchestratorState(
                     user_message=text_content,
-                    has_images=has_images
+                    has_images=has_images,
+                    image_data_list=image_data_list,
+                    history_text=history_text,
+                    neo4j_context_text="",
+                    context_id=context_id,
+                    student_id=student_id
                 )
                 
                 workflow_run = await workflow.run(initial_state)
@@ -644,11 +986,71 @@ class BeeAIHostManager(ApplicationManager):
                 del self._active_sessions[context_id]
                 self._save_sessions()
 
+        # Save assistant response to Neo4j Short-Term memory
+        if self.neo4j_memory and resp_text:
+            await self._ensure_neo4j_connected()
+            if getattr(self, '_neo4j_connected', False):
+                try:
+                    # Strip visual/binary markers from saved message for clean text history
+                    clean_resp_text = resp_text.split("__IMAGE_PARTS__:")[0].strip()
+                    await self.neo4j_memory.short_term.add_message(
+                        session_id=context_id,
+                        role="assistant",
+                        content=clean_resp_text
+                    )
+                    print("💾 Saved assistant response to Neo4j Short-Term memory")
+                except OSError as pipe_err:
+                    print(f"⚠️ Neo4j pipe error saving assistant response (will reconnect): {pipe_err}")
+                    self._neo4j_connected = False
+                except Exception as e:
+                    print(f"⚠️ Error saving assistant response to Neo4j: {e}")
+
+            # Determine the agent name for NAMS memory scoping
+            resolved_agent_name = None
+            if active_agent:
+                resolved_agent_name = active_agent
+            elif 'final_state' in locals() and final_state:
+                resolved_agent_name = final_state.chosen_agent
+
+            # Run Self-Learning in background to extract and persist user preferences/facts
+            asyncio.create_task(self._learn_user_preferences(text_content, context_id, resolved_agent_name))
+
+        # Build response parts — detect image marker from image agent
+        import json as _json
+        response_parts: list[Part] = []
+        IMAGE_MARKER = "__IMAGE_PARTS__:"
+        if IMAGE_MARKER in resp_text:
+            lines = resp_text.split('\n')
+            non_image_lines = []
+            for line in lines:
+                if line.startswith(IMAGE_MARKER):
+                    try:
+                        image_parts_data = _json.loads(line[len(IMAGE_MARKER):])
+                        for img in image_parts_data:
+                            fp = FilePart(
+                                file=FileWithBytes(
+                                    bytes=img['bytes'],
+                                    mime_type=img.get('mime_type', 'image/png'),
+                                    name='generated_image.png'
+                                )
+                            )
+                            response_parts.append(Part(root=fp))
+                    except Exception as e:
+                        print(f"⚠️ Could not parse image marker: {e}")
+                else:
+                    non_image_lines.append(line)
+            text_without_marker = '\n'.join(non_image_lines).strip()
+            if text_without_marker:
+                response_parts.insert(0, Part(root=TextPart(text=text_without_marker)))
+        else:
+            response_parts = [Part(root=TextPart(text=resp_text))]
+
         response_msg = Message(
             message_id=str(uuid.uuid4()),
             context_id=context_id,
             role=Role.agent,
-            parts=[Part(root=TextPart(text=resp_text))]
+            recipient=resolved_agent_name,
+            parts=response_parts
         )
         self._messages.append(response_msg)
         conversation.messages.append(response_msg)
@@ -662,4 +1064,222 @@ class BeeAIHostManager(ApplicationManager):
 
         if message.message_id in self._pending_message_ids:
             self._pending_message_ids.remove(message.message_id)
+
+    async def get_student_context(self, query: str, student_id: str, session_id: str, agent_name: str | None = None, max_items: int = 10) -> str:
+        """Get combined context from memory, but filter long-term preferences strictly by student_id and optionally agent_name."""
+        parts = []
+        user_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
+
+        # 1. Short-term memory (session-scoped conversation history)
+        short_term_context = await self.neo4j_memory.short_term.get_context(
+            query,
+            session_id=session_id,
+            max_messages=max_items,
+        )
+        if short_term_context:
+            parts.append(f"## Conversation History\n{short_term_context}")
+
+        # 2. Long-term memory - filtered strictly to user_identifiers (student + agent system)
+        embedding = None
+        if self.neo4j_memory.long_term._embedder is not None:
+            try:
+                embedding = await self.neo4j_memory.long_term._embedder.embed(query)
+            except Exception as e:
+                print(f"⚠️ Error generating embedding for student context search: {e}")
+
+        # Determine user identifiers to query (student preferences/insights, and system/agent deficiencies)
+        student_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
+        agent_identifier = f"system_{agent_name}" if agent_name else "system"
+        user_identifiers = [student_identifier, agent_identifier]
+
+        preferences = []
+        if embedding is not None:
+            try:
+                # Custom cypher query to enforce User relationship for both student and system/agent
+                cypher_query = """
+                CALL db.index.vector.queryNodes('preference_embedding_idx', $limit, $embedding)
+                YIELD node, score
+                WHERE score >= $threshold
+                MATCH (u:User)-[:HAS_PREFERENCE]->(node)
+                WHERE u.identifier IN $user_identifiers
+                RETURN node AS p, score
+                ORDER BY score DESC
+                """
+                results = await self.neo4j_memory.long_term._client.execute_read(
+                    cypher_query,
+                    {
+                        "embedding": embedding,
+                        "limit": max_items,
+                        "threshold": 0.7,
+                        "user_identifiers": user_identifiers
+                    }
+                )
+                for row in results:
+                    pref_data = dict(row["p"])
+                    pref = self.neo4j_memory.long_term._parse_preference(pref_data)
+                    preferences.append(pref)
+            except Exception as e:
+                print(f"⚠️ Vector search failed, falling back to direct preference query: {e}")
+
+        # Fallback: if vector search failed or returned nothing, fetch preferences directly for all identifiers
+        if not preferences:
+            try:
+                preferences = []
+                for uid in user_identifiers:
+                    prefs = await self.neo4j_memory.long_term.get_preferences_for(uid)
+                    if prefs:
+                        preferences.extend(prefs)
+            except Exception as e:
+                print(f"⚠️ Failed to fetch preferences for user_identifiers {user_identifiers}: {e}")
+
+        if preferences:
+            parts.append("## Relevant Knowledge")
+            for pref in preferences:
+                line = f"- [{pref.category}] {pref.preference}"
+                if pref.context:
+                    line += f" (context: {pref.context})"
+                parts.append(line)
+
+        # 3. Entities
+        try:
+            entities = await self.neo4j_memory.long_term.search_entities(query, limit=max_items)
+            if entities:
+                entity_parts = []
+                for entity in entities:
+                    type_str = entity.full_type
+                    line = f"- {entity.display_name} ({type_str})"
+                    if entity.description:
+                        line += f": {entity.description}"
+                    entity_parts.append(line)
+                if entity_parts:
+                    parts.append("## Relevant Entities\n" + "\n".join(entity_parts))
+        except Exception as e:
+            print(f"⚠️ Failed to search entities: {e}")
+
+        return "\n\n".join(parts)
+
+    async def add_deficiency(self, student_id: str, tema: str, correccion: str, agent_name: str | None = None):
+        """Save a deficiency verified by the teacher both semantically and structurally in Neo4j, scoped per agent."""
+        if not self.neo4j_memory:
+            print("⚠️ Neo4j Memory Client not initialized. Cannot save deficiency.")
+            return False
+
+        try:
+            await self._ensure_neo4j_connected()
+            if not getattr(self, '_neo4j_connected', False):
+                print("❌ Neo4j not connected. Cannot save deficiency.")
+                return False
+
+            user_identifier = f"system_{agent_name}" if agent_name else "system"
+
+            # 1. Save semantically as a Preference node scoped to the agent/system
+            pref_text = f"El sistema/agente tiene una falencia en '{tema}': {correccion}"
+            await self.neo4j_memory.long_term.add_preference(
+                category="falencia",
+                preference=pref_text,
+                user_identifier=user_identifier
+            )
+            print(f"✅ Saved semantic deficiency preference for user_identifier '{user_identifier}'")
+
+            # 2. Save structurally as custom entities and relationships
+            # Get or create the Agent entity (instead of Student)
+            agent_entity_name = agent_name or "System"
+            agent_entity, _ = await self.neo4j_memory.long_term.add_entity(
+                name=agent_entity_name,
+                entity_type="Agent",
+                description=f"Perfil del agente {agent_name}",
+                resolve=False,
+                deduplicate=True
+            )
+
+            # Get or create the Concept entity
+            concept_entity, _ = await self.neo4j_memory.long_term.add_entity(
+                name=f"{tema} ({agent_entity_name})",
+                entity_type="Concept",
+                description=f"Concepto de física: {tema} (para el agente {agent_entity_name})",
+                resolve=False,
+                deduplicate=True
+            )
+
+            # Add TIENE_FALENCIA relationship between Agent and Concept
+            await self.neo4j_memory.long_term.add_relationship(
+                source=agent_entity.id,
+                target=concept_entity.id,
+                relationship_type="TIENE_FALENCIA",
+                description=correccion
+            )
+            print(f"✅ Saved structural relationship (Agent {agent_entity_name}) -[:TIENE_FALENCIA]-> (Concept {tema})")
+            return True
+
+        except Exception as e:
+            print(f"❌ Error adding deficiency: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    async def _learn_user_preferences(self, user_message: str, context_id: str, agent_name: str | None = None):
+        """Extract and persist user preferences/facts and student insights to Neo4j Agent Memory in background."""
+        if not self.neo4j_memory or not user_message:
+            return
+            
+        try:
+            print("🧠 Running self-learning extractor in background...")
+            from langchain_core.messages import HumanMessage
+            
+            prompt = f"""Analiza el siguiente mensaje enviado por un estudiante:
+"{user_message}"
+ 
+Determina si se pueden extraer dos tipos de información:
+1. Preferencias personales o de estilo: Hábitos del usuario, estilo de comunicación preferido o datos biográficos (por ejemplo: prefiere respuestas cortas, le gustan las explicaciones con analogías, se llama Diego, estudia ingeniería, etc.).
+2. Insights o falencias de conocimiento del alumno: Conceptos recurrentes, dudas o temas sobre los cuales el alumno realiza preguntas o demuestra no comprender (por ejemplo: no comprende la diferencia entre masa y peso, tiene dudas recurrentes sobre la conservación de la energía, no sabe cómo aplicar la tercera ley de Newton, etc.).
+
+Si encuentras alguno de estos tipos, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El alumno tiene dudas sobre la conservación de la energía").
+Si no encuentras nada relevante para una categoría, responde NONE para esa categoría.
+
+Responde estrictamente en el formato:
+Preferencia: <frase corta o NONE>
+Insight: <frase corta o NONE>"""
+
+            response = await ainvoke_with_retry(self.llm, [HumanMessage(content=prompt)])
+            result = response.content.strip()
+            
+            # Parse preferences and insights
+            preferences = []
+            insights = []
+            
+            for line in result.split('\n'):
+                line = line.strip()
+                if line.startswith("Preferencia:"):
+                    pref_val = line.split(":", 1)[1].strip()
+                    if pref_val and pref_val.upper() != "NONE":
+                        preferences.append(pref_val)
+                elif line.startswith("Insight:"):
+                    ins_val = line.split(":", 1)[1].strip()
+                    if ins_val and ins_val.upper() != "NONE":
+                        insights.append(ins_val)
+            
+            conversation = self.get_conversation(context_id)
+            student_id = conversation.name or context_id if conversation else context_id
+            user_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
+            
+            for pref in preferences:
+                print(f"💾 Self-learning: Extracted preference -> '{pref}' for user_identifier '{user_identifier}'")
+                await self.neo4j_memory.long_term.add_preference(
+                    category="user_preference",
+                    preference=pref,
+                    user_identifier=user_identifier
+                )
+                print(f"✅ Preference persisted in Neo4j Graph")
+                
+            for ins in insights:
+                print(f"💾 Self-learning: Extracted student insight -> '{ins}' for user_identifier '{user_identifier}'")
+                await self.neo4j_memory.long_term.add_preference(
+                    category="insight",
+                    preference=ins,
+                    user_identifier=user_identifier
+                )
+                print(f"✅ Insight persisted in Neo4j Graph")
+                
+        except Exception as e:
+            print(f"⚠️ Error in self-learning extractor: {e}")
 

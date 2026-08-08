@@ -7,10 +7,11 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import (InternalError, InvalidParamsError, Part, TaskState,
-                       TextPart, UnsupportedOperationError)
+                       TextPart, UnsupportedOperationError, FilePart, FileWithBytes)
 from a2a.utils import new_agent_text_message, new_task
 from a2a.utils.errors import ServerError
 from app.agent import MedicalAgent
+from app.langsmith_config import traceable
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,7 +94,11 @@ class MedicalAgentExecutor(AgentExecutor):
                         # FileWithUri (Caso de uso futuro)
                         elif hasattr(file_obj, 'uri') and hasattr(file_obj, 'mime_type'):
                             try:
-                                host_url = "http://localhost:8080" # Fallback
+                                ui_host = os.getenv("A2A_UI_HOST", "localhost")
+                                if ui_host == "0.0.0.0":
+                                    ui_host = "localhost"
+                                ui_port = os.getenv("A2A_UI_PORT", "12000")
+                                host_url = f"http://{ui_host}:{ui_port}"
                                 if context.message.metadata:
                                     host_url = context.message.metadata.get('host_base_url', host_url)
 
@@ -157,6 +162,7 @@ class MedicalAgentExecutor(AgentExecutor):
         logger.info("✅ Solicitud válida (partes detectadas)")
         return False
     
+    @traceable(name="medical_agent_execution", run_type="chain", tags=["agent_type:medical_assistant", "medical_assistant", "a2a-agent"])
     async def execute(
         self,
         context: RequestContext,
@@ -208,6 +214,7 @@ class MedicalAgentExecutor(AgentExecutor):
         
         # Variables de estado
         final_response = None
+        imagenes_relevantes = []
         has_error = False
         
         try:
@@ -244,7 +251,8 @@ class MedicalAgentExecutor(AgentExecutor):
                 
                 if is_complete:
                     final_response = content
-                    logger.info(f"🎉 RESPUESTA FINAL RECIBIDA ({len(content)} caracteres)")
+                    imagenes_relevantes = item.get('imagenes_relevantes', [])
+                    logger.info(f"🎉 RESPUESTA FINAL RECIBIDA ({len(content)} caracteres) con {len(imagenes_relevantes)} imágenes relevantes")
                     break
                     
                 elif require_input:
@@ -274,11 +282,43 @@ class MedicalAgentExecutor(AgentExecutor):
             if final_response:
                 logger.info("📤 Enviando respuesta final al cliente...")
                 
+                parts = [Part(root=TextPart(text=final_response))]
+                
+                # Cargar y codificar las imágenes relevantes para adjuntarlas como FilePart
+                import os
+                for img_item in imagenes_relevantes:
+                    img_path = img_item.get('path')
+                    desc = img_item.get('descripcion', 'Manual Image')
+                    if img_path and os.path.exists(img_path):
+                        try:
+                            with open(img_path, "rb") as f:
+                                img_bytes = f.read()
+                            img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+                            
+                            ext = os.path.splitext(img_path)[1].lower()
+                            mime_type = "image/png"
+                            if ext in ['.jpg', '.jpeg']:
+                                mime_type = "image/jpeg"
+                            elif ext == '.gif':
+                                mime_type = "image/gif"
+                                
+                            file_part = FilePart(
+                                file=FileWithBytes(
+                                    name=os.path.basename(img_path),
+                                    mime_type=mime_type,
+                                    bytes=img_b64
+                                )
+                            )
+                            parts.append(Part(root=file_part))
+                            logger.info(f"✅ Imagen adjuntada exitosamente como FilePart: {img_path}")
+                        except Exception as ex:
+                            logger.error(f"❌ Error leyendo/codificando imagen {img_path}: {ex}")
+                
                 await updater.add_artifact(
-                    [Part(root=TextPart(text=final_response))],
+                    parts,
                     name='medical_analysis',
                 )
-                logger.info("✅ Artifact agregado")
+                logger.info("✅ Artifact agregado con imágenes")
                 
                 await updater.complete()
                 logger.info("✅ Tarea completada y marcada como finalizada")

@@ -120,12 +120,12 @@ export function ConversationManager() {
                           className="p-2 rounded bg-slate-50 border border-slate-200"
                         >
                           <p className="text-xs font-mono text-slate-600">
-                            {msg.sender}
+                            {msg.role}
                           </p>
                           <p className="text-xs text-slate-500 mt-1">
                             {msg.parts
                               ?.map((p) =>
-                                p.root?.kind === 'text' ? p.root.text : 'File'
+                                p.kind === 'text' ? p.text : 'File'
                               )
                               .join(' ')}
                           </p>

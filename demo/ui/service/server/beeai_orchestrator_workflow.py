@@ -10,15 +10,23 @@ from typing import Any
 from beeai_framework.workflows.workflow import Workflow
 from pydantic import BaseModel
 
+from .api_key_rotator import ainvoke_with_retry
+from .langsmith_config import traceable
+
 
 class OrchestratorState(BaseModel):
     """State for the orchestration workflow"""
     user_message: str
     has_images: bool
+    image_data_list: list[dict] = []  # Lista de {mime_type, bytes_b64} para clasificación visual
     available_agents: list[dict] = []
     chosen_agent: str = ""
     agent_response: str = ""
     error: str = ""
+    history_text: str = ""
+    neo4j_context_text: str = ""
+    context_id: str = ""
+    student_id: str = ""
 
 
 async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
@@ -48,8 +56,9 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             return None
     
     # Step 2: Use Groq to classify and choose the best agent
+    @traceable(name="orchestrator_classify_and_choose", run_type="chain", tags=["agent_type:orchestrator", "orchestrator"])
     async def classify_and_choose(state: OrchestratorState) -> str:
-        """Use Groq to analyze the request and choose the best agent or respond directly"""
+        """Use multimodal LLM to analyze the request (including images) and choose the best agent"""
         print("🤔 Step 2: Classifying request and choosing agent...")
         
         if not state.available_agents:
@@ -63,63 +72,118 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 for i, agent in enumerate(state.available_agents)
             ])
             
-            # Create a classification prompt for Groq
-            classification_prompt = (
-                f"You are a routing system. Analyze the user's request and decide if it needs a specialized agent or if you should respond directly.\n\n"
+            # Create a classification prompt
+            classification_text = (
+                f"You are a routing system. Analyze the user's request and decide which specialized agent should handle it, or if you should respond directly.\n\n"
                 f"Available specialized agents:\n{agents_description}\n\n"
-                f"User request: \"{state.user_message}\"\n"
-                f"Request includes images: {state.has_images}\n\n"
-                f"RULES:\n"
-                f"1. If the request is a simple greeting (hello, hi, hola, hey, etc.), respond with: DIRECT\n"
-                f"2. If the request is small talk or general conversation, respond with: DIRECT\n"
-                f"3. If the request asks what you can do or who you are, respond with: DIRECT\n"
-                f"4. If the request needs specialized knowledge or analysis, respond with the EXACT agent name.\n\n"
-                f"Examples:\n"
-                f"- 'Hola' → DIRECT\n"
-                f"- 'Hello' → DIRECT\n"
-                f"- 'Hi there' → DIRECT\n"
-                f"- 'How are you?' → DIRECT\n"
-                f"- 'What can you do?' → DIRECT\n"
-                f"- 'Analyze this medical image' → Asistente Médico\n"
-                f"- 'Help me with physics homework' → Tutor Socrático de Física Multimodal\n"
-                f"- 'Generate an image of a cat' → Image Generator Agent\n\n"
-                f"IMPORTANT: Respond with ONLY ONE WORD - either 'DIRECT' or the exact agent name. Nothing else."
             )
             
-            # Use Groq to classify
+            if state.neo4j_context_text:
+                classification_text += f"User preferences (background):\n{state.neo4j_context_text[:1500]}\n\n"
+            
+            if state.history_text:
+                classification_text += f"Recent conversation history:\n{state.history_text}\n\n"
+                
+            classification_text += f"User request: \"{state.user_message}\"\n\n"
+            
+            # If images are present, add visual analysis instructions
+            if state.has_images and state.image_data_list:
+                classification_text += (
+                    f"The user has also attached {len(state.image_data_list)} image(s). "
+                    f"LOOK AT THE IMAGE(S) CAREFULLY and determine what they contain. "
+                    f"Based on the visual content of the images AND the text, choose the right agent.\n\n"
+                )
+            
+            classification_text += (
+                f"RULES:\n"
+                f"1. If the request is a simple greeting (hello, hi, hola, hey, etc.) or small talk with NO images, respond with: DIRECT\n"
+                f"2. If the request is about general capabilities or help, respond with: DIRECT\n"
+                f"3. Route the message to a specialized agent based strictly on the semantic domain and intent of the request:\n"
+                f"   - **Asistente Médico**: Route ANY request related to medicine, biology, histology, anatomy, tissues, organs, cells, or clinical topics here. This includes requests to search, show, or retrieve microscopic images or figures, as well as medical text questions.\n"
+                f"   - **Tutor Socrático de Física Multimodal**: Route any request related to physics, equations, mechanics, or physical science problems here.\n"
+                f"   - **Image Generator Agent**: Route requests here ONLY if the user explicitly asks to generate, create, draw, or paint a generic, artistic, creative, or non-medical synthetic image (e.g., 'draw a red cat', 'generate an image of a beach'). Never route medical or microscopic image retrieval/search requests here.\n"
+                f"4. Look at the actual content of any attached images to help identify the domain.\n\n"
+                f"First, analyze the user request step-by-step to identify their intent and reason about which agent or DIRECT is best. "
+                f"Finally, output your final selection enclosed inside <route> and </route> tags. "
+                f"Example: <route>Tutor Socrático de Física Multimodal</route> or <route>DIRECT</route>."
+            )
+            
+            # Build the message content - multimodal if images are present
             from langchain_core.messages import HumanMessage
             
-            print(f"🔍 Sending classification prompt to Groq...")
-            llm_response = await llm.ainvoke([HumanMessage(content=classification_prompt)])
+            if state.has_images and state.image_data_list:
+                # Multimodal classification: send images + text to the LLM
+                content = [{"type": "text", "text": classification_text}]
+                
+                for idx, img in enumerate(state.image_data_list):
+                    mime_type = img.get("mime_type", "image/png")
+                    bytes_b64 = img.get("bytes_b64", "")
+                    if bytes_b64:
+                        content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{bytes_b64}"
+                            }
+                        })
+                        print(f"🖼️ Image {idx} included for visual classification: {mime_type}")
+                
+                classification_llm = getattr(manager, 'vision_llm', None) or llm
+                print(f"🔍 Sending MULTIMODAL classification prompt to Groq ({len(state.image_data_list)} images) using model: {getattr(classification_llm, 'model', 'unknown')}...")
+                try:
+                    llm_response = await ainvoke_with_retry(classification_llm, [HumanMessage(content=content)])
+                except Exception as vision_err:
+                    print(f"⚠️ Vision model failed: {vision_err}")
+                    print(f"🔄 Falling back to text-only LLM for classification...")
+                    llm_response = await ainvoke_with_retry(llm, [HumanMessage(content=classification_text)])
+            else:
+                # Text-only classification
+                print(f"🔍 Sending text-only classification prompt to Groq...")
+                llm_response = await ainvoke_with_retry(llm, [HumanMessage(content=classification_text)])
             
             print(f"📥 Groq response type: {type(llm_response)}")
             print(f"📥 Groq response content: {llm_response.content}")
             
-            chosen = str(llm_response.content).strip() if llm_response.content else ""
+            raw_response = str(llm_response.content).strip() if llm_response.content else ""
+            print(f"🎯 Raw chosen: '{raw_response}'")
             
-            if not chosen:
+            if not raw_response:
                 print(f"⚠️ Groq returned empty response, using first agent")
                 state.chosen_agent = state.available_agents[0]['name']
                 return "send_to_agent"
             
-            print(f"🎯 Raw chosen: '{chosen}'")
-            
-            # Clean up the response
-            chosen = chosen.replace('"', '').replace("'", '').strip()
-            if chosen and chosen[0].isdigit():
-                parts = chosen.split('.', 1)
-                if len(parts) > 1:
-                    chosen = parts[1].strip()
-            
-            print(f"🎯 Cleaned chosen: '{chosen}'")
+            # Extract choice from <route> tags
+            import re
+            match = re.search(r'<route>(.*?)</route>', raw_response, re.DOTALL | re.IGNORECASE)
+            if match:
+                chosen = match.group(1).strip()
+                print(f"🎯 Extracted choice: '{chosen}'")
+            else:
+                lines = [line.strip() for line in raw_response.split('\n') if line.strip()]
+                chosen = lines[-1] if lines else ""
+                chosen = chosen.replace('"', '').replace("'", '').strip()
+                if chosen and chosen[0].isdigit():
+                    parts = chosen.split('.', 1)
+                    if len(parts) > 1:
+                        chosen = parts[1].strip()
+                print(f"🎯 Fallback chosen: '{chosen}'")
             
             # Check if should respond directly
             if chosen.upper() == 'DIRECT':
                 print(f"✅ Responding directly (no agent needed)")
                 # Generate a direct response
                 direct_prompt = (
-                    f"You are a friendly AI assistant. The user said: \"{state.user_message}\"\n\n"
-                    f"Respond naturally and helpfully. If they're greeting you, greet them back. "
+                    f"You are a friendly AI assistant.\n"
+                )
+                if state.neo4j_context_text:
+                    direct_prompt += (
+                        f"Background context (low priority) - User preferences from memory:\n"
+                        f"{state.neo4j_context_text[:2000]}\n\n"
+                        f"Use the above ONLY if directly relevant to the user's current message. "
+                        f"Always prioritize responding to what the user is saying NOW.\n\n"
+                    )
+                direct_prompt += (
+                    f"The user said: \"{state.user_message}\"\n\n"
+                    f"Respond naturally and helpfully, taking into account any retrieved user profile, preferences, or memory context if relevant. If they're greeting you, greet them back. "
                     f"If they ask what you can do, explain that you can connect them with specialized agents for:\n"
                     f"- Medical image analysis\n"
                     f"- Physics problems and explanations\n"
@@ -128,7 +192,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                     f"Keep your response brief and friendly."
                 )
                 
-                direct_response = await llm.ainvoke([HumanMessage(content=direct_prompt)])
+                direct_response = await ainvoke_with_retry(llm, [HumanMessage(content=direct_prompt)])
                 state.agent_response = direct_response.content
                 state.chosen_agent = "DIRECT"  # Mark that we responded directly
                 print(f"✅ Direct response generated: {state.agent_response[:100]}...")
@@ -156,11 +220,29 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 return "send_to_agent"
                 
         except Exception as e:
+            print(f"❌ Error during classification: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # Assign a sensible default instead of failing
+            if state.available_agents:
+                if state.has_images:
+                    # Try to find the physics or medical agent for image queries
+                    for agent in state.available_agents:
+                        name_lower = agent['name'].lower()
+                        if 'física' in name_lower or 'physics' in name_lower or 'multimodal' in name_lower:
+                            state.chosen_agent = agent['name']
+                            break
+                    if not state.chosen_agent:
+                        state.chosen_agent = state.available_agents[0]['name']
+                else:
+                    state.chosen_agent = state.available_agents[0]['name']
+                print(f"🔄 Fallback: routing to {state.chosen_agent}")
+                return "send_to_agent"
             state.error = f"Error during classification: {str(e)}"
-            print(f"❌ {state.error}")
             return None
     
     # Step 3: Send the message to the chosen agent
+    @traceable(name="orchestrator_send_to_agent", run_type="chain", tags=["agent_type:orchestrator", "orchestrator"])
     async def send_to_agent(state: OrchestratorState) -> str:
         """Forward the user's message (with images if any) to the chosen agent"""
         
@@ -177,18 +259,85 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
         print(f"📤 Step 3: Sending message to {state.chosen_agent}...")
         
         if not state.chosen_agent:
-            # This should not happen if classify_and_choose worked correctly
-            # Generate a fallback response
-            print(f"⚠️ No agent chosen, generating fallback response")
-            state.agent_response = "Lo siento, no pude determinar qué agente especializado usar para tu consulta. ¿Podrías reformular tu pregunta?"
-            return None
+            # Try to recover by using the first available agent
+            if state.available_agents:
+                if state.has_images:
+                    for agent in state.available_agents:
+                        name_lower = agent['name'].lower()
+                        if 'física' in name_lower or 'physics' in name_lower or 'multimodal' in name_lower:
+                            state.chosen_agent = agent['name']
+                            break
+                if not state.chosen_agent and state.available_agents:
+                    state.chosen_agent = state.available_agents[0]['name']
+                print(f"🔄 Recovered: routing to {state.chosen_agent}")
+            else:
+                print(f"⚠️ No agent chosen and no agents available, generating fallback response")
+                state.agent_response = "Lo siento, no pude determinar qué agente especializado usar para tu consulta. ¿Podrías reformular tu pregunta?"
+                return None
         
         try:
             from service.server.beeai_host_manager import \
                 SendMessageToAgentInput
+            
+            # Query NAMS context specifically for the chosen agent
+            agent_context_text = ""
+            if manager.neo4j_memory:
+                await manager._ensure_neo4j_connected()
+                if getattr(manager, '_neo4j_connected', False):
+                    try:
+                        student_id = state.student_id or state.context_id
+                        print(f"🧠 Querying student NAMS context for student '{student_id}' and agent '{state.chosen_agent}'...")
+                        ctx = await manager.get_student_context(
+                            state.user_message,
+                            student_id=student_id,
+                            session_id=state.context_id,
+                            agent_name=state.chosen_agent
+                        )
+                        if ctx:
+                            raw_text = str(ctx)
+                            ignore_headers = (
+                                '## conversation history',
+                                '### relevant past messages',
+                                'conversation history',
+                                'relevant past messages'
+                            )
+                            filtered_lines = []
+                            in_chat_history_section = False
+                            for line in raw_text.split('\n'):
+                                line_stripped = line.strip()
+                                line_lower = line_stripped.lower()
+                                if not line_lower:
+                                    continue
+                                if any(h in line_lower for h in ignore_headers):
+                                    in_chat_history_section = True
+                                    continue
+                                if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
+                                    in_chat_history_section = False
+                                    continue
+                                if in_chat_history_section:
+                                    continue
+                                if any(line_lower.startswith(prefix) for prefix in [
+                                    'user:', 'assistant:', 'human:', 'ai:',
+                                    'usuario:', 'asistente:', 'q:', 'a:',
+                                    '- [user]', '- [assistant]', '- [human]', '- [ai]',
+                                    '- [usuario]', '- [asistente]'
+                                ]):
+                                    continue
+                                filtered_lines.append(line)
+                            agent_context_text = '\n'.join(filtered_lines).strip()
+                            if len(agent_context_text) > 3000:
+                                agent_context_text = agent_context_text[:3000] + "\n[... truncado]"
+                    except Exception as e:
+                        print(f"⚠️ Error retrieving Neo4j context for chosen agent {state.chosen_agent}: {e}")
+
+            message_text = state.user_message
+            if agent_context_text:
+                message_text = f"[NAMS_CONTEXT]\n{agent_context_text}\n[/NAMS_CONTEXT]\n\n{state.user_message}"
+                print(f"🧠 Injected agent-specific NAMS context into message sent to {state.chosen_agent}")
+                
             send_input = SendMessageToAgentInput(
                 agent_name=state.chosen_agent,
-                message=state.user_message
+                message=message_text
             )
             
             result = await send_tool._run(send_input, None, None)
