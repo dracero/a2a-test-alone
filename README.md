@@ -204,6 +204,83 @@ Cada agente cuenta con su propio script de evaluación independiente que define 
 
 ---
 
+## 🤖 Automated PR Reviewer (AI Code Review)
+
+Hemos implementado un revisor de código automatizado basado en **Gemini** y las reglas definidas en el espacio de trabajo. Este sistema analiza cada Pull Request contra las directrices de diseño, rendimiento y buenas prácticas del proyecto.
+
+### Componentes Clave
+
+1. **Directrices de Desarrollo ([.agents/AGENTS.md](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/.agents/AGENTS.md))**:
+   Define las reglas específicas que el agente de revisión (y otros agentes de desarrollo) debe validar:
+   - **Principios Generales**: Claridad, respuestas accionables, seguridad de credenciales y secretos.
+   - **Python y SDK de A2A**: Tipado estricto, uso correcto del protocolo A2A y manejo robusto de excepciones.
+   - **Rendimiento GPU/PyTorch**: Gestión óptima de memoria CUDA (ej. RTX 3060), minimización de transferencias CPU-GPU, uso de `inference_mode`.
+   - **Frontend & Next.js/TypeScript**: Evitar el tipo `any`, diseño premium y responsivo, optimización de renderizados.
+   - **Complejidad y Optimización de BD**: Optimización de consultas Neo4j/Qdrant, evitar problemas de N+1 y optimización algorítmica.
+
+2. **Script de Revisión ([scripts/review_pr.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/review_pr.py))**:
+   - Obtiene el diff del PR directamente de la API de GitHub (con mecanismos de reintento para evitar errores HTTP 406 Not Acceptable).
+   - Lee las reglas definidas en `AGENTS.md`.
+   - Llama a la API de **Gemini** (usa `gemini-2.5-flash` con el nuevo SDK `google-genai`, o cae automáticamente a `gemini-1.5-flash` con `google-generativeai`).
+   - Envía el análisis como un comentario automatizado formateado en Markdown directamente en la discusión del PR.
+
+3. **Workflow de GitHub Actions ([.github/workflows/ai-review.yml](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/.github/workflows/ai-review.yml))**:
+   - Automatiza la ejecución en GitHub ante eventos de Pull Request (`opened`, `synchronize`, `reopened`).
+   - Requiere la configuración de secretos: `GEMINI_API_KEY` y el token implícito `GITHUB_TOKEN`.
+
+### Ejecución Local (Dry-Run / Pruebas)
+
+Puedes probar el revisor localmente antes de subir tus cambios a GitHub:
+
+1. Asegúrate de tener las dependencias instaladas y las variables configuradas:
+   ```bash
+   pip install google-genai requests
+   export GEMINI_API_KEY="tu_api_key_aquí"
+   ```
+
+2. Genera un archivo `.diff` o ejecuta con un PR existente:
+   ```bash
+   # Opción A: Probar con un archivo diff local
+   git diff main > cambios.diff
+   python scripts/review_pr.py --diff-file cambios.diff --dry-run
+
+   # Opción B: Probar con un PR remoto real en modo lectura/dry-run
+   python scripts/review_pr.py --repo "dracero/a2a-test-alone" --pr 12 --dry-run
+   ```
+
+---
+
+## 🔒 Restricción de Fusiones y Control de Pull Requests (PR)
+
+Para asegurar la estabilidad del proyecto y evitar que colaboradores no autorizados escriban cambios directos en las ramas protegidas (como `main`), se puede configurar el siguiente flujo de restricción y aprobación:
+
+### Diagrama del Proceso de Restricción
+
+```mermaid
+graph TD
+    Colab["Colaborador"] -->|"Push Directo"| Push["¿Push a Rama Protegida?"]
+    Push -->|"Sí"| AuthPush{"¿Usuario en Lista de Bypass / Permitidos?"}
+    AuthPush -->|"Sí"| DirectMerge["Push Exitoso"]
+    AuthPush -->|"No"| Rejected["PUSH DENEGADO"]
+    
+    Colab -->|"Crear PR"| PR["Pull Request"]
+    PR -->|"Requiere Aprobación"| Review{"¿Aprobado por Code Owner @tu_usuario?"}
+    Review -->|"Sí"| Approved["PR Fusionado (Merge)"]
+    Review -->|"No / Pendiente"| Blocked["Fusión Bloqueada"]
+```
+
+### Métodos de Configuración en GitHub:
+
+1. **Reglas de Protección de Ramas (Branch Protection Rules):**
+   - Configura la rama `main` en *Settings -> Branches -> Add rule*.
+   - Habilita **Restrict who can push to matching branches** y selecciona únicamente tu usuario para restringir la escritura directa.
+   
+2. **Propietarios del Código (CODEOWNERS):**
+   - Crea un archivo `.github/CODEOWNERS` y define `* @tu_usuario` para hacerte dueño de todos los archivos.
+   - Habilita **Require review from Code Owners** en las reglas de protección de rama. Así, cualquier Pull Request requerirá tu aprobación obligatoria para ser fusionada.
+
+---
+
 ## Related Repositories
 
 -   [A2A](https://github.com/a2aproject/A2A) - A2A Specification and documentation.
