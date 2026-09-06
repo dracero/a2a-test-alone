@@ -56,7 +56,7 @@ from api_key_rotator import google_key_rotator, create_google_llm, invoke_with_r
 
 # ==================== CONFIGURACIÓN ====================
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
+MODEL_NAME = "gemini-2.5-flash"
 
 class SemanticMemory:
     """Memoria conversacional con historial de chat real."""

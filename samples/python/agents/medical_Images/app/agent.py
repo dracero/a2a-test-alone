@@ -2937,6 +2937,16 @@ RESULTADOS DE BÚSQUEDA WEB:
         """Streaming de eventos y respuestas para el Agent SDK UI"""
         self.inicializar_componentes()
 
+        # Extraer contexto NAMS si está presente en la consulta
+        nams_context = ""
+        if "[NAMS_CONTEXT]" in query and "[/NAMS_CONTEXT]" in query:
+            start_tag = "[NAMS_CONTEXT]"
+            end_tag = "[/NAMS_CONTEXT]"
+            start_idx = query.find(start_tag)
+            end_idx = query.find(end_tag)
+            nams_context = query[start_idx + len(start_tag):end_idx].strip()
+            query = (query[:start_idx] + query[end_idx + len(end_tag):]).strip()
+
         # Extraer imagen base64 si viene de la parte de entrada
         imagen_base64 = None
         if images and len(images) > 0:
@@ -2953,7 +2963,7 @@ RESULTADOS DE BÚSQUEDA WEB:
             consulta_resuelta="",
             imagen_consulta=None,
             imagen_base64=imagen_base64,
-            contexto_memoria="",
+            contexto_memoria=nams_context,
             ontologia=self.ontologia or {},
             contexto_ontologico="",
             clasificacion="",

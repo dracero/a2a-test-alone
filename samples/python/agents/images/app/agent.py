@@ -35,9 +35,13 @@ except Exception:
     pass
 
 # Load .env from project root (5 levels up: agent.py -> app -> images -> agents -> python -> samples -> root)
+import sys
 root_dir = Path(__file__).resolve().parents[5]
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
 env_path = root_dir / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
+from api_key_rotator import google_key_rotator
 
 logger = logging.getLogger(__name__)
 
@@ -270,12 +274,14 @@ class ImageGenerationAgent:
         if LANGSMITH_ENABLED:
             logger.info(f"📊 LangSmith monitoring enabled - Project: {os.getenv('LANGCHAIN_PROJECT')}")
         
-        # Usar Groq para el razonamiento del agente
-        # CrewAI usa LiteLLM internamente, el formato correcto es: groq/<model>
+        # Usar Google Gemini 2.5 para el razonamiento del agente
         from crewai import LLM as CrewAILLM
+        google_key = google_key_rotator.get_key()
+        os.environ['GEMINI_API_KEY'] = google_key
+        os.environ['GOOGLE_API_KEY'] = google_key
         self.model = CrewAILLM(
-            model='groq/llama-3.1-8b-instant',  # Modelo rápido y con límites altos en Groq
-            api_key=os.getenv('GROQ_API_KEY'),
+            model='gemini/gemini-2.5-flash',
+            api_key=google_key,
         )
 
         self.image_creator_agent = Agent(

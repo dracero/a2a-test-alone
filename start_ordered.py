@@ -16,18 +16,25 @@ if sys.platform.startswith('win'):
 
 processes = []
 
+def free_ports():
+    if sys.platform != 'win32':
+        subprocess.run("fuser -k 10001/tcp 10002/tcp 10003/tcp 12000/tcp 3000/tcp 2>/dev/null || true", shell=True)
+
 def cleanup(sig=None, frame=None):
     print("\n🛑 Stopping all services...")
     for p in processes:
         if p.poll() is None:
             try:
                 if sys.platform == 'win32':
-                    # Kill the entire process tree on Windows to ensure child node/python processes die
                     subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
-                    p.kill()
+                    os.killpg(os.getpgid(p.pid), signal.SIGTERM)
             except Exception:
-                pass
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+    free_ports()
     sys.exit(0)
 
 # Handle Ctrl+C and exit signals
@@ -55,11 +62,15 @@ def run_npm_cmd(cmd, env_vars=None):
     env = os.environ.copy()
     if env_vars:
         env.update(env_vars)
-    p = subprocess.Popen(cmd, shell=True, env=env)
+    kwargs = {}
+    if sys.platform != 'win32':
+        kwargs['preexec_fn'] = os.setsid
+    p = subprocess.Popen(cmd, shell=True, env=env, **kwargs)
     processes.append(p)
     return p
 
 def main():
+    free_ports()
     os.environ["NODE_OPTIONS"] = "--no-deprecation"
     print("🚀 Starting BeeAI Ecosystem in order...")
     
