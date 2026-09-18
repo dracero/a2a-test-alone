@@ -56,7 +56,7 @@ from api_key_rotator import google_key_rotator, create_google_llm, invoke_with_r
 
 # ==================== CONFIGURACIÓN ====================
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
+MODEL_NAME = "gemini-2.5-flash"
 
 class SemanticMemory:
     """Memoria conversacional con historial de chat real."""
@@ -212,7 +212,9 @@ class PhysicsMultimodalAgent:
         
         # Qdrant
         self.qdrant_url = qdrant_url or os.getenv("QDRANT_URL", "http://localhost:6333")
-        self.qdrant_api_key = qdrant_api_key or os.getenv("QDRANT_KEY", "")
+        raw_key = qdrant_api_key if qdrant_api_key is not None else os.getenv("QDRANT_KEY", "")
+        is_local = "localhost" in self.qdrant_url or "127.0.0.1" in self.qdrant_url
+        self.qdrant_api_key = None if is_local else (raw_key or None)
         self.text_collection = "documentos_pdf_texto_hf"  # Nombre cambiado para evitar mismatch de dimensiones
         self.image_collection = "documentos_pdf_imagenes"
         self.multimodal_collection = "documentos_multimodal"

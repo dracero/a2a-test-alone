@@ -140,29 +140,162 @@ graph TD
    - Dashboard de administración para monitorizar los agentes y el inspector del protocolo A2A.
    - Chat interactivo en tiempo real con soporte multimedia (texto, PDF e imágenes).
 
-## 🧠 NAMS: Neo4j Agent Memory System
+## 🧠 NAMS: Neo4j Agent Memory System (Arquitectura POLE+O & Dual-Rol)
 
-NAMS es un sistema avanzado de gestión de memoria para agentes inteligentes basado en **Neo4j Aura Cloud DB** y **SentenceTransformers** (ejecutado localmente en CPU). 
+**NAMS** es un sistema avanzado de memoria cognitiva y grafo de conocimiento para agentes inteligentes basado en **Neo4j Aura Cloud DB**, embeddings locales con **SentenceTransformers** (`BAAI/bge-small-en-v1.5` en CPU) y extracción de entidades con **Gemini 2.5 Flash** (vía `LiteLLM` con rotador de claves).
 
-Su arquitectura divide la cognición en tres subsistemas clave:
+En las últimas actualizaciones, NAMS ha evolucionado de una memoria genérica a un **subsistema pedagógico de alta fidelidad con aislamiento por agente, ontología formal POLE+O y control de escritura estricto**.
 
-### 1. Memoria a Corto Plazo (Conversacional)
-* **Función**: Almacena cada intercambio de mensajes (User/Assistant) en una estructura de grafo dirigida por `session_id`.
-* **Beneficio**: Permite al orquestador reconstruir el hilo completo del diálogo en formato conversacional nativo y recuperar los últimos mensajes para mantener la coherencia semántica inmediata.
+```mermaid
+graph TD
+    subgraph StudentInteraction [Interacción del Estudiante]
+        Student([Estudiante]) -->|Pregunta o Afirmación| Orchestrator[Orquestador / Tutor Socrático]
+        Orchestrator -->|Valida contra KG Canónico| ValidateKG["validate_against_kg()"]
+        ValidateKG -->|¿Es Fácticamente Correcto?| Decision{¿Correcto?}
+        Decision -->|Sí| ContinueSocratic[Respuesta Socrática de Profundización]
+        Decision -->|No: Error Fáctico| MisconceptionCandidate["Registrar MisconceptionCandidate<br/>(Memoria Corto Plazo / No Altera KG)"]
+        MisconceptionCandidate --> SemanticClustering{"¿Acumuló ≥ 5 errores<br/>con Similitud Coseno ≥ 0.82?"}
+        SemanticClustering -->|Sí| ConsolidateDeficiency["Consolidar StudentDeficiency<br/>[:HAS_DEFICIENCY] -> Perfil Estudiante<br/>[:ABOUT_CONCEPT] -> Concepto KG"]
+        SemanticClustering -->|No| WaitMoreEvidence["Mantiene en observación transitoria"]
+    end
 
-### 2. Memoria a Largo Plazo (Perfil & Preferencias)
-* **Función**: Almacena hechos aprendidos sobre el usuario (nombre, dificultades específicas de aprendizaje, velocidad preferida, etc.) como nodos de entidad vinculados a su usuario único.
-* **Flujo**: Antes de despachar cada nueva consulta a un agente, el orquestador recupera las preferencias almacenadas y las inyecta dinámicamente como directrices contextuales (ej. `"El estudiante prefiere explicaciones matemáticas detalladas, se llama Diego y tiene dificultades en cinemática"`).
+    subgraph ProfessorAuthority [Autoridad Docente / Canónica]
+        Professor([Docente / Admin]) -->|Define o Actualiza Verdad Canónica| CanonicalKG[KG Canónico Inmutable]
+        CanonicalKG -->|Solo Modo PROFESSOR| WriteKG["add_canonical_concept()<br/>update_canonical_concept()"]
+        WriteKG --> POLEO[(Ontología POLE+O en Neo4j)]
+    end
 
-### 3. Bucle de Auto-Aprendizaje Asíncrono (Self-Learning)
-* **Proceso**: Al finalizar cada respuesta al usuario, el orquestador dispara una rutina asíncrona en segundo plano:
-  1. Envía el último intercambio al extractor de preferencias (alimentado por Groq LLM).
-  2. Si se detecta un hecho valioso, corrección o dato de perfil, se genera una preferencia.
-  3. La preferencia se vectoriza localmente usando el modelo `BAAI/bge-small-en-v1.5` de `SentenceTransformers` (vector de 384 dimensiones).
-  4. Se persiste el nuevo nodo y vector en la base de datos en grafo Neo4j.
-* **Beneficio**: Este análisis ocurre de manera completamente asíncrona en segundo plano sin añadir un solo milisegundo de latencia a las interacciones de chat en tiempo real del usuario.
+    subgraph Auditability [Auditoría y Trazabilidad]
+        ValidateKG --> AuditTrace[ReasoningTrace Node]
+        WriteKG --> AuditTrace
+        AuditTrace -->|Relación TOUCHED| POLEO
+    end
+```
 
 ---
+
+### 1. Aislamiento Multitarea por Agente (`AgentNAMSMemory`)
+
+Para evitar la contaminación cruzada entre agentes con dominios de conocimiento dispares (ej. histopatología vs. física teórica):
+* **Instancias Aisladas**: Cada agente cuenta con su propia instancia de [AgentNAMSMemory](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/demo/ui/service/server/agent_nams.py).
+* **Particionamiento de Sesiones**: Las sesiones conversacionales a corto plazo están prefijadas con el identificador del agente (ej. `physics:session_123` vs. `medical:session_456`).
+* **Espacio de Entidades Exclusivo**: Las entidades extraídas quedan estrictamente delimitadas por su `agent_id`, impidiendo que conceptos médicos interfieran en consultas de cinemática o dinámica.
+* **Migración de Datos Históricos**: Se incluye el script [tag_existing_neo4j_nodes.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/tag_existing_neo4j_nodes.py) para clasificar y etiquetar retrospectivamente grafos de conocimiento preexistentes.
+
+---
+
+### 2. Ontología Educativa Formal POLE+O (`physics_ontology.json`)
+
+El agente de física incorpora una ontología formal basada en el estándar **POLE+O** (*Person, Object, Location, Event + Ontology*), configurada en [physics_ontology.json](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/demo/ui/service/server/ontologies/physics_ontology.json) y registrada dinámicamente mediante `load_schema_from_file`:
+
+* **PERSON**: Perfiles de estudiantes (`StudentProfile`), docentes (`Professor`) y tutores (`Tutor`).
+* **OBJECT**: Conceptos teóricos (`Concept`), leyes y principios rectores (`Principle`), magnitudes físicas (`PhysicalQuantity`), fórmulas (`Formula`) y dispositivos (`Device`).
+* **EVENT**: Experimentos de laboratorio o mentales (`Experiment`), demostraciones (`Demonstration`) y evaluaciones (`Assessment`).
+* **LOCATION**: Sistemas de referencia (`ReferenceFrame`), laboratorios y coordenadas espaciales (`Laboratory`).
+* **ORGANIZATION**: Instituciones y facultades académicas (`University`, `Faculty`).
+* **Diagnóstico Cognitivo**:
+  * `MisconceptionCandidate`: Candidatos transitorios a concepciones erróneas o confusiones conceptuales antes de su consolidación.
+  * `StudentDeficiency`: Brecha conceptual o falencia confirmada tras superar el umbral de recurrencia semántica.
+* **Relaciones Dirigidas Tipadas**:
+  * `(:Concept)-[:REQUIRES]->(:Concept)`: Prerrequisitos de aprendizaje.
+  * `(:Principle)-[:APPLIES_TO]->(:PhysicalQuantity)`: Leyes físicas aplicadas a magnitudes.
+  * `(:StudentProfile)-[:HAS_DEFICIENCY]->(:StudentDeficiency)`: Vinculación formal de falencias al alumno.
+  * `(:StudentDeficiency)-[:ABOUT_CONCEPT]->(:Concept)`: Concepto canónico sobre el que recae la dificultad.
+  * `(:Concept)-[:DEMONSTRATED_IN]->(:Experiment)`: Fenómenos observables.
+  * `(:ReasoningTrace)-[:TOUCHED]->(:Entity)`: Traza de auditoría de entidades consultadas o modificadas.
+
+---
+
+### 3. Lógica de Escritura Dual-Rol (Profesor vs. Estudiante)
+
+Para preservar la integridad pedagógica y evitar que errores o alucinaciones del estudiante se graben como verdades ontológicas:
+
+| Modo de Interacción | Permisos sobre el KG Canónico | Tratamiento de Afirmaciones Erróneas |
+| :--- | :--- | :--- |
+| **`InteractionMode.PROFESSOR`** | **Lectura y Escritura Completa**: Puede crear conceptos (`add_canonical_concept`), actualizar fórmulas (`update_canonical_concept`) y ajustar principios. | Genera traza de auditoría `TOUCHED` con metadatos de autoría y timestamp. |
+| **`InteractionMode.STUDENT`** | **Solo Lectura del KG Canónico**: Los intentos de escritura o mutación de conceptos canónicos son **denegados inmediatamente** (retornan `None` / `False`). | Se registran únicamente como candidatos transitorios (`MisconceptionCandidate`) en memoria a corto plazo, **sin contaminar el KG canónico**. |
+
+---
+
+### 4. Validación Pedagógica contra el KG Canónico (`validate_against_kg`)
+
+Antes de emitir una retroalimentación, el tutor socrático puede contrastar la afirmación del estudiante contra la ontología canónica:
+
+* **Mecanismo**: Mediante embeddings y evaluación con LLM (`LiteLLM` con Gemini 2.5 Flash), busca los conceptos canónicos más relevantes en Neo4j y evalúa si la afirmación es fácticamente consistente.
+* **Respuesta Estructurada**:
+  ```json
+  {
+    "is_correct": false,
+    "concept": "Tercera Ley de Newton - Acción y Reacción",
+    "canonical_value": "Las fuerzas de acción y reacción actúan sobre CUERPOS DISTINTOS y nunca se anulan mutuamente en el diagrama de cuerpo libre de un único objeto.",
+    "student_claim": "Las fuerzas de acción y reacción se anulan porque tienen igual magnitud sobre el mismo cuerpo.",
+    "explanation": "El estudiante confunde la condición de equilibrio con el par de interacción."
+  }
+  ```
+* **Ventaja**: Garantiza que el tutor socrático nunca valide como correcta una afirmación errónea, fundamentando la siguiente pregunta guía en la verdad canónica del grafo.
+
+---
+
+### 5. Detección y Consolidación de Falencias por Acumulación Semántica
+
+Para evitar falsos positivos provocados por simples errores tipográficos, descuidos momentáneos o lapsus aislados:
+
+1. **Captura Transitoria**: Cada error fáctico detectado se almacena como un nodo `MisconceptionCandidate` con su respectivo vector de embedding local (`BAAI/bge-small-en-v1.5`, 384 dimensiones).
+2. **Clustering Semántico**: El algoritmo analiza la similitud coseno entre los vectores de todos los candidatos del estudiante para el mismo dominio o concepto.
+3. **Criterio de Consolidación Riguroso**:
+   * **Umbral de Recurrencia**: $\ge 5$ afirmaciones erróneas registradas (`DEFICIENCY_COUNT_THRESHOLD = 5`).
+   * **Similitud Coseno Mínima**: $\ge 0.82$ (`DEFICIENCY_SIMILARITY_THRESHOLD = 0.82`).
+4. **Promoción a `StudentDeficiency`**: Solo cuando se superan ambos umbrales, el cluster se promueve a una falencia confirmada en el KG:
+   * Se crea el nodo `StudentDeficiency` con severidad ponderada y rango temporal.
+   * Se vincula al perfil del alumno mediante `(:StudentProfile)-[:HAS_DEFICIENCY]->(:StudentDeficiency)`.
+   * Se vincula al concepto rector mediante `(:StudentDeficiency)-[:ABOUT_CONCEPT]->(:Concept)`.
+   * Los candidatos procesados pasan a estado `consolidated`.
+
+---
+
+### 6. Auditoría y Trazabilidad con Reasoning Traces y Relaciones `TOUCHED`
+
+Cada intervención pedagógica, validación fáctica o mutación del grafo genera un registro inmutable para auditoría académica y explicabilidad:
+
+* **Nodo `ReasoningTrace`**: Registra la acción (`action`), los datos de entrada (`input_data`), la resolución del agente (`output_data`), el modo (`student` o `professor`) y la marca temporal.
+* **Arista `TOUCHED`**: Conecta la traza con cada entidad física o conceptual consultada o alterada en el KG (`(t:ReasoningTrace)-[:TOUCHED {action_type, mode, timestamp}]->(e:Entity)`).
+
+---
+
+### 🛠️ Herramientas de Verificación y Scripts CLI de NAMS
+
+El repositorio incluye un conjunto completo de scripts de prueba y mantenimiento para estas capacidades:
+
+| Script | Descripción | Comando de Ejecución |
+| :--- | :--- | :--- |
+| [test_dual_role_write.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/test_dual_role_write.py) | Valida que el modo Estudiante no pueda mutar el KG y que el modo Profesor sí tenga permisos. | `uv run python scripts/test_dual_role_write.py` |
+| [test_validate_against_kg.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/test_validate_against_kg.py) | Verifica la detección de afirmaciones correctas e incorrectas contra el KG canónico. | `uv run python scripts/test_validate_against_kg.py` |
+| [test_deficiency_consolidation.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/test_deficiency_consolidation.py) | Comprueba que se requieran $\ge 5$ errores con similitud $\ge 0.82$ para consolidar una falencia. | `uv run python scripts/test_deficiency_consolidation.py` |
+| [test_agent_nams_isolation.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/test_agent_nams_isolation.py) | Valida que las memorias de Física y Medicina operen completamente aisladas. | `uv run python scripts/test_agent_nams_isolation.py` |
+| [consolidate_student_deficiencies.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/consolidate_student_deficiencies.py) | Proceso batch para analizar y consolidar falencias acumuladas en todos los estudiantes. | `uv run python scripts/consolidate_student_deficiencies.py` |
+| [audit_reasoning_traces.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/audit_reasoning_traces.py) | Inspecciona las trazas de razonamiento y aristas `TOUCHED` en tiempo real desde la terminal. | `uv run python scripts/audit_reasoning_traces.py --limit 15` |
+| [tag_existing_neo4j_nodes.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/tag_existing_neo4j_nodes.py) | Migra y etiqueta nodos conversacionales preexistentes en Neo4j por agente. | `uv run python scripts/tag_existing_neo4j_nodes.py` |
+
+---
+
+## 🛡️ Resiliencia y Mejoras Multimodales en Agentes y Servicios
+
+Paralelamente a las mejoras en memoria, se incorporaron actualizaciones clave para maximizar la robustez operativa de los agentes y la infraestructura:
+
+### 1. Agente Médico (Histopatología Dual-Stage)
+* **Calibración de Umbral Vectorial**: Se ajustó `VERIFICATION_THRESHOLD` a `320.0` para alinearse de forma precisa con la escala de similitud de vectores en Qdrant (reemplazando valores legacy descalibrados de 830/730).
+* **Doble Verificación Híbrida de Imágenes**:
+  1. **Match Perceptual Rápido (`dHash`)**: Si la similitud de hash perceptual es $\ge 0.80$, se confirma de forma inmediata que es la misma imagen exacta en la base de datos de patología.
+  2. **Similitud Semántica Multimodal (`ColPali MaxSim`)**: Si la imagen no es idéntica píxel a píxel pero el tejido comparte características histológicas diagnósticas con un score MaxSim $\ge 320.0$, se acepta como coincidencia semántica válida.
+* **Fallback Automático de Qdrant**: Si la URL remota o el contenedor configurado de Qdrant falla con errores de conexión (`ConnectError` o `ResponseHandlingException`), el cliente conmuta automáticamente a `http://localhost:6333` de forma transparente.
+* **Tolerancia a Fallos de LLM**: Reintento con backoff exponencial y rotación automática de claves ante errores `500`, `502`, `503`, `504`, `high demand`, `overloaded` o `RESOURCE_EXHAUSTED` de Gemini.
+
+### 2. Orquestación y Arranque Automatizado (`start_ordered.py`)
+* **Auto-Inicio de Qdrant**: Antes de inicializar los agentes prioritarios, el script de arranque verifica el puerto `6333` y ejecuta automáticamente `docker start qdrant-local-histo` si el servicio vectorial está inactivo.
+* **Soporte Local Sin API Key**: Tanto el Agente Multimodal como el Médico admiten conexiones locales a Qdrant sin requerir `QDRANT_KEY`.
+
+### 3. Rotador Dinámico de API Keys (`api_key_rotator.py`)
+* **Detección Ampliada de Excepciones**: El rotador intercepta automáticamente más de 12 clases de errores de proveedores de IA, incluyendo cuotas agotadas (`429`), claves revocadas o inválidas (`400`, `403`), límites de prepago y caídas transitorias de servidor (`500`, `503`, `deadline_exceeded`), cambiando instantáneamente a una clave sana de la lista para no interrumpir las sesiones de los usuarios.
 
 ## 📊 Evaluación con LangSmith (Métricas de Generación y Recuperación)
 
@@ -185,7 +318,7 @@ Los evaluadores se dividen en dos áreas clave:
 Cada agente cuenta con su propio script de evaluación independiente que define y ejecuta estas métricas personalizadas sobre un dataset de LangSmith:
 
 #### A. Agente Multimodal (Física)
-*   **Archivo:** [evaluate_langsmith.py](file:///run/media/cetec/c182e059-3c92-4885-9b5a-0b2f0aeaadfe/AIProjects/a2a-test-alone/samples/python/agents/multimodal/evaluate_langsmith.py)
+*   **Archivo:** [evaluate_langsmith.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/samples/python/agents/multimodal/evaluate_langsmith.py)
 *   **Lógica:** Inspecciona el sub-run `retriever` para extraer los textos obtenidos de los PDFs de física. Utiliza un LLM (Gemini 2.5 Flash con rotador de claves) para actuar como juez experto y puntuar la relevancia y el recall.
 *   **Ejecución:**
     ```bash
@@ -194,7 +327,7 @@ Cada agente cuenta con su propio script de evaluación independiente que define 
     ```
 
 #### B. Agente Médico (Asistente de Imágenes Médicas)
-*   **Archivo:** [evaluate_langsmith.py](file:///run/media/cetec/c182e059-3c92-4885-9b5a-0b2f0aeaadfe/AIProjects/a2a-test-alone/samples/python/agents/medical_Images/evaluate_langsmith.py)
+*   **Archivo:** [evaluate_langsmith.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/samples/python/agents/medical_Images/evaluate_langsmith.py)
 *   **Lógica:** Extrae las figuras y descripciones clínicas recuperadas del RAG dual en dos etapas (`buscar_muvera_2stage`). Califica si el contexto de patología recuperado es útil y suficiente para orientar el diagnóstico de referencia.
 *   **Ejecución:**
     ```bash

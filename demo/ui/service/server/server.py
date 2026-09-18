@@ -70,12 +70,9 @@ class ConversationServer:
         agent_manager = os.environ.get('A2A_HOST', 'ADK')
         self.manager: ApplicationManager
 
-        # Use GROQ_API_KEY for BeeAI, Google key rotator for ADK
-        if agent_manager.upper() == 'BEEAI':
-            api_key = os.environ.get('GROQ_API_KEY', '')
-        else:
-            from .api_key_rotator import google_key_rotator
-            api_key = google_key_rotator.get_key()
+        # Use Google key rotator for all managers
+        from .api_key_rotator import google_key_rotator
+        api_key = google_key_rotator.get_key()
         uses_vertex_ai = (
             os.environ.get('GOOGLE_GENAI_USE_VERTEXAI', '').upper() == 'TRUE'
         )
@@ -363,71 +360,54 @@ class ConversationServer:
             return {'status': 'error', 'message': str(e)}
 
     async def _nams_conclusions(self, body: NamsConclusionsBody):
-        """Fetch all user preferences/conclusions and deficiencies from NAMS for a student"""
-        if not hasattr(self.manager, 'neo4j_memory') or not self.manager.neo4j_memory:
-            return {'status': 'inactive', 'conclusions': [], 'deficiencies': []}
-            
-        try:
-            await self.manager._ensure_neo4j_connected()
-            if getattr(self.manager, '_neo4j_connected', False):
-                student_id = body.student_id
-                if not student_id and body.conversation_id:
-                    conv = self.manager.get_conversation(body.conversation_id)
-                    if conv:
-                        student_id = conv.name or body.conversation_id
-                    else:
-                        student_id = body.conversation_id
-                
-                if not student_id:
-                    return {'status': 'active', 'conclusions': [], 'deficiencies': []}
-
-                agent_name = body.agent_name
-                if not agent_name and body.conversation_id:
-                    if hasattr(self.manager, '_active_sessions'):
-                        agent_name = self.manager._active_sessions.get(body.conversation_id)
-                    if not agent_name:
-                        conv = self.manager.get_conversation(body.conversation_id)
-                        if conv and conv.messages:
-                            for msg in reversed(conv.messages):
-                                role_str = msg.role.name if hasattr(msg.role, 'name') else str(msg.role)
-                                if role_str == 'agent':
-                                    if hasattr(msg, 'recipient') and msg.recipient:
-                                        agent_name = msg.recipient
-                                        break
-                                    elif isinstance(msg, dict) and msg.get('recipient'):
-                                        agent_name = msg['recipient']
-                                        break
-                
-                if not agent_name:
-                    agent_name = "Tutor Socrático de Física Multimodal"
-
-                student_identifier = f"{student_id}_{agent_name}"
-                agent_identifier = f"system_{agent_name}"
-                
-                print(f"🔍 Fetching student preferences/insights for '{student_identifier}' and system deficiencies for '{agent_identifier}'")
-                student_prefs = await self.manager.neo4j_memory.long_term.get_preferences_for(student_identifier)
-                agent_prefs = await self.manager.neo4j_memory.long_term.get_preferences_for(agent_identifier)
-                
-                conclusions = []
-                deficiencies = []
-                
-                # Retrieve student style preferences and knowledge insights
-                for p in student_prefs:
-                    pref_str = p.preference if hasattr(p, 'preference') else (p.get('preference', str(p)) if isinstance(p, dict) else str(p))
-                    conclusions.append(pref_str)
-                    
-                # Retrieve system deficiencies
-                for p in agent_prefs:
-                    pref_str = p.preference if hasattr(p, 'preference') else (p.get('preference', str(p)) if isinstance(p, dict) else str(p))
-                    deficiencies.append(pref_str)
-                        
-                return {
-                    'status': 'active', 
-                    'conclusions': conclusions, 
-                    'deficiencies': deficiencies
-                }
+        """Fetch all user preferences/conclusions and deficiencies from NAMS for a student and agent."""
+        student_id = body.student_id
+        if not student_id and body.conversation_id:
+            conv = self.manager.get_conversation(body.conversation_id)
+            if conv:
+                student_id = conv.name or body.conversation_id
             else:
-                return {'status': 'inactive', 'conclusions': [], 'deficiencies': []}
+                student_id = body.conversation_id
+
+        if not student_id:
+            return {'status': 'active', 'conclusions': [], 'deficiencies': []}
+
+        agent_name = body.agent_name
+        if not agent_name and body.conversation_id:
+            if hasattr(self.manager, '_active_sessions'):
+                agent_name = self.manager._active_sessions.get(body.conversation_id)
+            if not agent_name:
+                conv = self.manager.get_conversation(body.conversation_id)
+                if conv and conv.messages:
+                    for msg in reversed(conv.messages):
+                        role_str = msg.role.name if hasattr(msg.role, 'name') else str(msg.role)
+                        if role_str == 'agent':
+                            if hasattr(msg, 'recipient') and msg.recipient:
+                                agent_name = msg.recipient
+                                break
+                            elif isinstance(msg, dict) and msg.get('recipient'):
+                                agent_name = msg['recipient']
+                                break
+
+        if not agent_name:
+            agent_name = "Tutor Socrático de Física Multimodal"
+
+        # Resolve isolated agent NAMS memory
+        mem = None
+        if hasattr(self.manager, 'get_agent_memory'):
+            mem = self.manager.get_agent_memory(agent_name)
+
+        if not mem:
+            return {'status': 'inactive', 'conclusions': [], 'deficiencies': []}
+
+        try:
+            print(f"🔍 Fetching isolated conclusions & deficiencies for agent '{agent_name}' and student '{student_id}'...")
+            conclusions, deficiencies = await mem.get_conclusions(student_id)
+            return {
+                'status': 'active',
+                'conclusions': conclusions,
+                'deficiencies': deficiencies
+            }
         except Exception as e:
             print(f"Error fetching NAMS conclusions: {e}")
             return {'status': 'error', 'message': str(e), 'conclusions': [], 'deficiencies': []}

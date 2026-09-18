@@ -4,7 +4,7 @@ import datetime
 import json
 import os
 import uuid
-from typing import Any
+from typing import Any, Optional, Dict, List, Union
 
 import httpx
 from a2a.types import (AgentCard, DataPart, FilePart, FileWithBytes,
@@ -29,6 +29,7 @@ from neo4j_agent_memory import MemoryClient, MemorySettings, ExtractionConfig, E
 from neo4j_agent_memory.llm.adapters.sentence_transformers import SentenceTransformersProvider
 from pydantic import BaseModel, Field, SecretStr
 
+from .agent_nams import AgentNAMSMemory
 from .api_key_rotator import (
     google_key_rotator,
     create_google_llm,
@@ -545,54 +546,75 @@ class BeeAIHostManager(ApplicationManager):
         # Wrap it for BeeAI
         self.chat_model = LangChainChatModel(self.llm)
 
-        # Initialize Neo4j Agent Memory direct connection to Aura DB
+        # Initialize independent AgentNAMSMemory for each multi-agent system
         uri = os.getenv("NEO4J_URI")
         username = os.getenv("NEO4J_USERNAME")
         password = os.getenv("NEO4J_PASSWORD")
         database = os.getenv("NEO4J_DATABASE")
 
+        self.agent_memories: dict[str, AgentNAMSMemory] = {}
         if uri and username and password:
-            print(f"🔗 Initializing Neo4j Agent Memory direct connection to: {uri} (db: {database})")
-            try:
-                # Use local SentenceTransformers BAAI/bge-small-en-v1.5 (384 dimensions)
-                embedder = SentenceTransformersProvider(
-                    model="BAAI/bge-small-en-v1.5",
-                    device="cpu"
-                )
-                self.memory_settings = MemorySettings(
-                    neo4j={
-                        "uri": uri,
-                        "username": username,
-                        "password": SecretStr(password),
-                        "database": database or "neo4j"
-                    },
-                    embedding=embedder,
-                    llm="groq/llama-3.3-70b-versatile",
-                    extraction=ExtractionConfig(
-                        extractor_type=ExtractorType.LLM
-                    )
-                )
-                self.neo4j_memory = MemoryClient(self.memory_settings)
-                print("✅ Neo4j Agent Memory client initialized successfully with local embeddings")
-            except Exception as e:
-                print(f"❌ Error initializing Neo4j Agent Memory: {e}")
-                self.neo4j_memory = None
+            print(f"🔗 Initializing isolated NAMS Memories for agents (db: {database or 'neo4j'})...")
+            physics_ontology = os.path.join(os.path.dirname(__file__), "ontologies", "physics_ontology.json")
+            self.agent_memories["physics"] = AgentNAMSMemory(
+                agent_id="physics",
+                agent_name="Tutor Socrático de Física Multimodal",
+                uri=uri,
+                username=username,
+                password=password,
+                database=database or "neo4j",
+                ontology_path=physics_ontology if os.path.exists(physics_ontology) else None,
+            )
+            self.agent_memories["medical"] = AgentNAMSMemory(
+                agent_id="medical",
+                agent_name="Asistente Médico",
+                uri=uri,
+                username=username,
+                password=password,
+                database=database or "neo4j",
+            )
+            self.agent_memories["images"] = AgentNAMSMemory(
+                agent_id="images",
+                agent_name="Image Generator Agent",
+                uri=uri,
+                username=username,
+                password=password,
+                database=database or "neo4j",
+            )
+            print("✅ Isolated NAMS Memories registered for physics, medical, and images agents.")
         else:
             print("⚠️ Neo4j connection parameters not found in environment. Running without Neo4j Agent Memory.")
-            self.neo4j_memory = None
 
-    async def _ensure_neo4j_connected(self):
-        """Idempotently ensure that the Neo4j Memory Client is connected."""
-        if self.neo4j_memory:
-            if not getattr(self, '_neo4j_connected', False):
-                try:
-                    print("🔌 Connecting Neo4j Agent Memory client...")
-                    await self.neo4j_memory.connect()
-                    self._neo4j_connected = True
-                    print("✅ Connected to Neo4j Agent Memory")
-                except Exception as e:
-                    print(f"❌ Failed to connect to Neo4j Agent Memory: {e}")
-                    self._neo4j_connected = False
+    @property
+    def neo4j_memory(self):
+        """Propiedad de compatibilidad que retorna el cliente NAMS activo."""
+        default_mem = self.get_agent_memory("physics")
+        return default_mem.client if default_mem else None
+
+    def get_agent_memory(self, agent_name_or_id: Optional[str]) -> Optional[AgentNAMSMemory]:
+        """Resuelve la memoria NAMS aislada correspondiente según el nombre o id del agente."""
+        if not self.agent_memories:
+            return None
+        if not agent_name_or_id:
+            return self.agent_memories.get("physics")
+
+        name_lower = str(agent_name_or_id).lower()
+        if any(k in name_lower for k in ["física", "fisica", "physics", "multimodal", "tutor"]):
+            return self.agent_memories.get("physics")
+        elif any(k in name_lower for k in ["médic", "medic", "histolog", "doctor"]):
+            return self.agent_memories.get("medical")
+        elif any(k in name_lower for k in ["image", "imagen", "creador", "generator"]):
+            return self.agent_memories.get("images")
+        return self.agent_memories.get("physics")
+
+    async def _ensure_neo4j_connected(self, agent_name: Optional[str] = None):
+        """Asegura de forma idempotente que la memoria NAMS del agente esté conectada."""
+        mem = self.get_agent_memory(agent_name)
+        if mem:
+            await mem.ensure_connected()
+            self._neo4j_connected = mem._connected
+        else:
+            self._neo4j_connected = False
 
     def _load_sessions(self):
         """Carga las sesiones activas desde el disco."""
@@ -831,22 +853,15 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
 
         active_agent = self._active_sessions.get(context_id)
 
-        # Save user message to Neo4j Short-Term memory
-        if self.neo4j_memory:
-            await self._ensure_neo4j_connected()
-            if getattr(self, '_neo4j_connected', False):
+        # Save user message to agent-specific NAMS memory if active session exists
+        student_id = conversation.name or context_id if conversation else context_id
+        if active_agent:
+            mem = self.get_agent_memory(active_agent)
+            if mem:
                 try:
-                    await self.neo4j_memory.short_term.add_message(
-                        session_id=context_id,
-                        role="user",
-                        content=text_content
-                    )
-                    print("💾 Saved user message to Neo4j Short-Term memory")
-                except OSError as pipe_err:
-                    print(f"⚠️ Neo4j pipe error saving user message (will reconnect): {pipe_err}")
-                    self._neo4j_connected = False
+                    await mem.add_user_message(session_id=context_id, content=text_content, student_id=student_id)
                 except Exception as e:
-                    print(f"⚠️ Error saving user message to Neo4j: {e}")
+                    print(f"⚠️ Error saving user message to {active_agent} NAMS: {e}")
 
         # Use BeeAI Workflow pattern for Gemini compatibility
         try:
@@ -986,34 +1001,25 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                 del self._active_sessions[context_id]
                 self._save_sessions()
 
-        # Save assistant response to Neo4j Short-Term memory
-        if self.neo4j_memory and resp_text:
-            await self._ensure_neo4j_connected()
-            if getattr(self, '_neo4j_connected', False):
-                try:
-                    # Strip visual/binary markers from saved message for clean text history
-                    clean_resp_text = resp_text.split("__IMAGE_PARTS__:")[0].strip()
-                    await self.neo4j_memory.short_term.add_message(
-                        session_id=context_id,
-                        role="assistant",
-                        content=clean_resp_text
-                    )
-                    print("💾 Saved assistant response to Neo4j Short-Term memory")
-                except OSError as pipe_err:
-                    print(f"⚠️ Neo4j pipe error saving assistant response (will reconnect): {pipe_err}")
-                    self._neo4j_connected = False
-                except Exception as e:
-                    print(f"⚠️ Error saving assistant response to Neo4j: {e}")
+        # Determine the agent name for NAMS memory scoping
+        resolved_agent_name = None
+        if active_agent:
+            resolved_agent_name = active_agent
+        elif 'final_state' in locals() and final_state:
+            resolved_agent_name = final_state.chosen_agent
 
-            # Determine the agent name for NAMS memory scoping
-            resolved_agent_name = None
-            if active_agent:
-                resolved_agent_name = active_agent
-            elif 'final_state' in locals() and final_state:
-                resolved_agent_name = final_state.chosen_agent
-
-            # Run Self-Learning in background to extract and persist user preferences/facts
-            asyncio.create_task(self._learn_user_preferences(text_content, context_id, resolved_agent_name))
+        # Save assistant response (and user message if new session) to agent's NAMS memory
+        mem = self.get_agent_memory(resolved_agent_name)
+        if mem and resp_text:
+            try:
+                student_id = conversation.name or context_id if conversation else context_id
+                # If this was not already an active session, save the user message to this agent's session
+                if not active_agent:
+                    await mem.add_user_message(session_id=context_id, content=text_content, student_id=student_id)
+                await mem.add_assistant_message(session_id=context_id, content=resp_text, student_id=student_id)
+                asyncio.create_task(mem.learn_user_preferences(text_content, student_id, self.llm))
+            except Exception as e:
+                print(f"⚠️ Error saving assistant response to {resolved_agent_name} NAMS: {e}")
 
         # Build response parts — detect image marker from image agent
         import json as _json
@@ -1066,220 +1072,40 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             self._pending_message_ids.remove(message.message_id)
 
     async def get_student_context(self, query: str, student_id: str, session_id: str, agent_name: str | None = None, max_items: int = 10) -> str:
-        """Get combined context from memory, but filter long-term preferences strictly by student_id and optionally agent_name."""
-        parts = []
-        user_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
+        """Obtiene el contexto de memoria NAMS aislado específicamente para el agente solicitado."""
+        mem = self.get_agent_memory(agent_name)
+        if not mem:
+            return ""
+        return await mem.get_context(query=query, student_id=student_id, session_id=session_id, max_items=max_items)
 
-        # 1. Short-term memory (session-scoped conversation history)
-        short_term_context = await self.neo4j_memory.short_term.get_context(
-            query,
-            session_id=session_id,
-            max_messages=max_items,
-        )
-        if short_term_context:
-            parts.append(f"## Conversation History\n{short_term_context}")
-
-        # 2. Long-term memory - filtered strictly to user_identifiers (student + agent system)
-        embedding = None
-        if self.neo4j_memory.long_term._embedder is not None:
-            try:
-                embedding = await self.neo4j_memory.long_term._embedder.embed(query)
-            except Exception as e:
-                print(f"⚠️ Error generating embedding for student context search: {e}")
-
-        # Determine user identifiers to query (student preferences/insights, and system/agent deficiencies)
-        student_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
-        agent_identifier = f"system_{agent_name}" if agent_name else "system"
-        user_identifiers = [student_identifier, agent_identifier]
-
-        preferences = []
-        if embedding is not None:
-            try:
-                # Custom cypher query to enforce User relationship for both student and system/agent
-                cypher_query = """
-                CALL db.index.vector.queryNodes('preference_embedding_idx', $limit, $embedding)
-                YIELD node, score
-                WHERE score >= $threshold
-                MATCH (u:User)-[:HAS_PREFERENCE]->(node)
-                WHERE u.identifier IN $user_identifiers
-                RETURN node AS p, score
-                ORDER BY score DESC
-                """
-                results = await self.neo4j_memory.long_term._client.execute_read(
-                    cypher_query,
-                    {
-                        "embedding": embedding,
-                        "limit": max_items,
-                        "threshold": 0.7,
-                        "user_identifiers": user_identifiers
-                    }
-                )
-                for row in results:
-                    pref_data = dict(row["p"])
-                    pref = self.neo4j_memory.long_term._parse_preference(pref_data)
-                    preferences.append(pref)
-            except Exception as e:
-                print(f"⚠️ Vector search failed, falling back to direct preference query: {e}")
-
-        # Fallback: if vector search failed or returned nothing, fetch preferences directly for all identifiers
-        if not preferences:
-            try:
-                preferences = []
-                for uid in user_identifiers:
-                    prefs = await self.neo4j_memory.long_term.get_preferences_for(uid)
-                    if prefs:
-                        preferences.extend(prefs)
-            except Exception as e:
-                print(f"⚠️ Failed to fetch preferences for user_identifiers {user_identifiers}: {e}")
-
-        if preferences:
-            parts.append("## Relevant Knowledge")
-            for pref in preferences:
-                line = f"- [{pref.category}] {pref.preference}"
-                if pref.context:
-                    line += f" (context: {pref.context})"
-                parts.append(line)
-
-        # 3. Entities
-        try:
-            entities = await self.neo4j_memory.long_term.search_entities(query, limit=max_items)
-            if entities:
-                entity_parts = []
-                for entity in entities:
-                    type_str = entity.full_type
-                    line = f"- {entity.display_name} ({type_str})"
-                    if entity.description:
-                        line += f": {entity.description}"
-                    entity_parts.append(line)
-                if entity_parts:
-                    parts.append("## Relevant Entities\n" + "\n".join(entity_parts))
-        except Exception as e:
-            print(f"⚠️ Failed to search entities: {e}")
-
-        return "\n\n".join(parts)
-
-    async def add_deficiency(self, student_id: str, tema: str, correccion: str, agent_name: str | None = None):
-        """Save a deficiency verified by the teacher both semantically and structurally in Neo4j, scoped per agent."""
-        if not self.neo4j_memory:
-            print("⚠️ Neo4j Memory Client not initialized. Cannot save deficiency.")
+    async def add_deficiency(self, student_id: str, tema: str, correccion: str, agent_name: str | None = None) -> bool:
+        """Guarda una falencia confirmada del estudiante tanto semántica como estructuralmente en la memoria NAMS."""
+        mem = self.get_agent_memory(agent_name)
+        if not mem:
+            print(f"⚠️ Memoria NAMS no disponible para '{agent_name}'. No se puede registrar la falencia.")
             return False
+        return await mem.register_confirmed_deficiency(student_id=student_id, tema=tema, correccion=correccion)
 
-        try:
-            await self._ensure_neo4j_connected()
-            if not getattr(self, '_neo4j_connected', False):
-                print("❌ Neo4j not connected. Cannot save deficiency.")
-                return False
-
-            user_identifier = f"system_{agent_name}" if agent_name else "system"
-
-            # 1. Save semantically as a Preference node scoped to the agent/system
-            pref_text = f"El sistema/agente tiene una falencia en '{tema}': {correccion}"
-            await self.neo4j_memory.long_term.add_preference(
-                category="falencia",
-                preference=pref_text,
-                user_identifier=user_identifier
-            )
-            print(f"✅ Saved semantic deficiency preference for user_identifier '{user_identifier}'")
-
-            # 2. Save structurally as custom entities and relationships
-            # Get or create the Agent entity (instead of Student)
-            agent_entity_name = agent_name or "System"
-            agent_entity, _ = await self.neo4j_memory.long_term.add_entity(
-                name=agent_entity_name,
-                entity_type="Agent",
-                description=f"Perfil del agente {agent_name}",
-                resolve=False,
-                deduplicate=True
-            )
-
-            # Get or create the Concept entity
-            concept_entity, _ = await self.neo4j_memory.long_term.add_entity(
-                name=f"{tema} ({agent_entity_name})",
-                entity_type="Concept",
-                description=f"Concepto de física: {tema} (para el agente {agent_entity_name})",
-                resolve=False,
-                deduplicate=True
-            )
-
-            # Add TIENE_FALENCIA relationship between Agent and Concept
-            await self.neo4j_memory.long_term.add_relationship(
-                source=agent_entity.id,
-                target=concept_entity.id,
-                relationship_type="TIENE_FALENCIA",
-                description=correccion
-            )
-            print(f"✅ Saved structural relationship (Agent {agent_entity_name}) -[:TIENE_FALENCIA]-> (Concept {tema})")
-            return True
-
-        except Exception as e:
-            print(f"❌ Error adding deficiency: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+    async def validate_student_response(self, student_claim: str, agent_name: str | None = None) -> dict:
+        """Valida pedagógicamente la afirmación del estudiante contra el KG canónico del agente."""
+        mem = self.get_agent_memory(agent_name)
+        if not mem:
+            return {
+                "is_correct": True,
+                "concept": "general",
+                "canonical_value": "",
+                "student_claim": student_claim,
+                "explanation": "Memoria NAMS no disponible",
+            }
+        return await mem.validate_against_kg(student_claim=student_claim, llm=self.llm)
 
     async def _learn_user_preferences(self, user_message: str, context_id: str, agent_name: str | None = None):
-        """Extract and persist user preferences/facts and student insights to Neo4j Agent Memory in background."""
-        if not self.neo4j_memory or not user_message:
+        """Extrae y persiste preferencias e insights en la memoria NAMS aislada del agente en segundo plano."""
+        mem = self.get_agent_memory(agent_name)
+        if not mem or not user_message:
             return
-            
-        try:
-            print("🧠 Running self-learning extractor in background...")
-            from langchain_core.messages import HumanMessage
-            
-            prompt = f"""Analiza el siguiente mensaje enviado por un estudiante:
-"{user_message}"
- 
-Determina si se pueden extraer dos tipos de información:
-1. Preferencias personales o de estilo: Hábitos del usuario, estilo de comunicación preferido o datos biográficos (por ejemplo: prefiere respuestas cortas, le gustan las explicaciones con analogías, se llama Diego, estudia ingeniería, etc.).
-2. Insights o falencias de conocimiento del alumno: Conceptos recurrentes, dudas o temas sobre los cuales el alumno realiza preguntas o demuestra no comprender (por ejemplo: no comprende la diferencia entre masa y peso, tiene dudas recurrentes sobre la conservación de la energía, no sabe cómo aplicar la tercera ley de Newton, etc.).
+        conversation = self.get_conversation(context_id)
+        student_id = conversation.name or context_id if conversation else context_id
+        await mem.learn_user_preferences(user_message, student_id, self.llm)
 
-Si encuentras alguno de estos tipos, descríbelo en una frase corta y directa en tercera persona (ejemplo: "El usuario prefiere explicaciones con el método socrático", "El alumno tiene dudas sobre la conservación de la energía").
-Si no encuentras nada relevante para una categoría, responde NONE para esa categoría.
-
-Responde estrictamente en el formato:
-Preferencia: <frase corta o NONE>
-Insight: <frase corta o NONE>"""
-
-            response = await ainvoke_with_retry(self.llm, [HumanMessage(content=prompt)])
-            result = response.content.strip()
-            
-            # Parse preferences and insights
-            preferences = []
-            insights = []
-            
-            for line in result.split('\n'):
-                line = line.strip()
-                if line.startswith("Preferencia:"):
-                    pref_val = line.split(":", 1)[1].strip()
-                    if pref_val and pref_val.upper() != "NONE":
-                        preferences.append(pref_val)
-                elif line.startswith("Insight:"):
-                    ins_val = line.split(":", 1)[1].strip()
-                    if ins_val and ins_val.upper() != "NONE":
-                        insights.append(ins_val)
-            
-            conversation = self.get_conversation(context_id)
-            student_id = conversation.name or context_id if conversation else context_id
-            user_identifier = f"{student_id}_{agent_name}" if agent_name else student_id
-            
-            for pref in preferences:
-                print(f"💾 Self-learning: Extracted preference -> '{pref}' for user_identifier '{user_identifier}'")
-                await self.neo4j_memory.long_term.add_preference(
-                    category="user_preference",
-                    preference=pref,
-                    user_identifier=user_identifier
-                )
-                print(f"✅ Preference persisted in Neo4j Graph")
-                
-            for ins in insights:
-                print(f"💾 Self-learning: Extracted student insight -> '{ins}' for user_identifier '{user_identifier}'")
-                await self.neo4j_memory.long_term.add_preference(
-                    category="insight",
-                    preference=ins,
-                    user_identifier=user_identifier
-                )
-                print(f"✅ Insight persisted in Neo4j Graph")
-                
-        except Exception as e:
-            print(f"⚠️ Error in self-learning extractor: {e}")
 

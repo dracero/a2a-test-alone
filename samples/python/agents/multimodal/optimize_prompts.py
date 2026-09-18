@@ -429,18 +429,21 @@ def main():
     print(f"   Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     # ── Configure LLM ──
+    from api_key_rotator import google_key_rotator
+    google_key = google_key_rotator.get_key()
     groq_key = os.getenv("GROQ_API_KEY")
-    if not groq_key:
-        print("❌ GROQ_API_KEY not set. Please set it in .env or environment.")
+    api_key = google_key or groq_key
+    if not api_key:
+        print("❌ Neither GOOGLE_API_KEY nor GROQ_API_KEY is set. Please set it in .env or environment.")
         sys.exit(1)
 
-    model_name = args.model or "llama-3.3-70b-versatile"
+    model_name = args.model or ("gemini/gemini-2.5-flash" if google_key else "llama-3.3-70b-versatile")
     print(f"   Model: {model_name}")
     print(f"   Temperature: {args.temperature}")
 
     lm = dspy.LM(
         model=model_name,
-        api_key=groq_key,
+        api_key=api_key,
         temperature=args.temperature,
         max_tokens=4096,
     )

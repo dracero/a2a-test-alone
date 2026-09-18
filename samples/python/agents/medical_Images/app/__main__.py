@@ -49,10 +49,16 @@ def main(host, port):
         else:
             logger.info("📊 LangSmith Monitoring: DISABLED")
 
-        # Verificar Groq API Key
-        if not os.getenv('GROQ_API_KEY'):
+        # Verificar Google API Key
+        import sys as _sys
+        from pathlib import Path as _Path
+        _root_dir = str(_Path(__file__).resolve().parents[5])
+        if _root_dir not in _sys.path:
+            _sys.path.insert(0, _root_dir)
+        from api_key_rotator import google_key_rotator
+        if not google_key_rotator.get_key():
             raise MissingAPIKeyError(
-                'GROQ_API_KEY environment variable not set.'
+                'GOOGLE_API_KEY environment variable not set.'
             )
         
         # Verificar Tavily API Key
@@ -203,7 +209,7 @@ def main(host, port):
     except MissingAPIKeyError as e:
         logger.error(f'❌ Error: {e}')
         logger.error('Por favor, configura las siguientes variables de entorno:')
-        logger.error('  - GROQ_API_KEY (para Llama 4)')
+        logger.error('  - GOOGLE_API_KEY (para Gemini 2.5 Flash)')
         logger.error('  - TAVILY_API_KEY (para búsqueda médica)')
         sys.exit(1)
     except Exception as e:

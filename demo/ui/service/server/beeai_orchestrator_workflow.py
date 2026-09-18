@@ -1,6 +1,6 @@
 """
 BeeAI Workflow-based Orchestrator
-Compatible with Groq (Llama 4)
+Powered by Google Gemini 2.5 Flash
 Uses explicit workflow steps instead of ReAct pattern
 """
 
@@ -55,7 +55,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             print(f"❌ {state.error}")
             return None
     
-    # Step 2: Use Groq to classify and choose the best agent
+    # Step 2: Use Gemini 2.5 to classify and choose the best agent
     @traceable(name="orchestrator_classify_and_choose", run_type="chain", tags=["agent_type:orchestrator", "orchestrator"])
     async def classify_and_choose(state: OrchestratorState) -> str:
         """Use multimodal LLM to analyze the request (including images) and choose the best agent"""
@@ -128,7 +128,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                         print(f"🖼️ Image {idx} included for visual classification: {mime_type}")
                 
                 classification_llm = getattr(manager, 'vision_llm', None) or llm
-                print(f"🔍 Sending MULTIMODAL classification prompt to Groq ({len(state.image_data_list)} images) using model: {getattr(classification_llm, 'model', 'unknown')}...")
+                print(f"🔍 Sending MULTIMODAL classification prompt to Gemini ({len(state.image_data_list)} images) using model: {getattr(classification_llm, 'model', 'unknown')}...")
                 try:
                     llm_response = await ainvoke_with_retry(classification_llm, [HumanMessage(content=content)])
                 except Exception as vision_err:
@@ -137,17 +137,17 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                     llm_response = await ainvoke_with_retry(llm, [HumanMessage(content=classification_text)])
             else:
                 # Text-only classification
-                print(f"🔍 Sending text-only classification prompt to Groq...")
+                print(f"🔍 Sending text-only classification prompt to Gemini...")
                 llm_response = await ainvoke_with_retry(llm, [HumanMessage(content=classification_text)])
             
-            print(f"📥 Groq response type: {type(llm_response)}")
-            print(f"📥 Groq response content: {llm_response.content}")
+            print(f"📥 Gemini response type: {type(llm_response)}")
+            print(f"📥 Gemini response content: {llm_response.content}")
             
             raw_response = str(llm_response.content).strip() if llm_response.content else ""
             print(f"🎯 Raw chosen: '{raw_response}'")
             
             if not raw_response:
-                print(f"⚠️ Groq returned empty response, using first agent")
+                print(f"⚠️ Gemini returned empty response, using first agent")
                 state.chosen_agent = state.available_agents[0]['name']
                 return "send_to_agent"
             
@@ -281,54 +281,51 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             
             # Query NAMS context specifically for the chosen agent
             agent_context_text = ""
-            if manager.neo4j_memory:
-                await manager._ensure_neo4j_connected()
-                if getattr(manager, '_neo4j_connected', False):
-                    try:
-                        student_id = state.student_id or state.context_id
-                        print(f"🧠 Querying student NAMS context for student '{student_id}' and agent '{state.chosen_agent}'...")
-                        ctx = await manager.get_student_context(
-                            state.user_message,
-                            student_id=student_id,
-                            session_id=state.context_id,
-                            agent_name=state.chosen_agent
-                        )
-                        if ctx:
-                            raw_text = str(ctx)
-                            ignore_headers = (
-                                '## conversation history',
-                                '### relevant past messages',
-                                'conversation history',
-                                'relevant past messages'
-                            )
-                            filtered_lines = []
+            try:
+                student_id = state.student_id or state.context_id
+                print(f"🧠 Querying student NAMS context for student '{student_id}' and agent '{state.chosen_agent}'...")
+                ctx = await manager.get_student_context(
+                    state.user_message,
+                    student_id=student_id,
+                    session_id=state.context_id,
+                    agent_name=state.chosen_agent
+                )
+                if ctx:
+                    raw_text = str(ctx)
+                    ignore_headers = (
+                        '## conversation history',
+                        '### relevant past messages',
+                        'conversation history',
+                        'relevant past messages'
+                    )
+                    filtered_lines = []
+                    in_chat_history_section = False
+                    for line in raw_text.split('\n'):
+                        line_stripped = line.strip()
+                        line_lower = line_stripped.lower()
+                        if not line_lower:
+                            continue
+                        if any(h in line_lower for h in ignore_headers):
+                            in_chat_history_section = True
+                            continue
+                        if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
                             in_chat_history_section = False
-                            for line in raw_text.split('\n'):
-                                line_stripped = line.strip()
-                                line_lower = line_stripped.lower()
-                                if not line_lower:
-                                    continue
-                                if any(h in line_lower for h in ignore_headers):
-                                    in_chat_history_section = True
-                                    continue
-                                if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
-                                    in_chat_history_section = False
-                                    continue
-                                if in_chat_history_section:
-                                    continue
-                                if any(line_lower.startswith(prefix) for prefix in [
-                                    'user:', 'assistant:', 'human:', 'ai:',
-                                    'usuario:', 'asistente:', 'q:', 'a:',
-                                    '- [user]', '- [assistant]', '- [human]', '- [ai]',
-                                    '- [usuario]', '- [asistente]'
-                                ]):
-                                    continue
-                                filtered_lines.append(line)
-                            agent_context_text = '\n'.join(filtered_lines).strip()
-                            if len(agent_context_text) > 3000:
-                                agent_context_text = agent_context_text[:3000] + "\n[... truncado]"
-                    except Exception as e:
-                        print(f"⚠️ Error retrieving Neo4j context for chosen agent {state.chosen_agent}: {e}")
+                            continue
+                        if in_chat_history_section:
+                            continue
+                        if any(line_lower.startswith(prefix) for prefix in [
+                            'user:', 'assistant:', 'human:', 'ai:',
+                            'usuario:', 'asistente:', 'q:', 'a:',
+                            '- [user]', '- [assistant]', '- [human]', '- [ai]',
+                            '- [usuario]', '- [asistente]'
+                        ]):
+                            continue
+                        filtered_lines.append(line)
+                    agent_context_text = '\n'.join(filtered_lines).strip()
+                    if len(agent_context_text) > 3000:
+                        agent_context_text = agent_context_text[:3000] + "\n[... truncado]"
+            except Exception as e:
+                print(f"⚠️ Error retrieving Neo4j context for chosen agent {state.chosen_agent}: {e}")
 
             message_text = state.user_message
             if agent_context_text:
