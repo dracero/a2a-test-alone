@@ -882,13 +882,14 @@ class GestorQdrantMuvera:
     def client(self):
         """Cliente Qdrant cacheado"""
         if self._client is None:
+            api_key = self.api_key if (self.api_key and not self.url.startswith("http://localhost") and not self.url.startswith("http://127.0.0.1")) else None
             self._client = AsyncQdrantClient(
                 url=self.url,
-                api_key=self.api_key,
+                api_key=api_key,
                 timeout=120,
                 prefer_grpc=False
             )
-            print("🔗 Cliente Qdrant conectado")
+            print(f"🔗 Cliente Qdrant conectado ({self.url})")
         return self._client
 
     async def crear_colecciones(self):
@@ -1104,7 +1105,30 @@ class GestorQdrantMuvera:
             return resultados, has_rejected
 
         except Exception as e:
-            print(f"❌ Error búsqueda MUVERA: {e}")
+            # Si falló la conexión remota, reintentar una vez con localhost:6333
+            if self.url != "http://localhost:6333" and ("ConnectError" in repr(e) or "ResponseHandlingException" in repr(e)):
+                print(f"⚠️ Error conectando a Qdrant ({self.url}). Reintentando automáticamente con http://localhost:6333...")
+                try:
+                    self.url = "http://localhost:6333"
+                    self.api_key = None
+                    self._client = AsyncQdrantClient(url=self.url, api_key=None, timeout=30, prefer_grpc=False)
+                    return await self.buscar_muvera_2stage(
+                        query_multivector=query_multivector,
+                        query_fde=query_fde,
+                        top_k=top_k,
+                        prefetch_multiplier=prefetch_multiplier,
+                        min_score=min_score,
+                        figuras_filtro=figuras_filtro,
+                        filtro_tipo=filtro_tipo,
+                        filtro_paginas=filtro_paginas
+                    )
+                except Exception as retry_e:
+                    err_retry = str(retry_e).strip() or repr(retry_e)
+                    print(f"❌ Error en reintento local MUVERA: {err_retry}")
+            err_msg = str(e).strip() or repr(e)
+            print(f"❌ Error búsqueda MUVERA: {err_msg}")
+            import traceback
+            traceback.print_exc()
             return [], False
 
 # ============================================================================
@@ -1382,8 +1406,10 @@ class SistemaRAGColPaliPuro:
                 return response
             except Exception as e:
                 err_str = str(e)
-                es_rate_limit = _is_quota_error(e)
-                if es_rate_limit and intento < intentos - 1:
+                es_retryable = _is_quota_error(e) or any(
+                    code in err_str.lower() for code in ["503", "unavailable", "high demand", "overloaded", "500", "502", "504", "deadline_exceeded"]
+                )
+                if es_retryable and intento < intentos - 1:
                     # Rotar key y re-crear LLM
                     old_key = getattr(self.llm, 'google_api_key', '') or ''
                     if old_key:
@@ -1403,7 +1429,7 @@ class SistemaRAGColPaliPuro:
                     else:
                         wait_time = delay * (2 ** intento)
                         
-                    print(f"⚠️ [Gemini Rate Limit] Key rotada. Reintentando en {wait_time:.2f}s... (Intento {intento+1}/{intentos})")
+                    print(f"⚠️ [Gemini Server/Quota Error: {type(e).__name__}] Key rotada. Reintentando en {wait_time:.2f}s... (Intento {intento+1}/{intentos})")
                     await asyncio.sleep(wait_time)
                 else:
                     raise e
@@ -1743,16 +1769,17 @@ Ejemplo:
                     env_val = os.getenv("VERIFICATION_THRESHOLD")
                     if env_val:
                         val = float(env_val)
-                        if val == 830.0 and Config.QUANTIZATION_BITS == 4:
-                            print("ℹ️ Ajustando VERIFICATION_THRESHOLD de 830 a 730 debido a cuantización de 4-bit.")
-                            UMBRAL_VERIFICACION = 730.0
+                        # Si quedó el valor legacy descalibrado de 830/730 para vectores Qdrant
+                        if val >= 700.0:
+                            print(f"ℹ️ Calibrando VERIFICATION_THRESHOLD de {val:.1f} a 320.0 para compatibilidad con vectores Qdrant.")
+                            UMBRAL_VERIFICACION = 320.0
                         else:
                             UMBRAL_VERIFICACION = val
                     else:
-                        UMBRAL_VERIFICACION = 730.0 if Config.QUANTIZATION_BITS == 4 else 830.0
+                        UMBRAL_VERIFICACION = 320.0
                 except (ValueError, TypeError):
-                    print("⚠️ VERIFICATION_THRESHOLD inválido, usando default adaptativo")
-                    UMBRAL_VERIFICACION = 730.0 if Config.QUANTIZATION_BITS == 4 else 830.0
+                    print("⚠️ VERIFICATION_THRESHOLD inválido, usando default adaptativo (320.0)")
+                    UMBRAL_VERIFICACION = 320.0
 
 
                 imagenes_a_verificar = [
@@ -1782,29 +1809,26 @@ Ejemplo:
                     match_name = os.path.basename(match_path)
                     qdrant_score = img_result.get('score', 0.0)
 
+                    # Comprobación visual perceptual (dHash)
+                    dhash_sim = self._verificar_match_visual(state['imagen_consulta'], match_path)
+                    DHASH_THRESHOLD = 0.80
+                    es_match_visual = (dhash_sim is not None and dhash_sim >= DHASH_THRESHOLD)
+
                     print(f"\n   🔬 VERIFICACIÓN EMBEDDINGS: query vs {match_name}")
-                    print(f"      MaxSim directo (mismo modelo): {maxsim_directo:.2f}")
+                    print(f"      MaxSim directo (índice/modelo): {maxsim_directo:.2f}")
                     print(f"      Score Qdrant (índice):         {qdrant_score:.2f}")
                     print(f"      Umbral verificación:           {UMBRAL_VERIFICACION:.2f}")
+                    if dhash_sim is not None:
+                        print(f"      Similitud visual (dHash):      {dhash_sim:.4f} (umbral: {DHASH_THRESHOLD})")
 
-                    if maxsim_directo < UMBRAL_VERIFICACION:
-                        print(f"      ❌ Tejido NO coincide semánticamente → score bajo (score: {maxsim_directo:.2f})")
-                        ids_rechazados.add(img_result['id'])
+                    if es_match_visual:
+                        print(f"      ✅ Match visual confirmado por dHash ({dhash_sim:.4f} >= {DHASH_THRESHOLD}) — imagen idéntica en base de datos")
+                    elif maxsim_directo >= UMBRAL_VERIFICACION:
+                        print(f"      ✅ Tejido coincide semánticamente por MaxSim ({maxsim_directo:.2f} >= {UMBRAL_VERIFICACION:.2f})")
                     else:
-                        # SIEMPRE verificar visualmente con dHash, sin importar el score.
-                        # Imágenes histológicas distintas pueden tener MaxSim alto (>900)
-                        # porque comparten estructuras celulares similares.
-                        # Solo el dHash confirma que es la MISMA imagen.
-                        print(f"      ✅ Tejido coincide semánticamente (score: {maxsim_directo:.2f}). Verificando visualmente...")
-                        dhash_sim = self._verificar_match_visual(state['imagen_consulta'], match_path)
-                        DHASH_THRESHOLD = 0.80
-                        print(f"         Similitud visual (dHash): {dhash_sim:.4f} (umbral: {DHASH_THRESHOLD})")
-
-                        if dhash_sim < DHASH_THRESHOLD:
-                            print(f"         ❌ RECHAZADO: No es la misma imagen (dHash {dhash_sim:.4f} < {DHASH_THRESHOLD})")
-                            ids_rechazados.add(img_result['id'])
-                        else:
-                            print(f"         ✅ Match visual confirmado — imagen idéntica en base de datos")
+                        dhash_str = f"{dhash_sim:.4f}" if dhash_sim is not None else "N/A"
+                        print(f"      ❌ RECHAZADO: Score semántico insuficiente ({maxsim_directo:.2f} < {UMBRAL_VERIFICACION:.2f}) y dHash={dhash_str}")
+                        ids_rechazados.add(img_result['id'])
 
                 if ids_rechazados:
                     resultados = [r for r in resultados if r.get('id') not in ids_rechazados]
@@ -2158,7 +2182,7 @@ Ejemplo:
                 state["imagenes_relevantes"] = imagenes[:1]
             # Si Path 2 ya seleccionó una, no agregar más
 
-        state["trayectoria"].append({"nodo": "buscar", "timestamp": time.time()})
+        state.setdefault("trayectoria", []).append({"nodo": "buscar", "timestamp": time.time()})
         return state
 
     def _decidir_camino_tras_busqueda(self, state: AgentState) -> str:

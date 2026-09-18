@@ -139,17 +139,22 @@ def create_google_llm(
         max_output_tokens=max_output_tokens,
         max_tokens=max_output_tokens,
         google_api_key=key,
+        max_retries=1,
     )
 
 
-# ── Detección de errores de cuota ──────────────────────────────────
+# ── Detección de errores de cuota o claves inválidas ───────────────
 def _is_quota_error(exc: Exception) -> bool:
     err_str = str(exc).lower()
     return any(
         ind in err_str
         for ind in [
-            "403", "429", "resource_exhausted", "resourceexhausted",
+            "400", "403", "429", "resource_exhausted", "resourceexhausted",
             "rate limit", "rate_limit", "quota", "too many requests",
+            "api_key_invalid", "api key not valid", "invalid api key",
+            "prepayment credits are depleted", "invalid argument provided to gemini",
+            "503", "unavailable", "high demand", "overloaded", "500", "502", "504",
+            "server error", "servererror", "deadline_exceeded",
         ]
     )
 
@@ -163,6 +168,7 @@ def _rebuild_llm(llm: Any, new_key: str):
         max_output_tokens=getattr(llm, "max_output_tokens", 8192),
         max_tokens=getattr(llm, "max_tokens", 8192) or getattr(llm, "max_output_tokens", 8192),
         google_api_key=new_key,
+        max_retries=1,
     )
 
 

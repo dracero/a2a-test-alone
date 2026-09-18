@@ -555,6 +555,7 @@ class BeeAIHostManager(ApplicationManager):
         self.agent_memories: dict[str, AgentNAMSMemory] = {}
         if uri and username and password:
             print(f"🔗 Initializing isolated NAMS Memories for agents (db: {database or 'neo4j'})...")
+            physics_ontology = os.path.join(os.path.dirname(__file__), "ontologies", "physics_ontology.json")
             self.agent_memories["physics"] = AgentNAMSMemory(
                 agent_id="physics",
                 agent_name="Tutor Socrático de Física Multimodal",
@@ -562,6 +563,7 @@ class BeeAIHostManager(ApplicationManager):
                 username=username,
                 password=password,
                 database=database or "neo4j",
+                ontology_path=physics_ontology if os.path.exists(physics_ontology) else None,
             )
             self.agent_memories["medical"] = AgentNAMSMemory(
                 agent_id="medical",
@@ -1076,13 +1078,26 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
             return ""
         return await mem.get_context(query=query, student_id=student_id, session_id=session_id, max_items=max_items)
 
-    async def add_deficiency(self, student_id: str, tema: str, correccion: str, agent_name: str | None = None):
-        """Guarda una falencia tanto semántica como estructuralmente en la memoria NAMS del agente correspondiente."""
+    async def add_deficiency(self, student_id: str, tema: str, correccion: str, agent_name: str | None = None) -> bool:
+        """Guarda una falencia confirmada del estudiante tanto semántica como estructuralmente en la memoria NAMS."""
         mem = self.get_agent_memory(agent_name)
         if not mem:
             print(f"⚠️ Memoria NAMS no disponible para '{agent_name}'. No se puede registrar la falencia.")
             return False
-        return await mem.add_deficiency(tema=tema, correccion=correccion)
+        return await mem.register_confirmed_deficiency(student_id=student_id, tema=tema, correccion=correccion)
+
+    async def validate_student_response(self, student_claim: str, agent_name: str | None = None) -> dict:
+        """Valida pedagógicamente la afirmación del estudiante contra el KG canónico del agente."""
+        mem = self.get_agent_memory(agent_name)
+        if not mem:
+            return {
+                "is_correct": True,
+                "concept": "general",
+                "canonical_value": "",
+                "student_claim": student_claim,
+                "explanation": "Memoria NAMS no disponible",
+            }
+        return await mem.validate_against_kg(student_claim=student_claim, llm=self.llm)
 
     async def _learn_user_preferences(self, user_message: str, context_id: str, agent_name: str | None = None):
         """Extrae y persiste preferencias e insights en la memoria NAMS aislada del agente en segundo plano."""

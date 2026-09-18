@@ -1,0 +1,315 @@
+{
+  "name": "physics_educational_poleo",
+  "version": "1.0",
+  "description": "Ontología educativa de Física basada en POLE+O para Tutor Inteligente",
+  "entity_types": [
+    {
+      "name": "PERSON",
+      "description": "Individuos, perfiles de estudiantes y docentes en el sistema educativo",
+      "subtypes": [
+        "StudentProfile",
+        "Professor",
+        "Tutor"
+      ],
+      "attributes": [
+        "name",
+        "learning_style",
+        "current_level",
+        "student_id",
+        "created_at"
+      ],
+      "color": "#4CAF50"
+    },
+    {
+      "name": "OBJECT",
+      "description": "Entidades conceptuales, leyes físicas y magnitudes cuantificables",
+      "subtypes": [
+        "Concept",
+        "Principle",
+        "PhysicalQuantity",
+        "Formula",
+        "Device"
+      ],
+      "attributes": [
+        "name",
+        "formula",
+        "domain",
+        "difficulty_level",
+        "formal_statement",
+        "mathematical_form",
+        "symbol",
+        "si_unit",
+        "is_scalar"
+      ],
+      "color": "#2196F3"
+    },
+    {
+      "name": "EVENT",
+      "description": "Experimentos, demostraciones y evaluaciones pedagógicas",
+      "subtypes": [
+        "Experiment",
+        "Demonstration",
+        "Assessment",
+        "Session"
+      ],
+      "attributes": [
+        "name",
+        "setup_description",
+        "expected_outcome",
+        "date",
+        "duration"
+      ],
+      "color": "#9C27B0"
+    },
+    {
+      "name": "LOCATION",
+      "description": "Sistemas de referencia, laboratorios y coordenadas espaciales",
+      "subtypes": [
+        "Laboratory",
+        "ReferenceFrame",
+        "Classroom"
+      ],
+      "attributes": [
+        "name",
+        "type",
+        "coordinates"
+      ],
+      "color": "#FF9800"
+    },
+    {
+      "name": "ORGANIZATION",
+      "description": "Instituciones educativas y departamentos académicos",
+      "subtypes": [
+        "University",
+        "Faculty",
+        "Department"
+      ],
+      "attributes": [
+        "name",
+        "type"
+      ],
+      "color": "#F44336"
+    },
+    {
+      "name": "Concept",
+      "description": "Concepto teórico o tema fundamental en física",
+      "subtypes": [
+        "Mechanics",
+        "Thermodynamics",
+        "Electromagnetism",
+        "Optics"
+      ],
+      "attributes": [
+        "name",
+        "formula",
+        "domain",
+        "difficulty_level",
+        "description"
+      ],
+      "color": "#00BCD4"
+    },
+    {
+      "name": "Principle",
+      "description": "Principio o ley física rectora (ej: Conservación de la energía)",
+      "subtypes": [
+        "FundamentalLaw",
+        "ConservationLaw",
+        "EmpiricalLaw"
+      ],
+      "attributes": [
+        "name",
+        "formal_statement",
+        "mathematical_form",
+        "domain"
+      ],
+      "color": "#3F51B5"
+    },
+    {
+      "name": "PhysicalQuantity",
+      "description": "Magnitud física medible escalar o vectorial",
+      "subtypes": [
+        "Scalar",
+        "Vector",
+        "Tensor"
+      ],
+      "attributes": [
+        "name",
+        "symbol",
+        "si_unit",
+        "is_scalar",
+        "dimensions"
+      ],
+      "color": "#009688"
+    },
+    {
+      "name": "Experiment",
+      "description": "Montaje experimental o fenómeno observable",
+      "subtypes": [
+        "LaboratoryExperiment",
+        "ThoughtExperiment",
+        "NumericalSimulation"
+      ],
+      "attributes": [
+        "name",
+        "setup_description",
+        "expected_outcome",
+        "apparatus"
+      ],
+      "color": "#E91E63"
+    },
+    {
+      "name": "StudentProfile",
+      "description": "Perfil del estudiante en el dominio de física",
+      "subtypes": [
+        "Beginner",
+        "Intermediate",
+        "Advanced"
+      ],
+      "attributes": [
+        "student_id",
+        "learning_style",
+        "current_level",
+        "agent_id"
+      ],
+      "color": "#8BC34A"
+    },
+    {
+      "name": "StudentDeficiency",
+      "description": "Falencia o brecha conceptual confirmada tras múltiples ocurrencias",
+      "subtypes": [
+        "Misconception",
+        "CalculationError",
+        "UnitError",
+        "PrerequisiteMissing"
+      ],
+      "attributes": [
+        "student_id",
+        "concept_ref",
+        "occurrences",
+        "severity",
+        "first_detected",
+        "last_detected",
+        "description",
+        "status"
+      ],
+      "color": "#FF5722"
+    },
+    {
+      "name": "MisconceptionCandidate",
+      "description": "Candidato a error o concepción errónea antes de consolidar",
+      "subtypes": [
+        "Observation",
+        "Candidate"
+      ],
+      "attributes": [
+        "student_id",
+        "concept",
+        "student_claim",
+        "canonical_value",
+        "detected_at",
+        "session_id"
+      ],
+      "color": "#795548"
+    }
+  ],
+  "relation_types": [
+    {
+      "name": "REQUIRES",
+      "description": "Un concepto requiere comprender otro como prerrequisito",
+      "source_types": [
+        "Concept",
+        "Principle"
+      ],
+      "target_types": [
+        "Concept",
+        "Principle"
+      ],
+      "properties": [
+        "depth_level"
+      ]
+    },
+    {
+      "name": "APPLIES_TO",
+      "description": "Un principio o ley aplica a magnitudes o sistemas físicos",
+      "source_types": [
+        "Principle",
+        "Concept"
+      ],
+      "target_types": [
+        "PhysicalQuantity",
+        "OBJECT"
+      ],
+      "properties": [
+        "condition"
+      ]
+    },
+    {
+      "name": "HAS_DEFICIENCY",
+      "description": "El perfil del estudiante presenta una falencia conceptual confirmada",
+      "source_types": [
+        "StudentProfile",
+        "PERSON"
+      ],
+      "target_types": [
+        "StudentDeficiency"
+      ],
+      "properties": [
+        "confirmed_at",
+        "confidence"
+      ]
+    },
+    {
+      "name": "ABOUT_CONCEPT",
+      "description": "La falencia confirmada está asociada a un concepto específico",
+      "source_types": [
+        "StudentDeficiency",
+        "MisconceptionCandidate"
+      ],
+      "target_types": [
+        "Concept",
+        "Principle",
+        "OBJECT"
+      ],
+      "properties": []
+    },
+    {
+      "name": "DEMONSTRATED_IN",
+      "description": "El concepto o principio se comprueba en un experimento",
+      "source_types": [
+        "Concept",
+        "Principle"
+      ],
+      "target_types": [
+        "Experiment",
+        "EVENT"
+      ],
+      "properties": [
+        "illustration_url"
+      ]
+    },
+    {
+      "name": "TOUCHED",
+      "description": "Traza de auditoría que registra qué entidad fue consultada o modificada",
+      "source_types": [
+        "ReasoningTrace",
+        "Action",
+        "Agent",
+        "PERSON"
+      ],
+      "target_types": [
+        "Concept",
+        "StudentDeficiency",
+        "Principle",
+        "OBJECT"
+      ],
+      "properties": [
+        "action_type",
+        "timestamp",
+        "mode"
+      ]
+    }
+  ],
+  "default_entity_type": "OBJECT",
+  "enable_subtypes": true,
+  "strict_types": false
+}

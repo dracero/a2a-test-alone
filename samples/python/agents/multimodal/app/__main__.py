@@ -95,7 +95,8 @@ async def inicializar_agente_con_pdfs(qdrant_url: str, qdrant_api_key: str, pdf_
     
     # ── Check 2: Colecciones en Qdrant ──
     from qdrant_client import AsyncQdrantClient
-    client = AsyncQdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+    api_key = qdrant_api_key if (qdrant_api_key and not qdrant_url.startswith("http://localhost") and not qdrant_url.startswith("http://127.0.0.1")) else None
+    client = AsyncQdrantClient(url=qdrant_url, api_key=api_key)
     
     colecciones_existen = False
     try:
@@ -184,14 +185,10 @@ def main(host, port, pdf_dir):
                     'GOOGLE_API_KEY environment variable not set.'
                 )
             
-            # Verificar Qdrant
-            if not os.getenv('QDRANT_URL'):
-                raise MissingAPIKeyError(
-                    'QDRANT_URL environment variable not set.'
-                )
-            
-            # 🔧 CORRECCIÓN CRÍTICA: Cambiar QDRANT_KEY → QDRANT_KEY
-            if not os.getenv('QDRANT_KEY'):
+            # Verificar Qdrant (en modo local no se requiere API key)
+            qdrant_url = os.getenv('QDRANT_URL', 'http://localhost:6333')
+            is_local = "localhost" in qdrant_url or "127.0.0.1" in qdrant_url
+            if not is_local and not os.getenv('QDRANT_KEY'):
                 raise MissingAPIKeyError(
                     'QDRANT_KEY environment variable not set.'
                 )
@@ -248,10 +245,13 @@ def main(host, port, pdf_dir):
             # Inicializar agente con procesamiento automático de PDFs
             logger.info("🔧 Inicializando agente con procesamiento automático de PDFs...")
             
-            # 🔧 CORRECCIÓN CRÍTICA: Usar QDRANT_API_KEY consistentemente
+            # 🔧 Usar QDRANT_URL y QDRANT_KEY (opcional en local)
+            qdrant_url = os.getenv('QDRANT_URL', 'http://localhost:6333')
+            is_local = "localhost" in qdrant_url or "127.0.0.1" in qdrant_url
+            qdrant_api_key = None if is_local else os.getenv('QDRANT_KEY')
             real_executor = await inicializar_agente_con_pdfs(
-                qdrant_url=os.getenv('QDRANT_URL'),
-                qdrant_api_key=os.getenv('QDRANT_KEY'),
+                qdrant_url=qdrant_url,
+                qdrant_api_key=qdrant_api_key,
                 pdf_dir=pdf_dir or os.getenv('PDF_DIR', str(Path(__file__).resolve().parents[1] / 'PDF'))
             )
             

@@ -74,6 +74,19 @@ def main():
     os.environ["NODE_OPTIONS"] = "--no-deprecation"
     print("🚀 Starting BeeAI Ecosystem in order...")
     
+    # 0. Ensure Qdrant Vector Database is available
+    if not is_port_open(6333):
+        print("📦 Verificando servicio Qdrant (puerto 6333)...")
+        try:
+            subprocess.run("docker start qdrant-local-histo 2>/dev/null || true", shell=True)
+            for _ in range(5):
+                if is_port_open(6333):
+                    print("✅ Qdrant local iniciado y listo en puerto 6333")
+                    break
+                time.sleep(1)
+        except Exception:
+            pass
+
     # 1. Start Priority Agent (Multimodal)
     print("Step 1: Starting Priority Agent (10003)...")
     run_npm_cmd("npm run dev:agent:multimodal", {"LANGCHAIN_PROJECT": "a2a-multimodal-tutor"})

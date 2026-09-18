@@ -34,6 +34,13 @@ try:
 except Exception:
     pass
 
+try:
+    import litellm
+    litellm.suppress_debug_info = True
+    litellm.telemetry = False
+except Exception:
+    pass
+
 # Load .env from project root (5 levels up: agent.py -> app -> images -> agents -> python -> samples -> root)
 import sys
 root_dir = Path(__file__).resolve().parents[5]
