@@ -1,4 +1,4 @@
-name: Automated PR Reviewer (Gemini & AGENTS.md)
+name: Automated PR Reviewer (Gemini 3.5 Flash & AGENTS.md)
 
 on:
   pull_request:
@@ -27,7 +27,7 @@ jobs:
 
       - name: Run Gemini PR Review
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GOOGLE_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}

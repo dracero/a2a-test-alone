@@ -1,6 +1,6 @@
 """
 BeeAI Workflow-based Orchestrator
-Powered by Google Gemini 2.5 Flash
+Powered by Google Gemini 3.5 Flash
 Uses explicit workflow steps instead of ReAct pattern
 """
 
@@ -10,7 +10,7 @@ from typing import Any
 from beeai_framework.workflows.workflow import Workflow
 from pydantic import BaseModel
 
-from .api_key_rotator import ainvoke_with_retry
+from .api_key_rotator import ainvoke_with_retry, sanitize_nams_context
 from .langsmith_config import traceable
 
 
@@ -55,7 +55,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             print(f"❌ {state.error}")
             return None
     
-    # Step 2: Use Gemini 2.5 to classify and choose the best agent
+    # Step 2: Use Gemini 3.5 Flash to classify and choose the best agent
     @traceable(name="orchestrator_classify_and_choose", run_type="chain", tags=["agent_type:orchestrator", "orchestrator"])
     async def classify_and_choose(state: OrchestratorState) -> str:
         """Use multimodal LLM to analyze the request (including images) and choose the best agent"""
@@ -292,38 +292,7 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 )
                 if ctx:
                     raw_text = str(ctx)
-                    ignore_headers = (
-                        '## conversation history',
-                        '### relevant past messages',
-                        'conversation history',
-                        'relevant past messages'
-                    )
-                    filtered_lines = []
-                    in_chat_history_section = False
-                    for line in raw_text.split('\n'):
-                        line_stripped = line.strip()
-                        line_lower = line_stripped.lower()
-                        if not line_lower:
-                            continue
-                        if any(h in line_lower for h in ignore_headers):
-                            in_chat_history_section = True
-                            continue
-                        if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
-                            in_chat_history_section = False
-                            continue
-                        if in_chat_history_section:
-                            continue
-                        if any(line_lower.startswith(prefix) for prefix in [
-                            'user:', 'assistant:', 'human:', 'ai:',
-                            'usuario:', 'asistente:', 'q:', 'a:',
-                            '- [user]', '- [assistant]', '- [human]', '- [ai]',
-                            '- [usuario]', '- [asistente]'
-                        ]):
-                            continue
-                        filtered_lines.append(line)
-                    agent_context_text = '\n'.join(filtered_lines).strip()
-                    if len(agent_context_text) > 3000:
-                        agent_context_text = agent_context_text[:3000] + "\n[... truncado]"
+                    agent_context_text = sanitize_nams_context(raw_text)
             except Exception as e:
                 print(f"⚠️ Error retrieving Neo4j context for chosen agent {state.chosen_agent}: {e}")
 

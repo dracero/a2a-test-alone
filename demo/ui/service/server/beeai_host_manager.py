@@ -35,6 +35,7 @@ from .api_key_rotator import (
     create_google_llm,
     invoke_with_retry,
     ainvoke_with_retry,
+    sanitize_nams_context,
 )
 from service.server.application_manager import ApplicationManager
 from service.types import Conversation, Event
@@ -537,7 +538,7 @@ class BeeAIHostManager(ApplicationManager):
 
         # Initialize the LangChain Google Gemini Model (con key rotativa)
         self.llm = create_google_llm(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             temperature=0.3,
             max_output_tokens=8192
         )
@@ -887,38 +888,7 @@ Responde SOLO: CONTINUAR o CAMBIAR"""
                                 ctx = await self.get_student_context(text_content, student_id=student_id, session_id=context_id, agent_name=active_agent)
                                 if ctx:
                                     raw_text = str(ctx)
-                                    ignore_headers = (
-                                        '## conversation history',
-                                        '### relevant past messages',
-                                        'conversation history',
-                                        'relevant past messages'
-                                    )
-                                    filtered_lines = []
-                                    in_chat_history_section = False
-                                    for line in raw_text.split('\n'):
-                                        line_stripped = line.strip()
-                                        line_lower = line_stripped.lower()
-                                        if not line_lower:
-                                            continue
-                                        if any(h in line_lower for h in ignore_headers):
-                                            in_chat_history_section = True
-                                            continue
-                                        if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
-                                            in_chat_history_section = False
-                                            continue
-                                        if in_chat_history_section:
-                                            continue
-                                        if any(line_lower.startswith(prefix) for prefix in [
-                                            'user:', 'assistant:', 'human:', 'ai:',
-                                            'usuario:', 'asistente:', 'q:', 'a:',
-                                            '- [user]', '- [assistant]', '- [human]', '- [ai]',
-                                            '- [usuario]', '- [asistente]'
-                                        ]):
-                                            continue
-                                        filtered_lines.append(line)
-                                    neo4j_context_text = '\n'.join(filtered_lines).strip()
-                                    if len(neo4j_context_text) > 3000:
-                                        neo4j_context_text = neo4j_context_text[:3000] + "\n[... truncado]"
+                                    neo4j_context_text = sanitize_nams_context(raw_text)
                             except OSError as pipe_err:
                                 print(f"⚠️ Neo4j pipe error (will reconnect): {pipe_err}")
                                 self._neo4j_connected = False

@@ -52,11 +52,11 @@ import sys as _sys
 _project_root = str(Path(__file__).resolve().parents[5])
 if _project_root not in _sys.path:
     _sys.path.insert(0, _project_root)
-from api_key_rotator import google_key_rotator, create_google_llm, invoke_with_retry  # noqa: E402
+from api_key_rotator import google_key_rotator, create_google_llm, invoke_with_retry, sanitize_nams_context  # noqa: E402
 
 # ==================== CONFIGURACIÓN ====================
 
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-3.5-flash"
 
 class SemanticMemory:
     """Memoria conversacional con historial de chat real."""
@@ -198,7 +198,7 @@ class PhysicsMultimodalAgent:
         from langchain_google_genai import ChatGoogleGenerativeAI
         # Using Google Gemini as the LLM (con key rotativa)
         self.llm = create_google_llm(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             temperature=0.3,
             max_output_tokens=8192
         )
@@ -664,65 +664,8 @@ Contenido:
     # ==================== MÉTODOS DE ANÁLISIS ====================
     
     def _sanitize_nams_context(self, nams_context: str, max_len: int = 3000) -> str:
-        """Filtra y trunca el contexto NAMS para evitar que domine el prompt.
-        
-        Elimina líneas que parecen historial de chat (ya cubierto por
-        SemanticMemory.chat_history) y trunca a max_len caracteres.
-        """
-        if not nams_context or not nams_context.strip():
-            return ""
-        
-        # Prefijos que indican historial de chat (ya está en chat_history)
-        chat_prefixes = (
-            'user:', 'assistant:', 'human:', 'ai:',
-            'usuario:', 'asistente:', 'q:', 'a:',
-            'pregunta:', 'respuesta:',
-            '- [user]', '- [assistant]', '- [human]', '- [ai]',
-            '- [usuario]', '- [asistente]'
-        )
-        
-        # Secciones completas a ignorar
-        ignore_headers = (
-            '## conversation history',
-            '### relevant past messages',
-            'conversation history',
-            'relevant past messages'
-        )
-        
-        filtered_lines = []
-        in_chat_history_section = False
-        
-        for line in nams_context.split('\n'):
-            line_stripped = line.strip()
-            line_lower = line_stripped.lower()
-            if not line_lower:
-                continue
-                
-            # Detectar si entramos a una sección de historial de conversación
-            if any(h in line_lower for h in ignore_headers):
-                in_chat_history_section = True
-                continue
-                
-            # Si entramos en la sección de conocimiento relevante o preferencias, desactivar el ignore
-            if '## relevant knowledge' in line_lower or '### user preferences' in line_lower:
-                in_chat_history_section = False
-                continue
-                
-            if in_chat_history_section:
-                continue
-                
-            # Saltar líneas que parecen historial de chat individual
-            if any(line_lower.startswith(prefix) for prefix in chat_prefixes):
-                continue
-                
-            filtered_lines.append(line)
-        
-        result = '\n'.join(filtered_lines).strip()
-        
-        if len(result) > max_len:
-            result = result[:max_len] + '\n[... truncado]'
-        
-        return result
+        """Filtra y trunca el contexto NAMS. Delega a la utilidad compartida."""
+        return sanitize_nams_context(nams_context, max_len=max_len)
 
     
     def _get_or_create_memory(self, context_id: str) -> SemanticMemory:

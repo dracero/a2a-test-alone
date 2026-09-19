@@ -14,9 +14,9 @@ from neo4j_agent_memory.schema import SchemaModel, load_schema_from_file, Entity
 from neo4j_agent_memory.llm.adapters.sentence_transformers import SentenceTransformersProvider
 
 try:
-    from .api_key_rotator import google_key_rotator, ainvoke_with_retry, create_google_llm
+    from .api_key_rotator import google_key_rotator, ainvoke_with_retry, create_google_llm, sync_env_key
 except ImportError:
-    from api_key_rotator import google_key_rotator, ainvoke_with_retry, create_google_llm
+    from api_key_rotator import google_key_rotator, ainvoke_with_retry, create_google_llm, sync_env_key
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class AgentNAMSMemory:
     2. Las preferencias e insights estén asociados únicamente al par (estudiante, agente).
     3. Las entidades y conceptos del grafo de conocimiento pertenezcan estrictamente al dominio de este agente,
        impidiendo cualquier cruce de contexto entre agentes (ej: histología vs. física).
-    4. El extractor de entidades use LiteLLM con Gemini 2.5 Flash y el rotador de API keys.
+    4. El extractor de entidades use LiteLLM con Gemini 3.5 Flash y el rotador de API keys.
     5. Doble Rol: Solo el modo PROFESSOR puede modificar el KG canónico.
     6. Detección de falencias acumulativa por similaridad semántica (≥5 coincidencias con cosine >= 0.82).
     7. Auditoría mediante Reasoning Traces y relaciones TOUCHED.
@@ -72,7 +72,7 @@ class AgentNAMSMemory:
         self._init_client()
 
     def _init_client(self):
-        """Inicializa la configuración de MemorySettings y el cliente NAMS con Gemini 2.5 y POLE+O."""
+        """Inicializa la configuración de MemorySettings y el cliente NAMS con Gemini 3.5 Flash y POLE+O."""
         if not (self.uri and self.username and self.password):
             logger.warning(f"⚠️ Parámetros de Neo4j incompletos para el agente '{self.agent_name}'. Memoria inactiva.")
             self.client = None
@@ -86,10 +86,7 @@ class AgentNAMSMemory:
         except Exception:
             pass
 
-        active_key = google_key_rotator.get_key()
-        if active_key:
-            os.environ["GEMINI_API_KEY"] = active_key
-            os.environ["GOOGLE_API_KEY"] = active_key
+        sync_env_key()
 
         try:
             embedder = SentenceTransformersProvider(
@@ -123,14 +120,14 @@ class AgentNAMSMemory:
                     "database": self.database,
                 },
                 embedding=embedder,
-                llm="gemini/gemini-2.5-flash",
+                llm="gemini/gemini-3.5-flash",
                 extraction=ExtractionConfig(
                     extractor_type=ExtractorType.LLM,
                 ),
                 schema_config=schema_settings,
             )
             self.client = MemoryClient(settings)
-            logger.info(f"✅ Memoria NAMS configurada para '{self.agent_name}' ({self.agent_id}) con Gemini 2.5 Flash")
+            logger.info(f"✅ Memoria NAMS configurada para '{self.agent_name}' ({self.agent_id}) con Gemini 3.5 Flash")
         except Exception as e:
             logger.error(f"❌ Error al instanciar NAMS para '{self.agent_name}': {e}")
             self.client = None
@@ -142,10 +139,7 @@ class AgentNAMSMemory:
         if self._connected:
             return True
 
-        active_key = google_key_rotator.get_key()
-        if active_key:
-            os.environ["GEMINI_API_KEY"] = active_key
-            os.environ["GOOGLE_API_KEY"] = active_key
+        sync_env_key()
 
         try:
             logger.info(f"🔌 Conectando cliente NAMS para agente '{self.agent_name}'...")
@@ -215,10 +209,7 @@ class AgentNAMSMemory:
         scoped_id = self.scope_session_id(session_id)
         user_id = self.student_identifier(student_id or session_id)
         try:
-            active_key = google_key_rotator.get_key()
-            if active_key:
-                os.environ["GEMINI_API_KEY"] = active_key
-                os.environ["GOOGLE_API_KEY"] = active_key
+            sync_env_key()
 
             msg = await self.client.short_term.add_message(
                 session_id=scoped_id,
@@ -245,10 +236,7 @@ class AgentNAMSMemory:
         scoped_id = self.scope_session_id(session_id)
         user_id = self.student_identifier(student_id or session_id)
         try:
-            active_key = google_key_rotator.get_key()
-            if active_key:
-                os.environ["GEMINI_API_KEY"] = active_key
-                os.environ["GOOGLE_API_KEY"] = active_key
+            sync_env_key()
 
             clean_content = content.split("__IMAGE_PARTS__:")[0].strip()
             msg = await self.client.short_term.add_message(
@@ -1196,7 +1184,7 @@ Responde ÚNICAMENTE un objeto JSON válido con este formato:
         return conclusions, deficiencies
 
     async def learn_user_preferences(self, user_message: str, student_id: str, llm: Any):
-        """Extrae y persiste preferencias e insights en segundo plano usando Gemini 2.5."""
+        """Extrae y persiste preferencias e insights en segundo plano usando Gemini 3.5 Flash."""
         if not await self.ensure_connected() or not user_message:
             return
 

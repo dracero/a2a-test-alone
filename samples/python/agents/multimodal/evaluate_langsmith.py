@@ -30,8 +30,8 @@ class PhysicsContextRelevanceEvaluator(RunEvaluator):
     """Custom LangSmith evaluator to measure Context Relevance for the Physics Agent."""
     
     def __init__(self):
-        # Initialize Google Gemini 2.5 Flash as the evaluator judge
-        self.llm = create_google_llm(model="gemini-2.5-flash", temperature=0.0)
+        # Initialize Google Gemini 3.5 Flash as the evaluator judge
+        self.llm = create_google_llm(model="gemini-3.5-flash", temperature=0.0)
 
     def evaluate_run(self, run, example=None, **kwargs) -> EvaluationResult:
         query = run.inputs.get("query")
@@ -97,7 +97,7 @@ class PhysicsContextRecallEvaluator(RunEvaluator):
     """Custom LangSmith evaluator to measure Context Recall for the Physics Agent."""
     
     def __init__(self):
-        self.llm = create_google_llm(model="gemini-2.5-flash", temperature=0.0)
+        self.llm = create_google_llm(model="gemini-3.5-flash", temperature=0.0)
 
     def evaluate_run(self, run, example=None, **kwargs) -> EvaluationResult:
         # Get ground truth response from dataset

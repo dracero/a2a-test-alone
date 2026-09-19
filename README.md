@@ -49,42 +49,62 @@ This repository contains code samples and demos which use the [Agent2Agent (A2A)
 
 ## 🚀 Quick Start
 
-This repository has been configured to use **Groq (Llama 4)** for ultra-fast agent responses.
+Este repositorio utiliza **Google Gemini 3.5 Flash (`gemini-3.5-flash`)** como motor cognitivo principal para el razonamiento de los agentes, extracción ontológica NAMS y revisión automatizada de código, respaldado por un **sistema inteligente de rotación y resiliencia de claves API**.
 
 ### Prerequisites
 
-1. **Groq API Key** - Get one at [console.groq.com](https://console.groq.com)
-2. **Google API Key** (optional) - Only needed for image generation
-3. **Python 3.12+** with `uv` package manager
-4. **Node.js 18+** for the frontend
+1. **Google Gemini API Key(s)** (Principal):
+   - Obtén tu(s) clave(s) en [Google AI Studio](https://aistudio.google.com/).
+   - Soporta una o múltiples claves (`GOOGLE_API_KEYS` separadas por coma). El sistema prioriza automáticamente la clave paga con un cooldown acelerado de 15 segundos y conmuta a las claves secundarias si se alcanzan límites de cuota (429/403).
+2. **Neo4j Aura Cloud DB** (Memoria NAMS):
+   - Base de datos gráfica en la nube gratuita o administrada en [neo4j.com/cloud/aura/](https://neo4j.com/cloud/aura/).
+3. **Groq API Key** (Opcional):
+   - Para extracción de preferencias y autoaprendizaje en segundo plano.
+4. **Python 3.12+** con el gestor de paquetes ultra-rápido `uv`.
+5. **Node.js 18+** y `npm` para el frontend Next.js.
+6. **Docker** (Opcional): Para levantar Qdrant localmente si no usas Qdrant Cloud.
 
-### Setup
+### Setup & Configuración
 
-1. Clone the repository:
+1. Clonar el repositorio:
    ```bash
    git clone https://github.com/dracero/a2a-test-alone.git
    cd a2a-test-alone
    ```
 
-2. Copy `.env.example` to `.env` and add your API keys:
+2. Configurar variables de entorno:
    ```bash
    cp .env.example .env
-   # Edit .env and add your GROQ_API_KEY
+   ```
+   Edita `.env` y configura tus credenciales:
+   ```env
+   # Claves de Google Gemini (separadas por comas; la primera es la cuenta paga/prioritaria)
+   GOOGLE_API_KEYS="AIzaSyTuClavePaga...,AIzaSyTuClaveGratis1...,AIzaSyTuClaveGratis2..."
+   GOOGLE_API_KEY="AIzaSyTuClavePaga..."
+
+   # Memoria en Grafo Neo4j (POLE+O)
+   NEO4J_URI="neo4j+s://xxxxxxxx.databases.neo4j.io"
+   NEO4J_USERNAME="neo4j"
+   NEO4J_PASSWORD="tu_password_aqui"
+   NEO4J_DATABASE="neo4j"
+
+   # Inferencia Auxiliar / Auto-Aprendizaje
+   GROQ_API_KEY="gsk_tu_groq_api_key..."
    ```
 
-3. Start all services:
+3. Iniciar todos los servicios y agentes concurrentemente:
    ```bash
    npm run dev
    ```
-   *Note: This runs the `start_ordered.py` script natively, starting the agents, waiting for their ports to be ready, and then launching the backend orchestrator and Next.js frontend. Works on Windows, macOS, and Linux natively without WSL.*
+   *Nota: `npm run dev` ejecuta `start_ordered.py`, que levanta los agentes especializados (Física en 10003, Medicina en 10002, Imágenes en 10001), verifica la disponibilidad de sus puertos y luego inicia el backend orquestador BeeAI (12000) y el frontend Next.js (3000).*
 
-4. Open your browser at [http://localhost:3000](http://localhost:3000)
+4. Abrir en el navegador: [http://localhost:3000](http://localhost:3000)
 
-### Documentation
+### Documentation & Guías
 
-- **[INICIO-RAPIDO.md](INICIO-RAPIDO.md)** - Quick start guide (Spanish)
-- **[RESUMEN-COMPLETO.md](RESUMEN-COMPLETO.md)** - Complete summary of changes
-- **[CAMBIO-A-GROQ.md](CAMBIO-A-GROQ.md)** - Groq migration details
+- **[INICIO-RAPIDO.md](INICIO-RAPIDO.md)** - Guía de inicio rápido paso a paso.
+- **[RESUMEN-COMPLETO.md](RESUMEN-COMPLETO.md)** - Resumen completo de la arquitectura y cambios.
+- **[CAMBIO-A-GROQ.md](CAMBIO-A-GROQ.md)** - Detalles de migración auxiliar a Groq.
 
 ## Architecture & Ecosistema
 
@@ -140,9 +160,139 @@ graph TD
    - Dashboard de administración para monitorizar los agentes y el inspector del protocolo A2A.
    - Chat interactivo en tiempo real con soporte multimedia (texto, PDF e imágenes).
 
+---
+
+## 🏛️ Arquitectura y Patrones de Diseño (GoF / Refactoring Guru)
+
+El diseño de este sistema sigue rigurosamente los patrones de diseño clásicos (*Gang of Four - GoF*) documentados en el catálogo de referencia internacional **[Refactoring Guru: Design Patterns](https://refactoring.guru/design-patterns)**.
+
+La arquitectura combina patrones **Creacionales**, **Estructurales** y de **Comportamiento** para garantizar desacoplamiento, extensibilidad, alta resiliencia de cuotas y mantenibilidad en un entorno de múltiples agentes autónomos colaborativos.
+
+### 📐 Diagrama de Patrones del Sistema
+
+```mermaid
+graph TD
+    User([Cliente / UI]) --> Orch[BeeAI Orchestrator Workflow<br/><b>Patrón: Mediator</b>]
+    
+    subgraph "Ejecución de Agentes A2A (Template Method & Adapter)"
+        BaseExec["BaseA2AAgentExecutor<br/><b>Patrón: Template Method</b>"]
+        PhysicsExec["PhysicsAgentExecutor<br/>(Subclase Concreta)"]
+        Wrapper["PhysicsAgentExecutorWrapper<br/><b>Patrón: Adapter / Decorator</b>"]
+        BaseExec --> PhysicsExec
+        Wrapper -.->|Envuelve y adapta| PhysicsExec
+    end
+
+    Orch -->|Enruta peticiones A2A| Wrapper
+
+    subgraph "Infraestructura de Modelos LLM (Creacional & Proxy)"
+        LLMFactory["create_google_llm()<br/><b>Patrón: Factory Method</b>"]
+        ProxyInvoke["invoke_with_retry() / ainvoke_with_retry()<br/><b>Patrón: Proxy</b>"]
+        LLM[(Gemini 3.5 Flash API)]
+        
+        LLMFactory --> LLM
+        ProxyInvoke -.->|Intercepta y reintenta| LLM
+    end
+
+    subgraph "Gestión de Credenciales & Sanitización"
+        Rotator["GoogleApiKeyRotator<br/><b>Patrón: Singleton</b>"]
+        KeyStrategy["KeySelectionStrategy<br/><b>Patrón: Strategy</b><br/>• PriorityPaidKeyStrategy<br/>• RoundRobinKeyStrategy"]
+        Chain["ContextSanitizationChain<br/><b>Patrón: Chain of Responsibility</b><br/>1. SectionBoundaryFilterHandler<br/>2. ChatPrefixFilterHandler<br/>3. LengthLimitFilterHandler"]
+        Facade["sanitize_nams_context() & sync_env_key()<br/><b>Patrón: Facade</b>"]
+        
+        Rotator -->|Usa estrategia| KeyStrategy
+        Facade -.->|Delega| Chain
+        ProxyInvoke -->|Obtiene key activa| Rotator
+    end
+
+    PhysicsExec --> ProxyInvoke
+    PhysicsExec --> Facade
+```
+
+---
+
+### 📋 Matriz de Patrones Implementados
+
+| Patrón (Refactoring Guru) | Categoría | Archivos Clave | Propósito y Beneficio Arquitectónico |
+| :--- | :---: | :--- | :--- |
+| **[Template Method](https://refactoring.guru/design-patterns/template-method)** | Comportamiento | [base_agent_executor.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/samples/python/agents/multimodal/app/base_agent_executor.py)<br/>[agent_executor.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/samples/python/agents/multimodal/app/agent_executor.py) | **Esqueleto invariable de ejecución A2A**: Define el ciclo de vida (validación $\to$ extracción de medios $\to$ streaming de tareas $\to$ artefactos $\to$ manejo de pipes y errores). Las subclases solo implementan hooks primitivos (`get_agent_stream`, `get_artifact_name`), eliminando más de 400 líneas de código repetido. |
+| **[Chain of Responsibility](https://refactoring.guru/design-patterns/chain-of-responsibility)** | Comportamiento | [api_key_rotator.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/api_key_rotator.py)<br/>`ContextFilterHandler` | **Canalización modular de sanitización**: Procesa el contexto de memoria NAMS a través de eslabones independientes (`SectionBoundaryFilterHandler` $\to$ `ChatPrefixFilterHandler` $\to$ `LengthLimitFilterHandler`). Permite incorporar filtros adicionales sin alterar la lógica de los agentes. |
+| **[Strategy](https://refactoring.guru/design-patterns/strategy)** | Comportamiento | [api_key_rotator.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/api_key_rotator.py)<br/>`KeySelectionStrategy` | **Políticas de rotación intercambiables**: Desacopla el algoritmo de elección de llaves (`PriorityPaidKeyStrategy` con prioridad de llave paga y cooldown rápido vs. `RoundRobinKeyStrategy` balanceado). Puede cambiarse en caliente con `google_key_rotator.set_strategy()`. |
+| **[Singleton](https://refactoring.guru/design-patterns/singleton)** | Creacional | [api_key_rotator.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/api_key_rotator.py)<br/>`google_key_rotator` | **Instancia única compartida**: Centraliza en memoria el estado global de cuotas, marcas de tiempo de cooldown y llaves activas, evitando colisiones o sobreconsumo entre agentes concurrentes. |
+| **[Factory Method](https://refactoring.guru/design-patterns/factory-method)** | Creacional | [api_key_rotator.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/api_key_rotator.py)<br/>`create_google_llm()` | **Instanciación centralizada**: Encapsula la configuración del modelo (`gemini-3.5-flash`), tokens e inyección dinámica de la clave activa provista por el rotador. |
+| **[Proxy](https://refactoring.guru/design-patterns/proxy)** | Estructural | [api_key_rotator.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/api_key_rotator.py)<br/>`invoke_with_retry()` | **Control de acceso y resiliencia transparente**: Intercepta llamadas síncronas y asíncronas (`ainvoke_with_retry`) al LLM, aplicando reintentos exponenciales con jitter, detección automática de errores de cuota (403/429) y conmutación de llaves. |
+| **[Facade](https://refactoring.guru/design-patterns/facade)** | Estructural | [api_key_rotator.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/api_key_rotator.py)<br/>`sanitize_nams_context()`<br/>`sync_env_key()` | **Interfaz unificada simplificada**: Oculta la complejidad interna de la cadena de filtros o la sincronización de variables de entorno para bibliotecas externas (LiteLLM/SDKs). |
+| **[Adapter / Decorator](https://refactoring.guru/design-patterns/adapter)** | Estructural | [custom_request_handler.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/samples/python/agents/multimodal/app/custom_request_handler.py)<br/>`PhysicsAgentExecutorWrapper` | **Adaptación de interfaces dispares**: Adapta mensajes con cargas multimodales del formato del ADK (`inline_data`) al estándar A2A (`FilePart`), manteniendo intacto el executor interno. |
+| **[Mediator](https://refactoring.guru/design-patterns/mediator)** | Comportamiento | [beeai_orchestrator_workflow.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/demo/ui/service/server/beeai_orchestrator_workflow.py) | **Desacoplamiento entre agentes**: El orquestador BeeAI centraliza la comunicación y toma de decisiones entre los agentes de Física, Medicina e Imágenes sin que ninguno dependa directamente de los demás. |
+
+---
+
+### 🔍 Detalle de los 3 Patrones de Comportamiento Refactorizados
+
+#### 1. Template Method (`BaseA2AAgentExecutor`)
+Define el algoritmo esqueleto en `BaseA2AAgentExecutor.execute()`:
+1. `_validate_request(context)` $\to$ Valida existencia de partes en el mensaje.
+2. `_extract_text_from_message(context)` y `_extract_images_from_message(context)` $\to$ Extrae texto e imágenes polimórficamente.
+3. Inicializa o recupera `context.current_task` y `TaskUpdater`.
+4. Ejecuta el bucle de streaming llamando al método primitivo `self.get_agent_stream(query, context_id, images)`.
+5. Gestiona de manera unificada los estados `input_required`, `working`, `completed` y `failed`.
+6. Genera el artefacto invocando `self.get_artifact_name()`.
+7. Recuperación transparente de pipes rotos de OS / terminal (`OSError`).
+
+Cualquier nuevo agente solo necesita heredar de `BaseA2AAgentExecutor` e implementar las operaciones primitivas:
+```python
+class MiNuevoAgenteExecutor(BaseA2AAgentExecutor):
+    def get_agent_title(self) -> str:
+        return "Mi Nuevo Agente"
+
+    def get_artifact_name(self) -> str:
+        return "nuevo_analisis"
+
+    def get_agent_stream(self, query: str, context_id: str, images: list[dict]):
+        return self.agent.stream(query, context_id, images)
+```
+
+#### 2. Chain of Responsibility (`ContextSanitizationChain`)
+Permite procesar el contexto de conocimiento antes de inyectarlo en los prompts del LLM a través de una cadena encadenada de handlers:
+- **`SectionBoundaryFilterHandler`**: Detecta y descarta encabezados y bloques irrelevantes de historial conversacional (`## conversation history`, `### relevant past messages`), garantizando la preservación estricta de las secciones ontológicas (`## relevant knowledge`, `### user preferences`).
+- **`ChatPrefixFilterHandler`**: Descarta líneas individuales de turnos conversacionales aislados (`user:`, `assistant:`, `human:`, etc.).
+- **`LengthLimitFilterHandler`**: Controla el presupuesto de tokens truncando al tamaño máximo especificado y añadiendo nota de truncado.
+
+```python
+# Extender la cadena con un nuevo filtro personalizado:
+class SensitiveDataFilterHandler(ContextFilterHandler):
+    def process(self, context: str, **kwargs) -> str:
+        return re.sub(r'\b\d{1,3}(\.\d{1,3}){3}\b', '[IP_ANONIMIZADA]', context)
+
+# Ensamblado dinámico:
+pipeline = (
+    SectionBoundaryFilterHandler()
+    .set_next(ChatPrefixFilterHandler())
+    .set_next(SensitiveDataFilterHandler())
+    .set_next(LengthLimitFilterHandler())
+)
+resultado = pipeline.handle(contexto_crudo, max_len=2500)
+```
+
+#### 3. Strategy (`KeySelectionStrategy`)
+Permite seleccionar dinámicamente cómo se distribuyen las consultas entre las llaves API de Gemini:
+- **`PriorityPaidKeyStrategy`** (Default): Favorece la primera llave configurada (cuenta paga/tier 1) y utiliza un cooldown ágil de 15 segundos ante errores 429/403. Solo si está en cooldown conmuta a las secundarias (cuentas gratuitas con cooldown de 60 segundos).
+- **`RoundRobinKeyStrategy`**: Distribuye de forma equitativa las consultas de manera secuencial entre todas las llaves saludables.
+
+```python
+from api_key_rotator import google_key_rotator, RoundRobinKeyStrategy, PriorityPaidKeyStrategy
+
+# Cambiar la estrategia de rotación en tiempo de ejecución:
+google_key_rotator.set_strategy(RoundRobinKeyStrategy())
+
+# O restablecer la estrategia prioritaria de llave paga:
+google_key_rotator.set_strategy(PriorityPaidKeyStrategy())
+```
+
+---
+
 ## 🧠 NAMS: Neo4j Agent Memory System (Arquitectura POLE+O & Dual-Rol)
 
-**NAMS** es un sistema avanzado de memoria cognitiva y grafo de conocimiento para agentes inteligentes basado en **Neo4j Aura Cloud DB**, embeddings locales con **SentenceTransformers** (`BAAI/bge-small-en-v1.5` en CPU) y extracción de entidades con **Gemini 2.5 Flash** (vía `LiteLLM` con rotador de claves).
+**NAMS** es un sistema avanzado de memoria cognitiva y grafo de conocimiento para agentes inteligentes basado en **Neo4j Aura Cloud DB**, embeddings locales con **SentenceTransformers** (`BAAI/bge-small-en-v1.5` en CPU) y extracción de entidades con **Gemini 3.5 Flash** (vía `LiteLLM` con rotador de claves).
 
 En las últimas actualizaciones, NAMS ha evolucionado de una memoria genérica a un **subsistema pedagógico de alta fidelidad con aislamiento por agente, ontología formal POLE+O y control de escritura estricto**.
 
@@ -221,7 +371,7 @@ Para preservar la integridad pedagógica y evitar que errores o alucinaciones de
 
 Antes de emitir una retroalimentación, el tutor socrático puede contrastar la afirmación del estudiante contra la ontología canónica:
 
-* **Mecanismo**: Mediante embeddings y evaluación con LLM (`LiteLLM` con Gemini 2.5 Flash), busca los conceptos canónicos más relevantes en Neo4j y evalúa si la afirmación es fácticamente consistente.
+* **Mecanismo**: Mediante embeddings y evaluación con LLM (`LiteLLM` con Gemini 3.5 Flash), busca los conceptos canónicos más relevantes en Neo4j y evalúa si la afirmación es fácticamente consistente.
 * **Respuesta Estructurada**:
   ```json
   {
@@ -319,7 +469,7 @@ Cada agente cuenta con su propio script de evaluación independiente que define 
 
 #### A. Agente Multimodal (Física)
 *   **Archivo:** [evaluate_langsmith.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/samples/python/agents/multimodal/evaluate_langsmith.py)
-*   **Lógica:** Inspecciona el sub-run `retriever` para extraer los textos obtenidos de los PDFs de física. Utiliza un LLM (Gemini 2.5 Flash con rotador de claves) para actuar como juez experto y puntuar la relevancia y el recall.
+*   **Lógica:** Inspecciona el sub-run `retriever` para extraer los textos obtenidos de los PDFs de física. Utiliza un LLM (Gemini 3.5 Flash con rotador de claves) para actuar como juez experto y puntuar la relevancia y el recall.
 *   **Ejecución:**
     ```bash
     cd samples/python/agents/multimodal
@@ -339,7 +489,7 @@ Cada agente cuenta con su propio script de evaluación independiente que define 
 
 ## 🤖 Automated PR Reviewer (AI Code Review)
 
-Hemos implementado un revisor de código automatizado basado en **Gemini** y las reglas definidas en el espacio de trabajo. Este sistema analiza cada Pull Request contra las directrices de diseño, rendimiento y buenas prácticas del proyecto.
+Hemos implementado un revisor de código automatizado basado en **Gemini 3.5 Flash** y las reglas definidas en el espacio de trabajo. Este sistema analiza cada Pull Request contra las directrices de diseño, rendimiento y buenas prácticas del proyecto.
 
 ### Componentes Clave
 
@@ -354,12 +504,12 @@ Hemos implementado un revisor de código automatizado basado en **Gemini** y las
 2. **Script de Revisión ([scripts/review_pr.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/review_pr.py))**:
    - Obtiene el diff del PR directamente de la API de GitHub (con mecanismos de reintento para evitar errores HTTP 406 Not Acceptable).
    - Lee las reglas definidas en `AGENTS.md`.
-   - Llama a la API de **Gemini** (usa `gemini-2.5-flash` con el nuevo SDK `google-genai`, o cae automáticamente a `gemini-1.5-flash` con `google-generativeai`).
+   - Llama a la API de **Gemini** (usa `gemini-3.5-flash` con el nuevo SDK `google-genai` o el SDK `google-generativeai`, soportando rotación de claves ante cuotas excedidas).
    - Envía el análisis como un comentario automatizado formateado en Markdown directamente en la discusión del PR.
 
 3. **Workflow de GitHub Actions ([.github/workflows/ai-review.yml](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/.github/workflows/ai-review.yml))**:
    - Automatiza la ejecución en GitHub ante eventos de Pull Request (`opened`, `synchronize`, `reopened`).
-   - Requiere la configuración de secretos: `GEMINI_API_KEY` y el token implícito `GITHUB_TOKEN`.
+   - Requiere la configuración de secretos: `GEMINI_API_KEY` (o `GOOGLE_API_KEY`) y el token implícito `GITHUB_TOKEN`.
 
 ### Ejecución Local (Dry-Run / Pruebas)
 

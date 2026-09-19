@@ -30,8 +30,8 @@ class MedicalContextRelevanceEvaluator(RunEvaluator):
     """Custom LangSmith evaluator to measure Context Relevance for the Medical Agent."""
     
     def __init__(self):
-        # Initialize Google Gemini 2.5 Flash as the evaluator judge
-        self.llm = create_google_llm(model="gemini-2.5-flash", temperature=0.0)
+        # Initialize Google Gemini 3.5 Flash as the evaluator judge
+        self.llm = create_google_llm(model="gemini-3.5-flash", temperature=0.0)
 
     def evaluate_run(self, run, example=None, **kwargs) -> EvaluationResult:
         query = run.inputs.get("consulta_usuario") or run.inputs.get("query")
@@ -104,7 +104,7 @@ class MedicalContextRecallEvaluator(RunEvaluator):
     """Custom LangSmith evaluator to measure Context Recall for the Medical Agent."""
     
     def __init__(self):
-        self.llm = create_google_llm(model="gemini-2.5-flash", temperature=0.0)
+        self.llm = create_google_llm(model="gemini-3.5-flash", temperature=0.0)
 
     def evaluate_run(self, run, example=None, **kwargs) -> EvaluationResult:
         # Get ground truth diagnosis response

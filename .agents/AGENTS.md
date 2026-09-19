@@ -13,6 +13,7 @@ These rules apply to any code reviews or code modification tasks performed by AI
   - Check that agent endpoints process payloads correctly and return the expected Server-Sent Events (SSE) or JSON responses.
   - Verify that authentications/JWT tokens are correctly validated where necessary.
 - **Error Handling**: Use explicit try-except blocks. Avoid catching generic `Exception` unless logging it properly or re-raising it.
+- **LLM & Model Standard**: Ensure all agent reasoning, evaluation, and LLM integrations use Gemini 3.5 Flash (`gemini-3.5-flash`), with proper API key rotation and quota error handling.
 
 ## 3. GPU / PyTorch Performance (RTX 3060 / CUDA)
 Since this repository runs workloads optimized for GPU devices (like GPD 3060 laptop GPU):

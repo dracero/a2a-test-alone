@@ -288,7 +288,7 @@ def main(host, port, pdf_dir):
         except MissingAPIKeyError as e:
             logger.error(f'❌ Error: {e}')
             logger.error('Por favor, configura las siguientes variables de entorno:')
-            logger.error('  - GOOGLE_API_KEY (para Gemini 2.5 Flash)')
+            logger.error('  - GOOGLE_API_KEY (para Gemini 3.5 Flash)')
             logger.error('  - QDRANT_URL (URL de tu instancia Qdrant)')
             logger.error('  - QDRANT_KEY (API Key de Qdrant)')
             logger.error('Opcional:')

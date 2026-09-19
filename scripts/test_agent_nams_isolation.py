@@ -1,5 +1,5 @@
 """
-Script de verificación de aislamiento de memorias NAMS por agente y Gemini 2.5 Flash.
+Script de verificación de aislamiento de memorias NAMS por agente y Gemini 3.5 Flash.
 """
 
 import os
@@ -23,7 +23,7 @@ DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 async def main():
     print("=" * 70)
-    print("🧪 INICIANDO VERIFICACIÓN DE AISLAMIENTO NAMS Y GEMINI 2.5")
+    print("🧪 INICIANDO VERIFICACIÓN DE AISLAMIENTO NAMS Y GEMINI 3.5")
     print("=" * 70)
 
     # 1. Instanciar memoria de Física
@@ -86,21 +86,21 @@ async def main():
         assert term not in medical_context.lower(), f"❌ ERROR: Término de física '{term}' encontrado en contexto de histología!"
     print("   ✅ Verificación superada: CERO términos de física en contexto de Histología.")
 
-    print("\n4️⃣ Probando adición de mensajes con extracción LiteLLM + Gemini 2.5 Flash...")
+    print("\n4️⃣ Probando adición de mensajes con extracción LiteLLM + Gemini 3.5 Flash...")
     try:
         await physics_mem.add_user_message(
-            session_id="session_verify_gemini_25",
+            session_id="session_verify_gemini_35",
             content="Tengo una duda sobre la constante elástica k de un resorte en dinámica.",
             student_id="test_student",
         )
         await physics_mem.add_assistant_message(
-            session_id="session_verify_gemini_25",
+            session_id="session_verify_gemini_35",
             content="La ley de Hooke establece que la fuerza restauradora es proporcional al estiramiento: F = -k * x.",
             student_id="test_student",
         )
-        print("   ✅ Mensajes guardados y entidades extraídas con Gemini 2.5 Flash sin errores de Groq.")
+        print("   ✅ Mensajes guardados y entidades extraídas con Gemini 3.5 Flash sin errores de Groq.")
     except Exception as e:
-        print(f"❌ Error al guardar mensajes con Gemini 2.5: {e}")
+        print(f"❌ Error al guardar mensajes con Gemini 3.5: {e}")
         raise e
 
     print("\n5️⃣ Probando conclusiones independientes...")

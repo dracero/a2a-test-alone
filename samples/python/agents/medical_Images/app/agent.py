@@ -94,7 +94,7 @@ import sys as _sys
 _project_root = str(Path(__file__).resolve().parents[5])
 if _project_root not in _sys.path:
     _sys.path.insert(0, _project_root)
-from api_key_rotator import google_key_rotator, create_google_llm, _is_quota_error  # noqa: E402
+from api_key_rotator import google_key_rotator, create_google_llm, _is_quota_error, normalize_llm_response  # noqa: E402
 
 # Configuración de credenciales local
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -245,7 +245,7 @@ class ExtractorOntologia:
             return
         self._current_key = resolved_key
         self._gemini_client = GoogleGenAIClient.Client(api_key=resolved_key)
-        self.model = "gemini-2.5-flash"
+        self.model = "gemini-3.5-flash"
 
     @staticmethod
     def extraer_caption_imagen(page_fitz, img_bbox, texto_pagina_completo: str) -> str:
@@ -1403,7 +1403,7 @@ class SistemaRAGColPaliPuro:
         for intento in range(intentos):
             try:
                 response = await self.llm.ainvoke(messages)
-                return response
+                return normalize_llm_response(response)
             except Exception as e:
                 err_str = str(e)
                 es_retryable = _is_quota_error(e) or any(
@@ -1415,7 +1415,7 @@ class SistemaRAGColPaliPuro:
                     if old_key:
                         google_key_rotator.report_failure(old_key)
                     self.llm = create_google_llm(
-                        model="gemini-2.5-flash",
+                        model="gemini-3.5-flash",
                         temperature=0,
                         max_output_tokens=8192
                     )
@@ -1445,7 +1445,7 @@ class SistemaRAGColPaliPuro:
 
         # LLM (con key rotativa)
         self.llm = create_google_llm(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             temperature=0,
             max_output_tokens=8192
         )
@@ -1635,11 +1635,13 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
         #   Priority 1: Image upload present → True
         #   Priority 2: LLM says REQUIERE_IMAGEN: TRUE/FALSE → use that
         #   Priority 3: Fallback to detectar_intencion_imagen(consulta_usuario)
+        content_str = response.content if isinstance(response.content, str) else str(response.content)
+        content_upper = content_str.upper()
         if imagen_upload:
             state["requiere_imagen"] = True
-        elif "REQUIERE_IMAGEN: TRUE" in response.content.upper():
+        elif "REQUIERE_IMAGEN: TRUE" in content_upper:
             state["requiere_imagen"] = True
-        elif "REQUIERE_IMAGEN: FALSE" in response.content.upper():
+        elif "REQUIERE_IMAGEN: FALSE" in content_upper:
             state["requiere_imagen"] = False
         else:
             state["requiere_imagen"] = detectar_intencion_imagen(state['consulta_usuario'])

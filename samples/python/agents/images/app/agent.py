@@ -281,13 +281,13 @@ class ImageGenerationAgent:
         if LANGSMITH_ENABLED:
             logger.info(f"📊 LangSmith monitoring enabled - Project: {os.getenv('LANGCHAIN_PROJECT')}")
         
-        # Usar Google Gemini 2.5 para el razonamiento del agente
+        # Usar Google Gemini 3.5 para el razonamiento del agente
         from crewai import LLM as CrewAILLM
         google_key = google_key_rotator.get_key()
         os.environ['GEMINI_API_KEY'] = google_key
         os.environ['GOOGLE_API_KEY'] = google_key
         self.model = CrewAILLM(
-            model='gemini/gemini-2.5-flash',
+            model='gemini/gemini-3.5-flash',
             api_key=google_key,
         )
 
