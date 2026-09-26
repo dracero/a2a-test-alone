@@ -367,22 +367,53 @@ Para preservar la integridad pedagógica y evitar que errores o alucinaciones de
 
 ---
 
-### 4. Validación Pedagógica contra el KG Canónico (`validate_against_kg`)
+### 4. Validación Pedagógica contra el KG Canónico (`validate_against_kg`) - Arquitectura Híbrida
 
-Antes de emitir una retroalimentación, el tutor socrático puede contrastar la afirmación del estudiante contra la ontología canónica:
+Antes de emitir una retroalimentación, el tutor socrático contrasta la afirmación del estudiante contra la ontología canónica usando la **Arquitectura Híbrida System One + System Two**:
 
-* **Mecanismo**: Mediante embeddings y evaluación con LLM (`LiteLLM` con Gemini 3.5 Flash), busca los conceptos canónicos más relevantes en Neo4j y evalúa si la afirmación es fácticamente consistente.
+```mermaid
+flowchart LR
+    StudentMsg[Afirmación del Alumno] --> JEV_S1[JEV - System One]
+    
+    subgraph JEV_Decisions [Decisiones Estructuradas Tipadas]
+        JEV_S1 -->|Noul: is_correct| DecisionCorrect{¿Correcto?}
+        JEV_S1 -->|Choice: error_type| ErrorType[Tipo de Error Conceptual]
+        JEV_S1 -->|Score: severity| Severity[Severidad 1-5]
+    end
+    
+    DecisionCorrect --> Trace[Nodo ReasoningTrace en Neo4j NAMS]
+    ErrorType --> Trace
+    Severity --> Trace
+    
+    DecisionCorrect -->|Si es incorrecto + Contexto Canónico| Gemini_S2[Gemini 3.5 Flash - System Two]
+    Gemini_S2 --> SocraticReply[Generación de la Pregunta Socrática Dialéctica]
+```
+
+* **Paso 1: JEV (TypeSafe AI - System One)**: Ejecuta una evaluación tipada multi-primitiva en paralelo y en milisegundos:
+  * `is_correct` (`Noul`): Probabilidad continua calibrada de consistencia científica con el KG.
+  * `error_type` (`Choice`): Diagnóstico explícito del tipo de error (`CONFUSION_PARES_INTERACCION`, `CONFUSION_SISTEMA_REFERENCIA`, `CONFUSION_CAUSA_EFECTO_CINEMATICA`, `ERROR_LEYES_CONSERVACION`, `NINGUNO`).
+  * `severity` (`Score`): Calificación ordinal de gravedad conceptual (escala 1.0 a 5.0).
+* **Paso 2: NAMS en Neo4j (Memoria de Razonamiento y Auditoría)**:
+  * Registra el nodo inmutable `ReasoningTrace` persistiendo `is_correct`, `error_type`, `severity` y `probability`.
+  * Vincula aristas `[:TOUCHED]` hacia las entidades del KG canónico consultadas.
+  * Si la afirmación es errónea, crea o actualiza `MisconceptionCandidate` con su severidad y tipo de error.
+* **Paso 3: Google Gemini 3.5 Flash (System Two)**:
+  * Interviene al final del flujo para redactar la réplica dialéctica socrática orientadora (`socratic_reply`) y la explicación pedagógica (`explanation`), alimentado directamente por el diagnóstico tipado emitido por JEV.
 * **Respuesta Estructurada**:
   ```json
   {
     "is_correct": false,
+    "probability": 0.03,
+    "error_type": "CONFUSION_PARES_INTERACCION",
+    "severity": 2.99,
     "concept": "Tercera Ley de Newton - Acción y Reacción",
-    "canonical_value": "Las fuerzas de acción y reacción actúan sobre CUERPOS DISTINTOS y nunca se anulan mutuamente en el diagrama de cuerpo libre de un único objeto.",
+    "canonical_value": "Las fuerzas de acción y reacción actúan sobre CUERPOS DISTINTOS...",
     "student_claim": "Las fuerzas de acción y reacción se anulan porque tienen igual magnitud sobre el mismo cuerpo.",
-    "explanation": "El estudiante confunde la condición de equilibrio con el par de interacción."
+    "explanation": "Las fuerzas de acción y reacción nunca se anulan porque actúan sobre cuerpos diferentes...",
+    "socratic_reply": "Si empujas un libro sobre una mesa, ¿la fuerza que tu mano ejerce sobre el libro y la fuerza que el libro ejerce sobre tu mano actúan sobre el mismo cuerpo o sobre cuerpos diferentes?",
+    "trace_id": "trace_41eef7f49767"
   }
   ```
-* **Ventaja**: Garantiza que el tutor socrático nunca valide como correcta una afirmación errónea, fundamentando la siguiente pregunta guía en la verdad canónica del grafo.
 
 ---
 

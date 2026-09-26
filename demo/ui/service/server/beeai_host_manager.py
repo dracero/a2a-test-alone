@@ -701,33 +701,14 @@ class BeeAIHostManager(ApplicationManager):
         if any(kw in msg_lower for kw in continue_keywords):
             return True
         
-        # Usar LLM para casos ambiguos
+        # Usar JEV (TypeSafe AI System One) para evaluar la intención de sesión
         try:
-            from langchain_core.messages import HumanMessage
-            
-            prompt = f"""Eres un clasificador de intención. Un estudiante está en una sesión activa 
-con el agente "{active_agent}" (un tutor de física que hace preguntas socráticas).
-
-Determina si el siguiente mensaje del estudiante es:
-- CONTINUAR: Es una respuesta a una pregunta de física, una duda, confusión, o cualquier 
-  interacción relacionada con la sesión de tutoría actual. Incluye también pedidos de 
-  "salir del modo socrático" o "dame la respuesta directa" (el agente de física maneja eso).
-- CAMBIAR: El estudiante quiere hacer algo COMPLETAMENTE diferente, como generar una imagen,
-  hablar de otro tema no relacionado con física, o usar otro servicio.
-
-EN CASO DE DUDA, responde CONTINUAR.
-
-Mensaje del estudiante: "{user_message}"
-
-Responde SOLO: CONTINUAR o CAMBIAR"""
-            
-            response = invoke_with_retry(self.llm, [HumanMessage(content=prompt)])
-            result = response.content.strip().upper()
-            print(f"🧠 Intención de sesión activa: '{user_message[:50]}...' → {result}")
-            
-            return "CAMBIAR" not in result
+            from .jev_service import decide_session_continuation_sync
+            should_continue, conf = decide_session_continuation_sync(active_agent, user_message)
+            print(f"🧠 [JEV] Intención de sesión activa: '{user_message[:50]}...' → {'CONTINUAR' if should_continue else 'CAMBIAR'} (conf: {conf:.2f})")
+            return should_continue
         except Exception as e:
-            print(f"⚠️ Error detectando intención de sesión: {e}")
+            print(f"⚠️ Error detectando intención de sesión con JEV: {e}")
             return True  # En caso de error, continuar con la sesión activa
 
     async def create_conversation(self, conversation_id: str = None) -> Conversation:

@@ -63,6 +63,10 @@ async def main():
            t.input_data AS input_data,
            t.output_data AS output_data,
            t.agent_id AS agent_id,
+           t.is_correct AS is_correct,
+           t.error_type AS error_type,
+           t.severity AS severity,
+           t.probability AS probability,
            toString(t.timestamp) AS timestamp,
            collect(CASE WHEN e IS NOT NULL THEN {
                id: e.id,
@@ -93,6 +97,15 @@ async def main():
         print(f"    Fecha/Hora: {trace.get('timestamp')}")
         print(f"    Insumo:     {trace.get('input_data')}")
         print(f"    Decisión:   {trace.get('output_data')}")
+
+        if trace.get("is_correct") is not None:
+            correct_icon = "✅" if trace.get("is_correct") else "❌"
+            err_type = trace.get("error_type") or "N/A"
+            sev = trace.get("severity")
+            prob = trace.get("probability")
+            sev_str = f"{sev:.2f}/5.0" if isinstance(sev, (int, float)) else str(sev)
+            prob_str = f"{prob:.2f}" if isinstance(prob, (int, float)) else str(prob)
+            print(f"    Diagnóstico System One: {correct_icon} is_correct={trace.get('is_correct')} | Error={err_type} | Severidad={sev_str} | Prob={prob_str}")
 
         touched = [item for item in trace.get("touched_entities", []) if item is not None]
         if touched:

@@ -1410,12 +1410,15 @@ class SistemaRAGColPaliPuro:
                     code in err_str.lower() for code in ["503", "unavailable", "high demand", "overloaded", "500", "502", "504", "deadline_exceeded"]
                 )
                 if es_retryable and intento < intentos - 1:
-                    # Rotar key y re-crear LLM
-                    old_key = getattr(self.llm, 'google_api_key', '') or ''
+                    is_503 = any(code in err_str.lower() for code in ["503", "unavailable", "high demand", "overloaded"])
+                    target_model = "gemini-3.5-flash"
+                    if is_503:
+                        print(f"🔄 [503 High Demand] Reintentando LLM en modelo '{target_model}' con rotación...")
                     if old_key:
                         google_key_rotator.report_failure(old_key)
+
                     self.llm = create_google_llm(
-                        model="gemini-3.5-flash",
+                        model=target_model,
                         temperature=0,
                         max_output_tokens=8192
                     )
@@ -1429,7 +1432,7 @@ class SistemaRAGColPaliPuro:
                     else:
                         wait_time = delay * (2 ** intento)
                         
-                    print(f"⚠️ [Gemini Server/Quota Error: {type(e).__name__}] Key rotada. Reintentando en {wait_time:.2f}s... (Intento {intento+1}/{intentos})")
+                    print(f"⚠️ [Gemini Server/Quota Error: {type(e).__name__}] Reintentando con modelo '{target_model}' en {wait_time:.2f}s... (Intento {intento+1}/{intentos})")
                     await asyncio.sleep(wait_time)
                 else:
                     raise e
@@ -1620,31 +1623,24 @@ Responde ÚNICAMENTE con la consulta reescrita, sin explicaciones, introduccione
             and os.path.exists(state['imagen_consulta'])
         )
 
-        info_imagen = f"\nImagen adjunta: Sí" if state.get('imagen_consulta') else "\nImagen adjunta: No"
-        messages = [
-            SystemMessage(content="""Eres un experto en histopatología. Clasifica consultas.
-Debes determinar la intención del usuario. SOLAMENTE si el usuario pide EXPLÍCITAMENTE que se le muestre, busque o proporcione una imagen, foto, figura o micrografía (ej: "mostrame una foto", "quiero ver una imagen de..."), debes indicarlo.
-Si el usuario hace una pregunta teórica, o usa palabras como "ver" o "imagen" sin estar pidiendo explícitamente ver una imagen (ej: "qué se puede ver en la muestra", "qué es una imagen digital"), debes indicarlo como FALSE.
-Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usuario desea que le muestres una imagen, o "REQUIERE_IMAGEN: FALSE" si es solo una pregunta o comentario."""),
-            HumanMessage(content=f"CONSULTA: {state['consulta_usuario']}{info_imagen}\nCONTEXTO ONTOLÓGICO:\n{state['contexto_ontologico']}")
-        ]
-        response = await self._llm_ainvoke(messages)
-        state["clasificacion"] = response.content
-
-        # Determine requiere_imagen using priority chain:
-        #   Priority 1: Image upload present → True
-        #   Priority 2: LLM says REQUIERE_IMAGEN: TRUE/FALSE → use that
-        #   Priority 3: Fallback to detectar_intencion_imagen(consulta_usuario)
-        content_str = response.content if isinstance(response.content, str) else str(response.content)
-        content_upper = content_str.upper()
         if imagen_upload:
             state["requiere_imagen"] = True
-        elif "REQUIERE_IMAGEN: TRUE" in content_upper:
-            state["requiere_imagen"] = True
-        elif "REQUIERE_IMAGEN: FALSE" in content_upper:
-            state["requiere_imagen"] = False
+            state["clasificacion"] = "REQUIERE_IMAGEN: TRUE (archivo de imagen adjunto)"
         else:
-            state["requiere_imagen"] = detectar_intencion_imagen(state['consulta_usuario'])
+            # Priority 2: Use JEV (TypeSafe AI System One - Noul) for structured intent classification
+            try:
+                from jev_service import classify_medical_image_requirement
+                requires_img, prob = await classify_medical_image_requirement(
+                    query=state['consulta_usuario'],
+                    ontology_context=state.get('contexto_ontologico', '')
+                )
+                state["requiere_imagen"] = requires_img
+                state["clasificacion"] = f"REQUIERE_IMAGEN: {'TRUE' if requires_img else 'FALSE'} (JEV prob: {prob:.2f})"
+                print(f"🔬 [JEV] Clasificación médica: requiere_imagen={requires_img} (prob: {prob:.2f})")
+            except Exception as e:
+                print(f"⚠️ Error en clasificación JEV médica: {e}, usando fallback")
+                state["requiere_imagen"] = detectar_intencion_imagen(state['consulta_usuario'])
+                state["clasificacion"] = f"REQUIERE_IMAGEN: {state['requiere_imagen']} (fallback)"
 
         state["trayectoria"].append({"nodo": "clasificar", "timestamp": time.time()})
         return state
@@ -1669,9 +1665,14 @@ Ejemplo:
 """),
             HumanMessage(content=f"CONSULTA: {state['consulta_resuelta']}\nCONTEXTO ONTOLÓGICO: {state['contexto_ontologico'][:500]}")
         ]
-        response = await self._llm_ainvoke(messages)
-        state["consulta_optimizada"] = response.content.strip()
-        print(f"   🔧 Consulta optimizada: {state['consulta_optimizada'][:200]}")
+        try:
+            response = await self._llm_ainvoke(messages)
+            state["consulta_optimizada"] = response.content.strip()
+            print(f"   🔧 Consulta optimizada: {state['consulta_optimizada'][:200]}")
+        except Exception as e:
+            print(f"   ⚠️ Error optimizando consulta con LLM ({e}), usando consulta resuelta como fallback")
+            state["consulta_optimizada"] = state.get("consulta_resuelta") or state.get("consulta_usuario", "")
+
         state["trayectoria"].append({"nodo": "optimizar_consulta", "timestamp": time.time()})
         return state
 
@@ -2555,10 +2556,24 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
         ]
 
         # 6. Invocar LLM y generar respuesta
-        response = await self._llm_ainvoke(messages)
-        state["respuesta_final"] = response.content
-
-        print("   ✅ Respuesta generada")
+        try:
+            response = await self._llm_ainvoke(messages)
+            state["respuesta_final"] = response.content
+            print("   ✅ Respuesta generada")
+        except Exception as e:
+            print(f"   ⚠️ Error generando respuesta final con LLM: {e}")
+            contexto = state.get("contexto_documentos", "")
+            if contexto:
+                state["respuesta_final"] = (
+                    "Los servidores del modelo LLM experimentaron una sobrecarga temporal (Error 503). "
+                    "Sin embargo, la búsqueda en los manuales de histopatología recuperó la siguiente información relevante:\n\n"
+                    + contexto[:2000]
+                )
+            else:
+                state["respuesta_final"] = (
+                    "El modelo de lenguaje está experimentando alta demanda en este momento (Error 503 de Google). "
+                    "Por favor, intenta nuevamente en unos instantes."
+                )
 
         state["trayectoria"].append({"nodo": "generar_respuesta", "timestamp": time.time()})
         cleanup_memory()

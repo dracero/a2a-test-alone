@@ -84,38 +84,28 @@ async def inicializar_agente_con_pdfs(qdrant_url: str, qdrant_api_key: str, pdf_
     processing_marker = agent_dir / '.pdf_processing_done'
     temario_path = agent_dir / 'temario.txt'
     
-    # ── Check 1: Marcador local ──
-    # Si el procesamiento ya se completó antes, cargar temario y saltar todo
-    if processing_marker.exists() and temario_path.exists():
-        logger.info("✅ PDFs ya procesados anteriormente (marcador local encontrado)")
-        with open(temario_path, "r", encoding="utf-8") as f:
-            executor.agent.temario = f.read()
-        logger.info("✅ Temario cargado desde disco")
-        return executor
-    
-    # ── Check 2: Colecciones en Qdrant ──
+    # ── Check: Colecciones en Qdrant con puntos indexados ──
     from qdrant_client import AsyncQdrantClient
     api_key = qdrant_api_key if (qdrant_api_key and not qdrant_url.startswith("http://localhost") and not qdrant_url.startswith("http://127.0.0.1")) else None
     client = AsyncQdrantClient(url=qdrant_url, api_key=api_key)
     
-    colecciones_existen = False
+    colecciones_listas = False
     try:
-        await client.get_collection(executor.agent.text_collection)
-        colecciones_existen = True
-        logger.info("✅ Colecciones ya existen en Qdrant, saltando procesamiento de PDFs")
-        # Intentar cargar temario desde disco
-        if temario_path.exists():
-            with open(temario_path, "r", encoding="utf-8") as f:
-                executor.agent.temario = f.read()
-            logger.info("✅ Temario cargado desde disco")
+        col = await client.get_collection(executor.agent.text_collection)
+        points_count = getattr(col, 'points_count', 0) or 0
+        if points_count > 0:
+            colecciones_listas = True
+            logger.info(f"✅ Colección '{executor.agent.text_collection}' ya existe en Qdrant con {points_count} puntos.")
+            if temario_path.exists():
+                with open(temario_path, "r", encoding="utf-8") as f:
+                    executor.agent.temario = f.read()
+                logger.info("✅ Temario cargado desde disco")
+            processing_marker.touch()
+            return executor
         else:
-            logger.warning("⚠️ No se encontró temario.txt. El agente podría no tener contexto del temario.")
-        # Crear marcador para futuros reinicios
-        processing_marker.touch()
-        return executor
+            logger.warning(f"⚠️ Colección '{executor.agent.text_collection}' existe pero está vacía (0 puntos). Reindexando PDFs...")
     except Exception as e:
-        logger.info(f"⚠️ Colecciones no encontradas: {e}")
-        logger.info("🔄 Se procesarán los PDFs")
+        logger.info(f"⚠️ Colecciones no encontradas en Qdrant ({e}). Se procesarán e indexarán los PDFs.")
     
     # ── Procesar PDFs ──
     if pdf_dir is None:

@@ -46,6 +46,7 @@ class KeySelectionStrategy(ABC):
         cooldowns: dict[str, float],
         paid_cooldown: float,
         free_cooldown: float,
+        exclude_keys: Optional[set[str]] = None,
     ) -> tuple[Optional[str], Optional[int]]:
         """Selecciona una key disponible y retorna (key, index)."""
         pass
@@ -55,7 +56,7 @@ class PriorityPaidKeyStrategy(KeySelectionStrategy):
     """Estrategia prioritaria: favorece siempre la primera key (paga).
     
     Solo si la principal entra en cooldown conmuta a las secundarias (gratuitas).
-    Si todas están en cooldown, fuerza la primera key (paga) por tener cooldown menor.
+    Si todas están en cooldown, busca la key con menor tiempo restante de penalización.
     """
 
     def select_key(
@@ -64,11 +65,25 @@ class PriorityPaidKeyStrategy(KeySelectionStrategy):
         cooldowns: dict[str, float],
         paid_cooldown: float,
         free_cooldown: float,
+        exclude_keys: Optional[set[str]] = None,
     ) -> tuple[Optional[str], Optional[int]]:
         if not keys:
             return None, None
 
         now = time.time()
+        exclude = exclude_keys or set()
+
+        # Pase 1: Buscar key activa que no esté excluida en este ciclo de reintento
+        for idx, key in enumerate(keys):
+            if key in exclude:
+                continue
+            cooldown_ts = cooldowns.get(key, 0)
+            cooldown_limit = paid_cooldown if idx == 0 else free_cooldown
+            if now - cooldown_ts >= cooldown_limit:
+                cooldowns.pop(key, None)
+                return key, idx
+
+        # Pase 2: Si no hubo no-excluidas, buscar cualquier key fuera de cooldown
         for idx, key in enumerate(keys):
             cooldown_ts = cooldowns.get(key, 0)
             cooldown_limit = paid_cooldown if idx == 0 else free_cooldown
@@ -76,11 +91,21 @@ class PriorityPaidKeyStrategy(KeySelectionStrategy):
                 cooldowns.pop(key, None)
                 return key, idx
 
-        # Si todas están en cooldown, forzar la primera (paga)
-        first_key = keys[0]
-        cooldowns.pop(first_key, None)
-        print(f"⚠️ Todas las keys en cooldown. Forzando uso de la key paga ...{first_key[-4:]}")
-        return first_key, 0
+        # Pase 3: Si todas están en cooldown, seleccionar la de menor tiempo restante
+        best_idx = 0
+        min_remaining = float("inf")
+        for idx, key in enumerate(keys):
+            cooldown_ts = cooldowns.get(key, 0)
+            limit = paid_cooldown if idx == 0 else free_cooldown
+            remaining = limit - (now - cooldown_ts)
+            if remaining < min_remaining:
+                min_remaining = remaining
+                best_idx = idx
+
+        chosen_key = keys[best_idx]
+        cooldowns.pop(chosen_key, None)
+        print(f"⚠️ Todas las keys en cooldown. Conmutando a ...{chosen_key[-4:]} ({min_remaining:.1f}s)")
+        return chosen_key, best_idx
 
 
 class RoundRobinKeyStrategy(KeySelectionStrategy):
@@ -96,13 +121,28 @@ class RoundRobinKeyStrategy(KeySelectionStrategy):
         cooldowns: dict[str, float],
         paid_cooldown: float,
         free_cooldown: float,
+        exclude_keys: Optional[set[str]] = None,
     ) -> tuple[Optional[str], Optional[int]]:
         if not keys:
             return None, None
 
+        exclude = exclude_keys or set()
         with self._lock:
             total = len(keys)
             now = time.time()
+            for offset in range(total):
+                idx = (self._current_index + offset) % total
+                key = keys[idx]
+                if key in exclude:
+                    continue
+                cooldown_ts = cooldowns.get(key, 0)
+                cooldown_limit = paid_cooldown if idx == 0 else free_cooldown
+                if now - cooldown_ts >= cooldown_limit:
+                    cooldowns.pop(key, None)
+                    self._current_index = (idx + 1) % total
+                    return key, idx
+
+            # Fallback a cualquier key libre
             for offset in range(total):
                 idx = (self._current_index + offset) % total
                 key = keys[idx]
@@ -113,7 +153,6 @@ class RoundRobinKeyStrategy(KeySelectionStrategy):
                     self._current_index = (idx + 1) % total
                     return key, idx
 
-            # Si todas están en cooldown, forzar la primera key
             first_key = keys[0]
             cooldowns.pop(first_key, None)
             self._current_index = (0 + 1) % total
@@ -160,10 +199,9 @@ class GoogleApiKeyRotator:
         if raw:
             self._keys = [k.strip() for k in raw.split(",") if k.strip()]
 
-        if not self._keys:
-            fallback = os.getenv(self._fallback_var, "")
-            if fallback:
-                self._keys = [fallback.strip()]
+        fallback = os.getenv(self._fallback_var, "").strip()
+        if fallback and fallback not in self._keys:
+            self._keys.append(fallback)
 
         if self._keys:
             self._loaded = True
@@ -181,7 +219,12 @@ class GoogleApiKeyRotator:
             self.load_keys()
         return len(self._keys)
 
-    def get_key(self) -> str:
+    COOLDOWN_SECONDS = 60
+    PAID_KEY_COOLDOWN_SECONDS = 15
+    EXHAUSTED_COOLDOWN_SECONDS = 300  # 5 min para cuotas agotadas (429)
+    OVERLOAD_COOLDOWN_SECONDS = 25    # 25s para sobrecarga temporal (503)
+
+    def get_key(self, exclude_keys: Optional[set[str]] = None) -> str:
         """Devuelve una key disponible delegando en la estrategia configurada (Patrón Strategy)."""
         if not self._keys:
             self.load_keys()
@@ -194,22 +237,34 @@ class GoogleApiKeyRotator:
                 self._cooldowns,
                 self.PAID_KEY_COOLDOWN_SECONDS,
                 self.COOLDOWN_SECONDS,
+                exclude_keys=exclude_keys,
             )
             if key:
                 print(f"🔑 Usando Google API Key ...{key[-4:]}")
                 return key
             return ""
 
-    def report_failure(self, key: Any):
-        """Marca una key como fallida (cooldown diferenciado: paga vs. free)."""
+    def report_failure(self, key: Any, is_exhausted: bool = False, is_overloaded: bool = False):
+        """Marca una key como fallida con cooldown diferenciado."""
         key_str = _extract_str_key(key)
         if not key_str or key_str not in self._keys:
             return
         with self._lock:
             self._cooldowns[key_str] = time.time()
             idx = self._keys.index(key_str)
-            effective_cd = self.PAID_KEY_COOLDOWN_SECONDS if idx == 0 else self.COOLDOWN_SECONDS
-            print(f"🚫 Key ...{key_str[-4:]} en cooldown por {effective_cd}s")
+            if is_exhausted:
+                effective_cd = self.EXHAUSTED_COOLDOWN_SECONDS
+                reason = "cuota agotada (429)"
+            elif is_overloaded:
+                effective_cd = self.OVERLOAD_COOLDOWN_SECONDS
+                reason = "sobrecarga (503)"
+            elif idx == 0:
+                effective_cd = self.PAID_KEY_COOLDOWN_SECONDS
+                reason = "key prioritaria"
+            else:
+                effective_cd = self.COOLDOWN_SECONDS
+                reason = "falla temporal"
+            print(f"🚫 Key ...{key_str[-4:]} en cooldown por {effective_cd}s ({reason})")
 
     def clear_cooldowns(self):
         with self._lock:
@@ -229,6 +284,8 @@ def create_google_llm(
     """Crea un ChatGoogleGenerativeAI con la siguiente key disponible."""
     from langchain_google_genai import ChatGoogleGenerativeAI
 
+    if "2.5" in model:
+        model = "gemini-3.5-flash"
     if rotator is None:
         rotator = google_key_rotator
     key = rotator.get_key()
@@ -258,12 +315,13 @@ def _is_quota_error(exc: Exception) -> bool:
     )
 
 
-def _rebuild_llm(llm: Any, new_key: str):
+def _rebuild_llm(llm: Any, new_key: str, model_override: Optional[str] = None):
     """Re-crea un ChatGoogleGenerativeAI con una nueva key reutilizando create_google_llm."""
-    model = getattr(llm, "model_name", None) or getattr(llm, "model", "gemini-3.5-flash")
+    model = model_override or getattr(llm, "model_name", None) or getattr(llm, "model", "gemini-3.5-flash")
+    if "2.5" in model:
+        model = "gemini-3.5-flash"
     temperature = getattr(llm, "temperature", 0.3)
     max_output = getattr(llm, "max_output_tokens", 8192)
-    # Crear un rotator ad-hoc de una sola key para reusar create_google_llm
     from langchain_google_genai import ChatGoogleGenerativeAI
     return ChatGoogleGenerativeAI(
         model=model,
@@ -307,8 +365,8 @@ def normalize_llm_response(response: Any) -> Any:
     return response
 
 
-def invoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[GoogleApiKeyRotator] = None, max_retries: int = 0, base_wait: float = 2.0):
-    """Invoca LLM con retry automático ante 403/429, rotando la API key."""
+def invoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[GoogleApiKeyRotator] = None, max_retries: int = 0, base_wait: float = 0.2):
+    """Invoca LLM con retry automático y conmutación ágil de keys."""
     if rotator is None:
         rotator = google_key_rotator
     if max_retries == 0:
@@ -316,6 +374,7 @@ def invoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[GoogleApiKey
 
     last_exc = None
     current_key = _extract_str_key(getattr(llm, "google_api_key", ""))
+    tried_keys: set[str] = {current_key} if current_key else set()
 
     for attempt in range(max_retries + 1):
         try:
@@ -325,23 +384,32 @@ def invoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[GoogleApiKey
             last_exc = exc
             if not _is_quota_error(exc):
                 raise
-            print(f"⚠️ [Retry {attempt+1}/{max_retries}] Cuota excedida con key ...{current_key[-4:] if current_key else '????'}: {str(exc)[:200]}")
+            err_str = str(exc).lower()
+            is_overloaded = any(k in err_str for k in ["503", "unavailable", "high demand", "overloaded"])
+            is_exhausted = any(k in err_str for k in ["quota", "resource_exhausted", "resourceexhausted", "credits are depleted", "429"])
+            print(f"⚠️ [Retry {attempt+1}/{max_retries}] Error ({'503 High Demand' if is_overloaded else ('Cuota 429' if is_exhausted else 'Error')}) con key ...{current_key[-4:] if current_key else '????'}: {str(exc)[:160]}")
             if attempt >= max_retries:
                 break
+            
             if current_key:
-                rotator.report_failure(current_key)
-            new_key = rotator.get_key()
-            llm = _rebuild_llm(llm, new_key)
+                rotator.report_failure(current_key, is_exhausted=is_exhausted, is_overloaded=is_overloaded)
+
+            new_key = rotator.get_key(exclude_keys=tried_keys)
+            is_different_key = bool(new_key and new_key != current_key)
+            if new_key:
+                tried_keys.add(new_key)
+            llm = _rebuild_llm(llm, new_key, model_override="gemini-3.5-flash")
             current_key = new_key
-            wait = base_wait * (2 ** attempt)
+
+            wait = 0.2 if is_different_key else min(1.5 * (1.5 ** attempt), 8.0)
             print(f"⏳ Esperando {wait:.1f}s antes de reintentar...")
             time.sleep(wait)
 
     raise last_exc
 
 
-async def ainvoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[GoogleApiKeyRotator] = None, max_retries: int = 0, base_wait: float = 2.0):
-    """Versión async de invoke_with_retry."""
+async def ainvoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[GoogleApiKeyRotator] = None, max_retries: int = 0, base_wait: float = 0.2):
+    """Versión async de invoke_with_retry con conmutación ágil sobre gemini-3.5-flash."""
     import asyncio
     if rotator is None:
         rotator = google_key_rotator
@@ -350,6 +418,7 @@ async def ainvoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[Googl
 
     last_exc = None
     current_key = _extract_str_key(getattr(llm, "google_api_key", ""))
+    tried_keys: set[str] = {current_key} if current_key else set()
 
     for attempt in range(max_retries + 1):
         try:
@@ -359,15 +428,24 @@ async def ainvoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[Googl
             last_exc = exc
             if not _is_quota_error(exc):
                 raise
-            print(f"⚠️ [Async Retry {attempt+1}/{max_retries}] Cuota excedida con key ...{current_key[-4:] if current_key else '????'}: {str(exc)[:200]}")
+            err_str = str(exc).lower()
+            is_overloaded = any(k in err_str for k in ["503", "unavailable", "high demand", "overloaded"])
+            is_exhausted = any(k in err_str for k in ["quota", "resource_exhausted", "resourceexhausted", "credits are depleted", "429"])
+            print(f"⚠️ [Async Retry {attempt+1}/{max_retries}] Error ({'503 High Demand' if is_overloaded else ('Cuota 429' if is_exhausted else 'Error')}) con key ...{current_key[-4:] if current_key else '????'}: {str(exc)[:160]}")
             if attempt >= max_retries:
                 break
+
             if current_key:
-                rotator.report_failure(current_key)
-            new_key = rotator.get_key()
-            llm = _rebuild_llm(llm, new_key)
+                rotator.report_failure(current_key, is_exhausted=is_exhausted, is_overloaded=is_overloaded)
+
+            new_key = rotator.get_key(exclude_keys=tried_keys)
+            is_different_key = bool(new_key and new_key != current_key)
+            if new_key:
+                tried_keys.add(new_key)
+            llm = _rebuild_llm(llm, new_key, model_override="gemini-3.5-flash")
             current_key = new_key
-            wait = base_wait * (2 ** attempt)
+
+            wait = 0.2 if is_different_key else min(1.5 * (1.5 ** attempt), 8.0)
             print(f"⏳ Esperando {wait:.1f}s antes de reintentar...")
             await asyncio.sleep(wait)
 

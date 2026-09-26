@@ -1,6 +1,6 @@
 """
 BeeAI Workflow-based Orchestrator
-Powered by Google Gemini 3.5 Flash
+Powered by JEV (TypeSafe AI System One)
 Uses explicit workflow steps instead of ReAct pattern
 """
 
@@ -11,6 +11,7 @@ from beeai_framework.workflows.workflow import Workflow
 from pydantic import BaseModel
 
 from .api_key_rotator import ainvoke_with_retry, sanitize_nams_context
+from .jev_service import classify_agent_routing
 from .langsmith_config import traceable
 
 
@@ -55,122 +56,32 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
             print(f"❌ {state.error}")
             return None
     
-    # Step 2: Use Gemini 3.5 Flash to classify and choose the best agent
+    # Step 2: Use JEV (TypeSafe AI System One) to classify and choose the best agent
     @traceable(name="orchestrator_classify_and_choose", run_type="chain", tags=["agent_type:orchestrator", "orchestrator"])
     async def classify_and_choose(state: OrchestratorState) -> str:
-        """Use multimodal LLM to analyze the request (including images) and choose the best agent"""
-        print("🤔 Step 2: Classifying request and choosing agent...")
+        """Use JEV System One model to evaluate the request and choose the best agent or DIRECT."""
+        print("🤔 Step 2: Classifying request and choosing agent with JEV (TypeSafe AI)...")
         
         if not state.available_agents:
             state.error = "No agents available"
             return None
         
         try:
-            # Build a clear description of available agents
-            agents_description = "\n".join([
-                f"{i+1}. {agent['name']}: {agent['description']}" 
-                for i, agent in enumerate(state.available_agents)
-            ])
-            
-            # Create a classification prompt
-            classification_text = (
-                f"You are a routing system. Analyze the user's request and decide which specialized agent should handle it, or if you should respond directly.\n\n"
-                f"Available specialized agents:\n{agents_description}\n\n"
+            chosen, confidence, probs = await classify_agent_routing(
+                user_message=state.user_message,
+                available_agents=state.available_agents,
+                history_text=state.history_text,
+                neo4j_context_text=state.neo4j_context_text,
+                has_images=state.has_images,
+                image_count=len(state.image_data_list) if state.has_images else 0,
             )
+            print(f"🎯 [JEV] Chosen route: '{chosen}' (confidence: {confidence:.2f})")
             
-            if state.neo4j_context_text:
-                classification_text += f"User preferences (background):\n{state.neo4j_context_text[:1500]}\n\n"
-            
-            if state.history_text:
-                classification_text += f"Recent conversation history:\n{state.history_text}\n\n"
-                
-            classification_text += f"User request: \"{state.user_message}\"\n\n"
-            
-            # If images are present, add visual analysis instructions
-            if state.has_images and state.image_data_list:
-                classification_text += (
-                    f"The user has also attached {len(state.image_data_list)} image(s). "
-                    f"LOOK AT THE IMAGE(S) CAREFULLY and determine what they contain. "
-                    f"Based on the visual content of the images AND the text, choose the right agent.\n\n"
-                )
-            
-            classification_text += (
-                f"RULES:\n"
-                f"1. If the request is a simple greeting (hello, hi, hola, hey, etc.) or small talk with NO images, respond with: DIRECT\n"
-                f"2. If the request is about general capabilities or help, respond with: DIRECT\n"
-                f"3. Route the message to a specialized agent based strictly on the semantic domain and intent of the request:\n"
-                f"   - **Asistente Médico**: Route ANY request related to medicine, biology, histology, anatomy, tissues, organs, cells, or clinical topics here. This includes requests to search, show, or retrieve microscopic images or figures, as well as medical text questions.\n"
-                f"   - **Tutor Socrático de Física Multimodal**: Route any request related to physics, equations, mechanics, or physical science problems here.\n"
-                f"   - **Image Generator Agent**: Route requests here ONLY if the user explicitly asks to generate, create, draw, or paint a generic, artistic, creative, or non-medical synthetic image (e.g., 'draw a red cat', 'generate an image of a beach'). Never route medical or microscopic image retrieval/search requests here.\n"
-                f"4. Look at the actual content of any attached images to help identify the domain.\n\n"
-                f"First, analyze the user request step-by-step to identify their intent and reason about which agent or DIRECT is best. "
-                f"Finally, output your final selection enclosed inside <route> and </route> tags. "
-                f"Example: <route>Tutor Socrático de Física Multimodal</route> or <route>DIRECT</route>."
-            )
-            
-            # Build the message content - multimodal if images are present
-            from langchain_core.messages import HumanMessage
-            
-            if state.has_images and state.image_data_list:
-                # Multimodal classification: send images + text to the LLM
-                content = [{"type": "text", "text": classification_text}]
-                
-                for idx, img in enumerate(state.image_data_list):
-                    mime_type = img.get("mime_type", "image/png")
-                    bytes_b64 = img.get("bytes_b64", "")
-                    if bytes_b64:
-                        content.append({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime_type};base64,{bytes_b64}"
-                            }
-                        })
-                        print(f"🖼️ Image {idx} included for visual classification: {mime_type}")
-                
-                classification_llm = getattr(manager, 'vision_llm', None) or llm
-                print(f"🔍 Sending MULTIMODAL classification prompt to Gemini ({len(state.image_data_list)} images) using model: {getattr(classification_llm, 'model', 'unknown')}...")
-                try:
-                    llm_response = await ainvoke_with_retry(classification_llm, [HumanMessage(content=content)])
-                except Exception as vision_err:
-                    print(f"⚠️ Vision model failed: {vision_err}")
-                    print(f"🔄 Falling back to text-only LLM for classification...")
-                    llm_response = await ainvoke_with_retry(llm, [HumanMessage(content=classification_text)])
-            else:
-                # Text-only classification
-                print(f"🔍 Sending text-only classification prompt to Gemini...")
-                llm_response = await ainvoke_with_retry(llm, [HumanMessage(content=classification_text)])
-            
-            print(f"📥 Gemini response type: {type(llm_response)}")
-            print(f"📥 Gemini response content: {llm_response.content}")
-            
-            raw_response = str(llm_response.content).strip() if llm_response.content else ""
-            print(f"🎯 Raw chosen: '{raw_response}'")
-            
-            if not raw_response:
-                print(f"⚠️ Gemini returned empty response, using first agent")
-                state.chosen_agent = state.available_agents[0]['name']
-                return "send_to_agent"
-            
-            # Extract choice from <route> tags
-            import re
-            match = re.search(r'<route>(.*?)</route>', raw_response, re.DOTALL | re.IGNORECASE)
-            if match:
-                chosen = match.group(1).strip()
-                print(f"🎯 Extracted choice: '{chosen}'")
-            else:
-                lines = [line.strip() for line in raw_response.split('\n') if line.strip()]
-                chosen = lines[-1] if lines else ""
-                chosen = chosen.replace('"', '').replace("'", '').strip()
-                if chosen and chosen[0].isdigit():
-                    parts = chosen.split('.', 1)
-                    if len(parts) > 1:
-                        chosen = parts[1].strip()
-                print(f"🎯 Fallback chosen: '{chosen}'")
-            
-            # Check if should respond directly
+            # Check if should respond directly (greetings, small talk, general info)
             if chosen.upper() == 'DIRECT':
-                print(f"✅ Responding directly (no agent needed)")
-                # Generate a direct response
+                print(f"✅ Responding directly (no specialized agent needed)")
+                # Generate a direct conversational response
+                from langchain_core.messages import HumanMessage
                 direct_prompt = (
                     f"You are a friendly AI assistant.\n"
                 )
@@ -183,17 +94,35 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                     )
                 direct_prompt += (
                     f"The user said: \"{state.user_message}\"\n\n"
-                    f"Respond naturally and helpfully, taking into account any retrieved user profile, preferences, or memory context if relevant. If they're greeting you, greet them back. "
+                    f"Respond naturally and helpfully in Spanish, taking into account any retrieved user profile, preferences, or memory context if relevant. If they're greeting you, greet them back. "
                     f"If they ask what you can do, explain that you can connect them with specialized agents for:\n"
-                    f"- Medical image analysis\n"
-                    f"- Physics problems and explanations\n"
-                    f"- Image generation\n"
-                    f"- Multimodal analysis\n\n"
+                    f"- Análisis de imágenes histológicas y medicina (Asistente Médico)\n"
+                    f"- Problemas y explicaciones de física con método socrático (Tutor Socrático de Física Multimodal)\n"
+                    f"- Generación de imágenes artísticas (Image Generator Agent)\n\n"
                     f"Keep your response brief and friendly."
                 )
                 
-                direct_response = await ainvoke_with_retry(llm, [HumanMessage(content=direct_prompt)])
-                state.agent_response = direct_response.content
+                if llm is not None:
+                    try:
+                        direct_response = await ainvoke_with_retry(llm, [HumanMessage(content=direct_prompt)])
+                        state.agent_response = direct_response.content
+                    except Exception as e:
+                        print(f"⚠️ Error generating direct response via LLM: {e}")
+                        state.agent_response = (
+                            "¡Hola! Soy tu asistente de aprendizaje. Puedo ayudarte conectándote con nuestros agentes especializados:\n"
+                            "- **Asistente Médico**: Consultas de histopatología y búsqueda de micrografías.\n"
+                            "- **Tutor Socrático de Física Multimodal**: Resolución paso a paso de problemas de física.\n"
+                            "- **Image Generator Agent**: Creación de imágenes digitales y esquemas.\n\n"
+                            "¿En qué te gustaría profundizar hoy?"
+                        )
+                else:
+                    state.agent_response = (
+                        "¡Hola! Soy tu asistente de aprendizaje. Puedo ayudarte conectándote con nuestros agentes especializados:\n"
+                        "- **Asistente Médico**: Consultas de histopatología y búsqueda de micrografías.\n"
+                        "- **Tutor Socrático de Física Multimodal**: Resolución paso a paso de problemas de física.\n"
+                        "- **Image Generator Agent**: Creación de imágenes digitales y esquemas.\n\n"
+                        "¿En qué te gustaría profundizar hoy?"
+                    )
                 state.chosen_agent = "DIRECT"  # Mark that we responded directly
                 print(f"✅ Direct response generated: {state.agent_response[:100]}...")
                 return None  # End workflow
@@ -216,17 +145,16 @@ async def create_orchestrator_workflow(manager, list_tool, send_tool, llm):
                 
                 # Default to first agent if no match
                 state.chosen_agent = agent_names[0]
-                print(f"⚠️ No match for '{chosen}', defaulting to: {state.chosen_agent}")
+                print(f"⚠️ No exact match for '{chosen}', defaulting to: {state.chosen_agent}")
                 return "send_to_agent"
                 
         except Exception as e:
-            print(f"❌ Error during classification: {str(e)}")
+            print(f"❌ Error during JEV classification: {str(e)}")
             import traceback
             traceback.print_exc()
             # Assign a sensible default instead of failing
             if state.available_agents:
                 if state.has_images:
-                    # Try to find the physics or medical agent for image queries
                     for agent in state.available_agents:
                         name_lower = agent['name'].lower()
                         if 'física' in name_lower or 'physics' in name_lower or 'multimodal' in name_lower:

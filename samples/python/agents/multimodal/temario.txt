@@ -1,82 +1,82 @@
-A continuación, te presento el temario estructurado de Física I:
+Estimados alumnos, a continuación les presento el temario completo y estructurado de la materia **Física I** de la Facultad de Ingeniería de la Universidad de Buenos Aires (UBA), elaborado a partir de las unidades y documentos del curso:
 
-**TEMA 1: Magnitudes escalares y vectoriales**
-- Subtema 1.1: Definición de magnitudes escalares y vectoriales
-- Subtema 1.2: Ejemplos de magnitudes escalares y vectoriales
+TEMA 1: Medición, Incertezas y Cifras Significativas
+- Subtema 1.1: Concepto de medición como proceso de comparación con un patrón.
+- Subtema 1.2: Teoría de incertezas, error absoluto y determinación del rango del valor verdadero.
+- Subtema 1.3: Determinación del valor representativo y expresión correcta de las magnitudes medidas en el laboratorio.
 
-**TEMA 2: Cinemática de la partícula**
-- Subtema 2.1: Posición de una partícula “P” respecto del observador “O”
-- Subtema 2.2: Sistema de referencia. Encuadre empírico del movimiento
-- Subtema 2.3: Sistemas de coordenadas: cartesianas, polares e intrínsecas
-- Subtema 2.4: Cambio de posición de un punto “P” respecto de un observador fijo “O”
-- Subtema 2.5: Velocidad instantánea de un punto “P” respecto de un observador fijo “O”
-- Subtema 2.6: Vector velocidad en coordenadas polares y transformación a coordenadas cartesianas en 2D
-- Subtema 2.7: Variación del vector velocidad
-- Subtema 2.8: Aceleración instantánea de un punto “P” respecto de un observador fijo “O”
-- Subtema 2.9: Circunferencia osculatriz o círculo osculador: centro de curvatura local y radio de curvatura local de una trayectoria
+TEMA 2: Cinemática de la Partícula
+- Subtema 2.1: Magnitudes escalares y vectoriales, y componentes de un vector en el espacio.
+- Subtema 2.2: Análisis del movimiento en tres dimensiones (3D) y definición de sistemas de referencia.
+- Subtema 2.3: Sistemas de coordenadas: cartesianas, polares e intrínsecas.
+- Subtema 2.4: Vectores posición, velocidad instantánea y aceleración instantánea.
+- Subtema 2.5: Transformación de coordenadas polares a cartesianas en dos dimensiones (2D).
+- Subtema 2.6: Circunferencia osculatriz, centro de curvatura local y radio de curvatura de una trayectoria.
 
-**TEMA 3: Dinámica de la partícula**
-- Subtema 3.1: Introducción a la dinámica
-- Subtema 3.2: Primera ley: el Principio de Inercia
-- Subtema 3.3: Segunda ley: el Principio de Masa
-- Subtema 3.4: Tercera ley: el Principio de Interacción
-- Subtema 3.5: La interacción gravitatoria
-- Subtema 3.6: Fuerzas derivadas de interacciones eléctricas: la fuerza elástica
-- Subtema 3.7: Fuerzas derivadas de interacciones eléctricas: la fuerza de rozamiento
-- Subtema 3.8: Fuerzas derivadas de interacciones eléctricas: la tensión
+TEMA 3: Dinámica de la Partícula
+- Subtema 3.1: Leyes de Newton: Principio de Inercia (Primera Ley), Principio de Masa (Segunda Ley) y Principio de Interacción (Tercera Ley).
+- Subtema 3.2: La interacción gravitatoria.
+- Subtema 3.3: Fuerzas derivadas de interacciones eléctricas: fuerza elástica, fuerza de rozamiento y tensión.
 
-**TEMA 4: Trabajo y Energía**
-- Subtema 4.1: Introducción al trabajo y la energía
-- Subtema 4.2: Definición de trabajo mecánico
-- Subtema 4.3: Energía potencial y fuerzas conservativas
-- Subtema 4.4: Fuerzas centrales
-- Subtema 4.5: La energía cinética
+TEMA 4: Sistemas de Referencia No Inerciales
+- Subtema 4.1: Descripción y modelización del movimiento desde sistemas de referencia acelerados.
+- Subtema 4.2: Limitaciones de las Leyes de Newton en sistemas no inerciales y necesidad de introducir fuerzas ficticias o de inercia.
 
-**TEMA 5: Sistema de partículas**
-- Subtema 5.1: Modelo sistema de partículas
-- Subtema 5.2: Sistema de referencia laboratorio
-- Subtema 5.3: Centro de masa de un sistema de partículas
-- Subtema 5.4: Velocidad del CM de un sistema de partículas
-- Subtema 5.5: Aceleración del CM de un sistema de partículas
-- Subtema 5.6: Dinámica de un sistema de partículas
+TEMA 5: Trabajo y Energía de la Partícula
+- Subtema 5.1: Definición matemática y física del trabajo mecánico como integral de línea.
+- Subtema 5.2: Concepto y cálculo de la potencia mecánica.
+- Subtema 5.3: Energía potencial, fuerzas conservativas y dinámica bajo fuerzas centrales.
+- Subtema 5.4: Energía cinética y el teorema del trabajo y la energía cinética.
 
-**TEMA 6: Cinemática del Cuerpo Rígido**
-- Subtema 6.1: Introducción a la cinemática del cuerpo rígido
-- Subtema 6.2: Determinación del Centro de Masa (CM) del cuerpo rígido
-- Subtema 6.3: Estudio de los posibles movimientos de un Cuerpo Rígido (CR) en un plano perpendicular a su eje de simetría
+TEMA 6: Sistema de Partículas
+- Subtema 6.1: Modelo de sistema de partículas discretas y continuas, y sistemas de referencia (Laboratorio y Centro de Masa).
+- Subtema 6.2: Centro de Masa (CM): definición, posición, velocidad, aceleración y dinámica del CM.
+- Subtema 6.3: Segunda ecuación universal para un sistema de partículas.
+- Subtema 6.4: Impulso, cantidad de movimiento, momento angular (cinético) y torque para un sistema de partículas.
+- Subtema 6.5: Trabajo y energía en un sistema de partículas: energía cinética, energía potencial gravitatoria y ecuaciones universales de la dinámica.
+- Subtema 6.6: Dinámica impulsiva de un sistema de partículas y colisiones (choques mecánicos, conservación de la energía y coeficiente de restitución).
 
-**TEMA 7: Dinámica del Cuerpo Rígido**
-- Subtema 7.1: Introducción a la dinámica del cuerpo rígido
-- Subtema 7.2: Resultado de trasladar una fuerza al CM
-- Subtema 7.3: Cupla o par de fuerzas
-- Subtema 7.4: Resultante de un sistema de fuerzas y torques aplicados a un CR
+TEMA 7: Cinemática del Cuerpo Rígido
+- Subtema 7.1: Determinación del Centro de Masa (CM) en cuerpos rígidos continuos.
+- Subtema 7.2: Condición de rigidez y estudio de movimientos en un plano perpendicular al eje de simetría.
+- Subtema 7.3: Casos particulares de movimiento del cuerpo rígido y diagramas vectoriales.
+- Subtema 7.4: Centro Instantáneo de Rotación (CIR).
 
-**TEMA 8: Dinámica Impulsiva del Cuerpo Rígido**
-- Subtema 8.1: Introducción a la dinámica impulsiva del cuerpo rígido
-- Subtema 8.2: Centro de percusión
+TEMA 8: Dinámica del Cuerpo Rígido
+- Subtema 8.1: Traslación de fuerzas al CM, cuplas o pares de fuerzas, y resultante de sistemas de fuerzas y torques aplicados.
+- Subtema 8.2: Momento cinético de un cuerpo rígido en rotación y cálculo del momento de inercia baricéntrico.
+- Subtema 8.3: Teorema de Steiner (ejes paralelos) y aditividad/sustractividad de los momentos de inercia.
+- Subtema 8.4: Expresión del torque y momento cinético respecto al CM y respecto al CIR.
+- Subtema 8.5: Momentos de inercia baricéntricos de cuerpos no homogéneos y/o no simétricos.
+- Subtema 8.6: Dinámica y oscilaciones del péndulo físico.
+- Subtema 8.7: Trabajo, energía cinética y ecuaciones fundamentales de la dinámica del cuerpo rígido.
+- Subtema 8.8: Análisis de la fuerza de rozamiento en la rodadura y deslizamiento del cuerpo rígido.
 
-**TEMA 9: Hidrodinámica**
-- Subtema 9.1: Discusión de conceptos previos
-- Subtema 9.2: Flujo del fluido ideal
-- Subtema 9.3: Caudal y caudal másico
+TEMA 9: Dinámica Impulsiva del Cuerpo Rígido
+- Subtema 9.1: Conceptos fundamentales de la dinámica impulsiva en intervalos de tiempo infinitesimales.
+- Subtema 9.2: Centro de percusión en cuerpos rígidos y en cuerpos suspendidos.
+- Subtema 9.3: Radio de giro baricéntrico y aplicaciones prácticas de percusión.
 
-**TEMA 10: Ondas Mecánicas**
-- Subtema 10.1: Introducción a las ondas mecánicas
-- Subtema 10.2: Características del movimiento ondulatorio
-- Subtema 10.3: Clasificación de las ondas
+TEMA 10: Ondas Mecánicas
+- Subtema 10.1: Características, clasificación y descripción macroscópica del movimiento ondulatorio en medios continuos.
+- Subtema 10.2: Ecuación general del movimiento ondulatorio y sus soluciones matemáticas.
+- Subtema 10.3: Ondas transversales en cuerdas y ondas longitudinales en varillas.
+- Subtema 10.4: Energía de las ondas (cinética y elástica) y fenómenos de superposición.
+- Subtema 10.5: Ondas estacionarias, resonancia y Efecto Doppler.
 
-**TEMA 11: Óptica Geométrica**
-- Subtema 11.1: Introducción a la óptica geométrica
-- Subtema 11.2: Leyes o principio fundamentales de la óptica geométrica
-- Subtema 11.3: Algunas definiciones
+TEMA 11: Elementos de Hidrodinámica
+- Subtema 11.1: Modelo de fluido ideal incompresible: conceptos de densidad y presión.
+- Subtema 11.2: Caudal, caudal másico y Teorema de Continuidad.
+- Subtema 11.3: Integración de la ecuación de Euler (Ecuación de Bernoulli) y aplicaciones prácticas (Tubo de Pitot).
 
-**TEMA 12: Óptica Física**
-- Subtema 12.1: Principio de Huygens
-- Subtema 12.2: El concepto de coherencia
-- Subtema 12.3: Interferencia
+TEMA 12: Óptica Geométrica
+- Subtema 12.1: Leyes fundamentales de la óptica geométrica: propagación rectilínea, reflexión y refracción de la luz.
+- Subtema 12.2: Reflexión en espejos planos y esféricos: formación de imágenes, campo del espejo, focos y agrandamiento lateral.
+- Subtema 12.3: Reflexión total interna y ángulo límite.
+- Subtema 12.4: Refracción en dioptras esféricas (Fórmula de Descartes y aumento lateral).
+- Subtema 12.5: Lentes delgadas y gruesas: ecuación del constructor de lentes, potencia y formación de imágenes.
 
-**TEMA 13: Sistemas de Referencia No Inerciales**
-- Subtema 13.1: Introducción a los sistemas de referencia no inerciales
-- Subtema 13.2: Sistemas de referencia acelerados
-
-Espero que esta estructura te sea de ayuda. ¡Si necesitas algo más, no dudes en preguntar!
+TEMA 13: Óptica Física
+- Subtema 13.1: Principio de Huygens y el concepto de coherencia en ondas luminosas.
+- Subtema 13.2: Fenómeno de interferencia: Experiencia de Young, interferencia para n fuentes sincrónicas y cálculo de intensidad.
+- Subtema 13.3: Fenómeno de difracción: difracción por una ranura, expresión de la intensidad y redes de difracción.

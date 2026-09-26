@@ -120,14 +120,14 @@ class AgentNAMSMemory:
                     "database": self.database,
                 },
                 embedding=embedder,
-                llm="gemini/gemini-3.5-flash",
+                llm=os.getenv("NAMS_LLM_MODEL", "gemini/gemini-3.5-flash"),
                 extraction=ExtractionConfig(
                     extractor_type=ExtractorType.LLM,
                 ),
                 schema_config=schema_settings,
             )
             self.client = MemoryClient(settings)
-            logger.info(f"✅ Memoria NAMS configurada para '{self.agent_name}' ({self.agent_id}) con Gemini 3.5 Flash")
+            logger.info(f"✅ Memoria NAMS configurada para '{self.agent_name}' ({self.agent_id}) con {os.getenv('NAMS_LLM_MODEL', 'gemini/gemini-3.5-flash')}")
         except Exception as e:
             logger.error(f"❌ Error al instanciar NAMS para '{self.agent_name}': {e}")
             self.client = None
@@ -587,6 +587,8 @@ class AgentNAMSMemory:
         student_claim: str,
         canonical_value: str,
         session_id: str,
+        error_type: Optional[str] = None,
+        severity: Optional[float] = None,
     ) -> dict[str, Any]:
         """Guarda la afirmación del estudiante en Short-Term como candidato sin modificar el KG canónico."""
         return await self.register_misconception_candidate(
@@ -595,6 +597,8 @@ class AgentNAMSMemory:
             student_claim=student_claim,
             canonical_value=canonical_value,
             session_id=session_id,
+            error_type=error_type,
+            severity=severity,
         )
 
     async def register_confirmed_deficiency(
@@ -604,6 +608,7 @@ class AgentNAMSMemory:
         correccion: str,
         occurrences: int = 1,
         severity: str = "media",
+        error_type: Optional[str] = None,
     ) -> bool:
         """Registra una falencia confirmada del estudiante en el KG de forma semántica y estructural.
         
@@ -656,6 +661,7 @@ class AgentNAMSMemory:
                 d.student_id = $student_id,
                 d.concept_ref = $tema,
                 d.description = $correccion,
+                d.error_type = $error_type,
                 d.occurrences = $occurrences,
                 d.severity = $severity,
                 d.status = 'confirmed',
@@ -664,7 +670,9 @@ class AgentNAMSMemory:
             ON MATCH SET
                 d.occurrences = d.occurrences + $occurrences,
                 d.last_detected = datetime(),
-                d.description = $correccion
+                d.description = $correccion,
+                d.error_type = coalesce($error_type, d.error_type),
+                d.severity = $severity
             WITH d
             MATCH (s:Entity {id: $student_entity_id})
             MERGE (s)-[r:HAS_DEFICIENCY]->(d)
@@ -687,6 +695,7 @@ class AgentNAMSMemory:
                     "student_entity_id": str(student_entity.id),
                     "tema": tema,
                     "correccion": correccion,
+                    "error_type": error_type,
                     "occurrences": occurrences,
                     "severity": severity,
                 }
@@ -728,6 +737,8 @@ class AgentNAMSMemory:
         student_claim: str,
         canonical_value: str,
         session_id: str,
+        error_type: Optional[str] = None,
+        severity: Optional[float] = None,
     ) -> dict[str, Any]:
         """Registra un candidato a misconception en Short-Term y como nodo MisconceptionCandidate.
         
@@ -748,6 +759,8 @@ class AgentNAMSMemory:
                 "concept": concept,
                 "student_claim": student_claim,
                 "canonical_value": canonical_value,
+                "error_type": error_type,
+                "severity": severity,
                 "student_id": student_id,
             })
             await self.client.short_term.add_message(
@@ -777,6 +790,8 @@ class AgentNAMSMemory:
                 concept: $concept,
                 student_claim: $student_claim,
                 canonical_value: $canonical_value,
+                error_type: $error_type,
+                severity: $severity,
                 session_id: $session_id,
                 status: 'pending',
                 detected_at: datetime()
@@ -793,15 +808,19 @@ class AgentNAMSMemory:
                     "concept": concept,
                     "student_claim": student_claim,
                     "canonical_value": canonical_value,
+                    "error_type": error_type,
+                    "severity": severity,
                     "session_id": scoped_id,
                 }
             )
-            logger.info(f"📝 Candidato a falencia registrado para estudiante '{student_id}': {concept} - '{student_claim}'")
+            logger.info(f"📝 Candidato a falencia registrado para estudiante '{student_id}': {concept} - '{student_claim}' (Error: {error_type}, Sev: {severity})")
             return {
                 "candidate_id": cand_id,
                 "concept": concept,
                 "student_claim": student_claim,
                 "canonical_value": canonical_value,
+                "error_type": error_type,
+                "severity": severity,
             }
         except Exception as e:
             logger.error(f"❌ Error registrando misconception candidate: {e}")
@@ -964,11 +983,14 @@ class AgentNAMSMemory:
         self,
         student_claim: str,
         llm: Any = None,
+        student_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        custom_taxonomy: Optional[dict[str, str]] = None,
     ) -> dict[str, Any]:
-        """Compara la afirmación del estudiante contra el KG canónico.
-        
-        Las correcciones del estudiante NUNCA se toman como verdad absoluta.
-        Se contrasta contra los conceptos canónicos y principios validados.
+        """Valida la afirmación del estudiante usando la Arquitectura Híbrida agnóstica de dominio:
+        1. System One (JEV): Juicios rápidos tipados en paralelo (Noul: is_correct, Choice: error_type universal, Score: severity).
+        2. NAMS (Neo4j): Registro inmutable en ReasoningTrace con aristas [:TOUCHED] a conceptos canónicos.
+        3. System Two (Gemini 3.5 Flash): Redacción adaptativa de la réplica socrática orientadora.
         
         Returns:
             {
@@ -976,7 +998,12 @@ class AgentNAMSMemory:
                 "concept": str,
                 "canonical_value": str,
                 "student_claim": str,
+                "error_type": str,
+                "severity": float,
+                "probability": float,
                 "explanation": str,
+                "socratic_reply": str,
+                "trace_id": str,
             }
         """
         if not student_claim or not student_claim.strip():
@@ -985,30 +1012,35 @@ class AgentNAMSMemory:
                 "concept": "general",
                 "canonical_value": "",
                 "student_claim": "",
+                "error_type": "NINGUNO",
+                "severity": 1.0,
+                "probability": 1.0,
                 "explanation": "Afirmación vacía",
+                "socratic_reply": "¿Tienes alguna duda o concepto que quieras explorar?",
+                "trace_id": "",
             }
 
         # 1. Consultar conceptos canónicos relevantes en el KG
         canonical_entities = await self.query_canonical_context(query=student_claim, max_items=5)
         
         context_summary = ""
+        touched_entity_ids: list[str] = []
+        main_concept = self.agent_name
+
         if canonical_entities:
             context_summary = "\n".join([
                 f"- {e.get('name')}: {e.get('description', '')} (Fórmula: {e.get('formula', 'N/A')})"
                 for e in canonical_entities
             ])
+            touched_entity_ids = [str(e.get("id") or e.get("name")) for e in canonical_entities if e.get("id") or e.get("name")]
+            if canonical_entities[0].get("name"):
+                main_concept = canonical_entities[0]["name"]
         else:
             gen_context = await self.get_context(query=student_claim, student_id="system", session_id="val_session", max_items=5)
             context_summary = gen_context
 
         if not context_summary.strip():
-            return {
-                "is_correct": True,
-                "concept": "general",
-                "canonical_value": "",
-                "student_claim": student_claim,
-                "explanation": "No hay restricciones canónicas contradictorias registradas en el grafo.",
-            }
+            context_summary = f"Conocimiento canónico fundamental del dominio de {self.agent_name}."
 
         eval_llm = llm
         if not eval_llm:
@@ -1017,33 +1049,151 @@ class AgentNAMSMemory:
             except Exception as e:
                 logger.debug(f"Could not create Google LLM: {e}")
 
-        # 2. Evaluar mediante LLM contrastando estrictamente contra el KG
-        if eval_llm:
+        # 2. Paso 1: JEV System One (Decisiones estructuradas tipadas universales: Noul + Choice + Score)
+        jev_evaluated = False
+        is_correct = True
+        prob = 0.5
+        error_type = "NINGUNO"
+        severity = 1.0
+
+        try:
+            from .jev_service import evaluate_claim_hybrid_system_one
+            jev_res = await evaluate_claim_hybrid_system_one(
+                student_claim,
+                context_summary,
+                domain_name=self.agent_name,
+                custom_taxonomy=custom_taxonomy,
+            )
+            is_correct = bool(jev_res.get("is_correct", True))
+            prob = float(jev_res.get("probability", 0.5))
+            error_type = str(jev_res.get("error_type", "NINGUNO"))
+            severity = float(jev_res.get("severity", 1.0))
+            jev_evaluated = True
+            logger.info(
+                f"🧠 [Hybrid System One - JEV ({self.agent_name})] is_correct={is_correct} (p={prob:.2f}), "
+                f"error_type={error_type}, severity={severity:.2f}"
+            )
+        except Exception as jev_err:
+            logger.warning(f"⚠️ Error en evaluación JEV System One: {jev_err}")
+
+        # Fallback a LLM para la evaluación de juicio si JEV no estuvo disponible
+        if not jev_evaluated and eval_llm:
             try:
                 from langchain_core.messages import HumanMessage
-                prompt = f"""Eres un validador pedagógico estricto del curso de {self.agent_name}.
-Tu tarea es contrastar la afirmación del estudiante contra el Conocimiento Canónico del Grafo de Conocimiento (KG).
+                judge_prompt = f"""Eres un validador pedagógico estricto del curso de {self.agent_name}.
+Contrasta la afirmación del estudiante contra el Conocimiento Canónico del KG:
 
-REGLAS CRÍTICAS:
-1. El KG canónico es la verdad de referencia. Las afirmaciones del estudiante NUNCA deben aceptarse si contradicen el KG.
-2. Si el estudiante afirma algo físicamente/médicamente erróneo o contrario al KG, marca is_correct: false.
-3. Si el estudiante dice algo correcto y compatible con el KG, marca is_correct: true.
-
-Conocimiento Canónico del KG:
+Conocimiento Canónico:
 {context_summary}
 
 Afirmación del estudiante:
 "{student_claim}"
 
-Responde ÚNICAMENTE un objeto JSON válido con este formato:
+Responde ÚNICAMENTE un JSON válido con la taxonomía cognitiva universal:
 {{
   "is_correct": true o false,
-  "concept": "<nombre del concepto central involucrado>",
-  "canonical_value": "<lo que afirma la física/medicina canónica según el KG>",
-  "explanation": "<breve explicación de por qué es correcto o cuál es el error del alumno>"
+  "concept": "<nombre del concepto central>",
+  "error_type": "CONFUSION_CONCEPTUAL_O_ESTRUCTURAL" | "INVERSION_CAUSA_EFECTO_O_DIRECCIONALIDAD" | "ATRIBUCION_ERRONEA_DE_PROPIEDADES" | "APLICACION_FUERA_DE_DOMINIO_O_CONDICION" | "CONTRADICCION_DE_PRINCIPIO_RECTOR" | "DISCREPANCIA_NOMENCLATURA_O_ESCALA" | "OTRO_ERROR_CONCEPTUAL" | "NINGUNO",
+  "severity": <número float de 1.0 a 5.0>,
+  "probability": <float 0.0 a 1.0 de veracidad>
+}}"""
+                resp = await ainvoke_with_retry(eval_llm, [HumanMessage(content=judge_prompt)])
+                raw_text = resp.content.strip()
+                if "```json" in raw_text:
+                    raw_text = raw_text.split("```json")[1].split("```")[0].strip()
+                elif "```" in raw_text:
+                    raw_text = raw_text.split("```")[1].split("```")[0].strip()
+                parsed = json.loads(raw_text)
+                is_correct = bool(parsed.get("is_correct", True))
+                prob = float(parsed.get("probability", 0.9 if is_correct else 0.1))
+                error_type = str(parsed.get("error_type", "NINGUNO" if is_correct else "OTRO_ERROR_CONCEPTUAL"))
+                severity = float(parsed.get("severity", 1.0 if is_correct else 3.0))
+            except Exception as judge_err:
+                logger.warning(f"⚠️ Fallback LLM de juicio falló: {judge_err}")
+
+        # 3. Paso 2: Memoria de Razonamiento NAMS (Registro ReasoningTrace + TOUCHED)
+        trace_output = {
+            "is_correct": is_correct,
+            "error_type": error_type,
+            "severity": round(severity, 2),
+            "probability": round(prob, 3),
+        }
+        trace_id = await self.record_reasoning_trace(
+            action="validate_against_kg",
+            input_data=f"Student claim: {student_claim}",
+            output_data=json.dumps(trace_output),
+            entities_touched=touched_entity_ids,
+            mode=InteractionMode.STUDENT,
+            is_correct=is_correct,
+            error_type=error_type,
+            severity=severity,
+            probability=prob,
+        )
+
+        # Si el estudiante comete un error y student_id fue provisto, registrar candidato
+        if not is_correct and student_id:
+            await self.register_misconception_candidate(
+                student_id=student_id,
+                concept=main_concept,
+                student_claim=student_claim,
+                canonical_value=context_summary[:300],
+                session_id=session_id or "val_session",
+                error_type=error_type,
+                severity=severity,
+            )
+
+        # 4. Paso 3: System Two (Gemini 3.5 Flash) - Síntesis de la Réplica Socrática
+        socratic_reply = ""
+        explanation = ""
+
+        if eval_llm:
+            try:
+                from langchain_core.messages import HumanMessage
+                if not is_correct:
+                    socratic_prompt = f"""Eres el tutor socrático del curso de {self.agent_name}.
+El modelo evaluador System One (JEV) ha diagnosticado un error conceptual en la afirmación del estudiante:
+
+Afirmación del estudiante:
+"{student_claim}"
+
+Conocimiento Canónico del Grafo (Verdad de Referencia):
+{context_summary}
+
+Diagnóstico Estructurado de System One:
+- Veredicto: INCORRECTO (probabilidad de certeza: {prob:.2f})
+- Tipo de error: {error_type}
+- Severidad pedagógica: {severity:.1f}/5.0
+
+Tu tarea como System Two es redactar la intervención pedagógica socrática:
+1. 'socratic_reply': Una pregunta dialéctica precisa que guíe al estudiante a reflexionar sobre su error ('{error_type}') sin revelarle la respuesta directa ni validar su error.
+2. 'explanation': Una explicación pedagógica concisa (máximo 2 oraciones) de la verdad canónica según el grafo.
+
+Responde ÚNICAMENTE en JSON válido con este formato:
+{{
+  "socratic_reply": "<pregunta socrática orientadora>",
+  "explanation": "<explicación pedagógica breve>"
+}}"""
+                else:
+                    socratic_prompt = f"""Eres el tutor socrático del curso de {self.agent_name}.
+El estudiante ha realizado una afirmación correcta y consistente con el Grafo de Conocimiento:
+
+Afirmación del estudiante:
+"{student_claim}"
+
+Conocimiento Canónico:
+{context_summary}
+
+Tu tarea como System Two es redactar una breve intervención pedagógica:
+1. 'socratic_reply': Una pregunta socrática de profundización o caso límite desafiante para consolidar su comprensión.
+2. 'explanation': Confirmación concisa del principio físico o médico validado.
+
+Responde ÚNICAMENTE en JSON válido con este formato:
+{{
+  "socratic_reply": "<pregunta de profundización socrática>",
+  "explanation": "<confirmación breve>"
 }}"""
 
-                response = await ainvoke_with_retry(eval_llm, [HumanMessage(content=prompt)])
+                response = await ainvoke_with_retry(eval_llm, [HumanMessage(content=socratic_prompt)])
                 raw_text = response.content.strip()
                 if "```json" in raw_text:
                     raw_text = raw_text.split("```json")[1].split("```")[0].strip()
@@ -1051,27 +1201,41 @@ Responde ÚNICAMENTE un objeto JSON válido con este formato:
                     raw_text = raw_text.split("```")[1].split("```")[0].strip()
 
                 try:
-                    data = json.loads(raw_text, strict=False)
+                    socr_data = json.loads(raw_text, strict=False)
                 except Exception:
                     import re
                     sanitized = re.sub(r'\\(?![/"\\bfnrtu])', r'\\\\', raw_text)
-                    data = json.loads(sanitized, strict=False)
-                return {
-                    "is_correct": bool(data.get("is_correct", True)),
-                    "concept": str(data.get("concept", "general")),
-                    "canonical_value": str(data.get("canonical_value", "")),
-                    "student_claim": student_claim,
-                    "explanation": str(data.get("explanation", "")),
-                }
-            except Exception as e:
-                logger.warning(f"⚠️ Error evaluando validación contra KG con LLM: {e}")
+                    socr_data = json.loads(sanitized, strict=False)
+
+                socratic_reply = str(socr_data.get("socratic_reply", "")).strip()
+                explanation = str(socr_data.get("explanation", "")).strip()
+            except Exception as socr_err:
+                logger.warning(f"⚠️ Error generando réplica socrática con Gemini 3.5 Flash: {socr_err}")
+
+        # Fallbacks por defecto si no hubo generación de texto
+        if not explanation:
+            if is_correct:
+                explanation = f"Afirmación validada positivamente contra el grafo canónico de {self.agent_name} (prob: {prob:.2f})."
+            else:
+                explanation = f"La afirmación contradice el conocimiento canónico del KG (Error: {error_type}, severidad: {severity:.1f}/5.0)."
+
+        if not socratic_reply:
+            if not is_correct:
+                socratic_reply = f"¿Podrías analizar con mayor detalle cómo se aplica el concepto de {main_concept} en este caso y qué cuerpos o variables intervienen?"
+            else:
+                socratic_reply = f"¡Excelente deducción! ¿Cómo crees que cambiaría esta situación si modificamos las condiciones del sistema?"
 
         return {
-            "is_correct": True,
-            "concept": "general",
-            "canonical_value": "",
+            "is_correct": is_correct,
+            "concept": main_concept,
+            "canonical_value": context_summary[:300],
             "student_claim": student_claim,
-            "explanation": "Validado por coincidencia directa con el grafo de conocimiento.",
+            "error_type": error_type,
+            "severity": round(severity, 2),
+            "probability": round(prob, 3),
+            "explanation": explanation,
+            "socratic_reply": socratic_reply,
+            "trace_id": trace_id,
         }
 
     # -------------------------------------------------------------------------
@@ -1085,6 +1249,10 @@ Responde ÚNICAMENTE un objeto JSON válido con este formato:
         output_data: str,
         entities_touched: Optional[list[str]] = None,
         mode: InteractionMode = InteractionMode.STUDENT,
+        is_correct: Optional[bool] = None,
+        error_type: Optional[str] = None,
+        severity: Optional[float] = None,
+        probability: Optional[float] = None,
     ) -> str:
         """Registra una traza de razonamiento y crea relaciones TOUCHED hacia las entidades afectadas."""
         if not await self.ensure_connected():
@@ -1094,7 +1262,7 @@ Responde ÚNICAMENTE un objeto JSON válido con este formato:
         entities_touched = entities_touched or []
 
         try:
-            # 1. Crear nodo ReasoningTrace
+            # 1. Crear nodo ReasoningTrace con atributos tipados de System One
             cypher_trace = """
             CREATE (t:Entity:ReasoningTrace {
                 id: $trace_id,
@@ -1105,6 +1273,10 @@ Responde ÚNICAMENTE un objeto JSON válido con este formato:
                 output_data: $output_data,
                 mode: $mode,
                 agent_id: $agent_id,
+                is_correct: $is_correct,
+                error_type: $error_type,
+                severity: $severity,
+                probability: $probability,
                 timestamp: datetime()
             })
             RETURN t.id AS id
@@ -1119,6 +1291,10 @@ Responde ÚNICAMENTE un objeto JSON válido con este formato:
                     "output_data": output_data[:1000],
                     "mode": mode.value if hasattr(mode, "value") else str(mode),
                     "agent_id": self.agent_id,
+                    "is_correct": is_correct,
+                    "error_type": error_type,
+                    "severity": severity,
+                    "probability": probability,
                 }
             )
 
@@ -1128,11 +1304,19 @@ Responde ÚNICAMENTE un objeto JSON válido con este formato:
                 MATCH (t:Entity:ReasoningTrace {id: $trace_id})
                 MATCH (e:Entity)
                 WHERE e.id IN $entity_ids OR e.name IN $entity_ids
-                MERGE (t)-[r:TOUCHED {
-                    action_type: $action,
-                    timestamp: datetime(),
-                    mode: $mode
-                }]->(e)
+                MERGE (t)-[r:TOUCHED {action_type: $action}]->(e)
+                ON CREATE SET
+                    r.timestamp = datetime(),
+                    r.mode = $mode,
+                    r.is_correct = $is_correct,
+                    r.error_type = $error_type,
+                    r.severity = $severity
+                ON MATCH SET
+                    r.timestamp = datetime(),
+                    r.mode = $mode,
+                    r.is_correct = $is_correct,
+                    r.error_type = $error_type,
+                    r.severity = $severity
                 """
                 await self.client.long_term._client.execute_write(
                     cypher_touch,
@@ -1141,6 +1325,9 @@ Responde ÚNICAMENTE un objeto JSON válido con este formato:
                         "entity_ids": entities_touched,
                         "action": action,
                         "mode": mode.value if hasattr(mode, "value") else str(mode),
+                        "is_correct": is_correct,
+                        "error_type": error_type,
+                        "severity": severity,
                     }
                 )
 

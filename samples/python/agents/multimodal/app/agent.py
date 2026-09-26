@@ -52,7 +52,7 @@ import sys as _sys
 _project_root = str(Path(__file__).resolve().parents[5])
 if _project_root not in _sys.path:
     _sys.path.insert(0, _project_root)
-from api_key_rotator import google_key_rotator, create_google_llm, invoke_with_retry, sanitize_nams_context  # noqa: E402
+from api_key_rotator import google_key_rotator, create_google_llm, invoke_with_retry, ainvoke_with_retry, sanitize_nams_context  # noqa: E402
 
 # ==================== CONFIGURACIÓN ====================
 
@@ -838,48 +838,52 @@ REGLAS:
             
         return visual_findings, image_embedding
     
-    @traceable(name="classify_query", run_type="llm", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
+    def _fast_classify_query(self, query: str) -> str:
+        """Clasificación local instantánea por concordancia de temario (0.1ms, sin llamadas remotas a Gemini)."""
+        q_lower = query.lower()
+        topics = [
+            ("TEMA 1: Magnitudes escalares y vectoriales", ["vector", "escalar", "componente", "versor", "módulo", "producto escalar", "producto vectorial"]),
+            ("TEMA 2: Cinemática de la partícula", ["velocidad", "aceleración", "posición", "trayectoria", "tiro oblicuo", "mru", "mruv", "circular", "curvatura"]),
+            ("TEMA 3: Dinámica de la partícula", ["newton", "fuerza", "inercia", "masa", "rozamiento", "interacción", "par de interacción", "plano inclinado", "tensión", "elástica"]),
+            ("TEMA 4: Trabajo y Energía", ["trabajo", "energía", "cinética", "potencial", "conservativa", "potencia", "teorema de las fuerzas vivas"]),
+            ("TEMA 5: Sistema de partículas", ["sistema de partículas", "centro de masa", "impulso", "cantidad de movimiento", "choque", "colisión", "momento angular"]),
+            ("TEMA 6: Dinámica de las rotaciones", ["cuerpo rígido", "torque", "momento de inercia", "rotación", "rodadura", "rodar sin resbalar"]),
+            ("TEMA 7: Estática", ["estática", "equilibrio", "momento de una fuerza", "palanca"]),
+            ("TEMA 8: Movimiento armónico simple", ["armónico", "oscilador", "péndulo", "frecuencia", "período", "amplitud"]),
+            ("TEMA 9: Hidrostática", ["presión", "densidad", "pascal", "arquímedes", "empuje", "fluido", "piezométrica"]),
+            ("TEMA 10: Gravitación", ["gravitatoria", "kepler", "órbita", "satélite", "gravedad"]),
+        ]
+        
+        best_match = None
+        max_hits = 0
+        for topic_name, kws in topics:
+            hits = sum(1 for kw in kws if kw in q_lower)
+            if hits > max_hits:
+                max_hits = hits
+                best_match = topic_name
+                
+        if best_match and max_hits > 0:
+            return f"TEMA: {best_match}\nKEYWORDS: coincidencia directa temario\nTIPO_CONTENIDO: texto"
+        return "TEMA: Física General I (UBA)\nTIPO_CONTENIDO: texto"
+
+    @traceable(name="classify_query", run_type="chain", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def classify_query(self, query: str, context: str, visual_findings: str) -> str:
-        """Clasifica la consulta."""
-        system_prompt = f"""Profesor de Física I.
+        """Clasifica la consulta de forma rápida con clasificación local del temario (0.1ms)."""
+        fast_res = self._fast_classify_query(query)
+        if fast_res and "Física General" not in fast_res:
+            return fast_res
 
-TEMARIO:
-{self.temario}
-
-Identifica:
-1. Tema del temario
-2. Subtemas relevantes
-3. Palabras clave
-4. Tipo de contenido (texto/imagen)
-
-Formato:
-TEMA: [número y título]
-SUBTEMAS: [lista]
-KEYWORDS: [palabras clave]
-TIPO_CONTENIDO: [texto/imagen/ambos]
-"""
-        
-        user_prompt = f"""
-HALLAZGOS VISUALES:
-{visual_findings}
-
-CONTEXTO:
-{context}
-
-CONSULTA:
-{query}
-
-Clasifica según el temario."""
-        
+        # Fallback ligero si no hubo keywords explícitas
+        system_prompt = "Eres profesor de Física I UBA. Clasifica brevemente el tema principal de la consulta en 1 línea. Formato: TEMA: [tema]"
         try:
             messages = [
                 SystemMessage(content=system_prompt),
-                HumanMessage(content=user_prompt)
+                HumanMessage(content=f"CONSULTA: {query[:300]}")
             ]
             response = invoke_with_retry(self.llm, messages)
             return response.content
-        except Exception as e:
-            return f"Error: {str(e)}"
+        except Exception:
+            return fast_res
     
     @traceable(name="generate_search_query", run_type="llm", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def generate_search_query(self, classification: str, visual_findings: str, 
@@ -985,31 +989,21 @@ Reglas:
             # El mensaje actual del usuario
             messages.append(HumanMessage(content=query))
             
-            response = invoke_with_retry(self.llm, messages)
+            response = await ainvoke_with_retry(self.llm, messages)
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
     
     @traceable(name="check_socratic_intent", run_type="llm", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def check_socratic_intent(self, query: str) -> str:
-        """Verifica si el usuario quiere cambiar de modo (salir o entrar al modo socrático)."""
-        prompt = f"""Analiza la intención del usuario en el siguiente mensaje.
-El usuario está interactuando con un tutor de física. 
-Determina si el usuario explícitamente pide:
-1. SALIR: Salir del modo socrático, dejar de recibir preguntas, que le den la respuesta directa, o dialogar normalmente.
-2. ENTRAR: Volver al modo socrático, pedir que le hagan preguntas para pensar, o reiniciar el método socrático.
-3. CONTINUAR: Ninguna de las anteriores. Simplemente está respondiendo a una pregunta o haciendo una consulta de física normal.
-
-Mensaje del usuario: "{query}"
-
-Responde SOLO con una de estas palabras: SALIR, ENTRAR, CONTINUAR."""
+        """Verifica si el usuario quiere cambiar de modo (salir o entrar al modo socrático) usando JEV (TypeSafe AI)."""
         try:
-            response = invoke_with_retry(self.llm, [HumanMessage(content=prompt)])
-            content = response.content.upper()
-            if "SALIR" in content: return "SALIR"
-            if "ENTRAR" in content: return "ENTRAR"
-            return "CONTINUAR"
-        except Exception:
+            from jev_service import classify_socratic_intent_async
+            intent, conf = await classify_socratic_intent_async(query)
+            print(f"🧠 [JEV] Intent socrático: '{query[:50]}' → {intent} (conf: {conf:.2f})")
+            return intent
+        except Exception as e:
+            print(f"⚠️ Error en JEV socratic intent: {e}")
             return "CONTINUAR"
     
     async def _search_qdrant_for_context(self, query: str, image_embedding: List[float] = None, top_k: int = 5) -> tuple:
@@ -1135,7 +1129,7 @@ Genera la pregunta socrática número {question_number + 1} para guiar al estudi
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            response = invoke_with_retry(self.llm, messages)
+            response = await ainvoke_with_retry(self.llm, messages)
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
@@ -1238,7 +1232,7 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            response = invoke_with_retry(self.llm, messages)
+            response = await ainvoke_with_retry(self.llm, messages)
             return response.content
         except Exception as e:
             return f"Error: {str(e)}"
@@ -1308,35 +1302,34 @@ Proporciona la explicación completa con todas las fórmulas en LaTeX, valorando
                         print(f"🔑 [KEYWORD] Enter (context) detectado: '{query[:50]}'")
                         return "ENTRAR"
         
-        # ─── CAPA 2: Si estamos en modo socrático, usar LLM para ambigüedades ───
+        # ─── CAPA 2: Si estamos en modo socrático, usar JEV (TypeSafe AI) para ambigüedades ───
         if is_in_socratic_mode:
             try:
-                from langchain_core.messages import HumanMessage
-                
-                prompt = f"""Clasificador de intención. Un estudiante de física participa en preguntas socráticas.
-
-CONTINUAR = cualquier respuesta a la pregunta de física, duda, o interacción normal:
-"No sé", "Creo que es la gravedad", "5 m/s", "No entiendo", "Ayuda", "Ni idea", "Sí", "No"
-
-SALIR = pedido EXPLÍCITO de abandonar las preguntas y recibir respuesta directa:
-"No quiero más preguntas", "Explicame directamente", "Dame la respuesta", "Quiero salir"
-
-EN CASO DE DUDA → CONTINUAR.
-
-Mensaje: "{query}"
-Responde SOLO: SALIR o CONTINUAR"""
-                
-                response = invoke_with_retry(self.llm, [HumanMessage(content=prompt)])
-                result = response.content.strip().upper()
-                print(f"🧠 [LLM] Intent socrático: '{query[:50]}' → {result}")
-                
-                if "SALIR" in result:
+                from jev_service import classify_socratic_intent_sync
+                intent, conf = classify_socratic_intent_sync(query)
+                print(f"🧠 [JEV] Intent socrático (capa 2): '{query[:50]}' → {intent} (conf: {conf:.2f})")
+                if intent == "SALIR":
                     return "SALIR"
             except Exception as e:
-                print(f"⚠️ Error en LLM intent: {e}")
+                print(f"⚠️ Error en JEV intent: {e}")
         
         return "CONTINUAR"
     
+    def _clean_search_query(self, query: str) -> str:
+        """Limpia la consulta para búsqueda vectorial directa en Qdrant sin requerir una llamada LLM adicional."""
+        import re
+        cleaned = re.sub(r'\[NAMS_CONTEXT\].*?\[/NAMS_CONTEXT\]', '', query, flags=re.DOTALL).strip()
+        fillers = [
+            r'^(?:hola|buenas|buen dia|buenas tardes|profesor|profe)[,\s]+',
+            r'^(?:por favor|queria saber|quisiera saber|me gustaria saber)[,\s]+',
+            r'^(?:me podes explicar|me puedes explicar|me podrias explicar|podes explicarme|puedes explicarme|podrias explicarme)[,\s]+',
+            r'^(?:me decis|me dices|decime|dime|explicame|explícame|ayudame con|ayúdame con)[,\s]+',
+            r'^(?:que es|qué es|como es|cómo es|como se calcula|cómo se calcula|de que se trata|de qué se trata)[,\s]+',
+        ]
+        for pattern in fillers:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE).strip()
+        return cleaned if len(cleaned) > 3 else query
+
     # ==================== MÉTODOS PRINCIPALES ====================
     @traceable(name="PhysicsMultimodalAgent.invoke", run_type="chain", tags=["agent_type:multimodal_tutor", "multimodal_tutor", "a2a-agent"])
     async def invoke(self, query: str, context_id: str, 
@@ -1379,18 +1372,17 @@ Responde SOLO: SALIR o CONTINUAR"""
             
             visual_findings, image_embedding = await self._get_visual_findings(images, context_id)
             
-            classification = await self.classify_query(
-                query, memory_context, visual_findings
-            )
-            
-            search_query = await self.generate_search_query(
-                classification, visual_findings, query
-            )
-            search_results = await self.search_multimodal(
-                query=search_query,
+            clean_search_query = self._clean_search_query(query)
+            # Ejecutar búsqueda en Qdrant y clasificación en paralelo para eliminar latencia secuencial
+            search_task = asyncio.create_task(self.search_multimodal(
+                query=clean_search_query,
                 image_embedding=image_embedding,
                 top_k=5
-            )
+            ))
+            classify_task = asyncio.create_task(self.classify_query(
+                query, memory_context, visual_findings
+            ))
+            search_results, classification = await asyncio.gather(search_task, classify_task)
             
             document_context = "\n".join([
                 f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
@@ -1484,27 +1476,21 @@ Responde SOLO: SALIR o CONTINUAR"""
         yield {
             'is_task_complete': False,
             'require_user_input': False,
-            'content': '📚 Analizando consulta...',
-            'status': 'classifying'
-        }
-        classification = await self.classify_query(
-            query, memory_context, visual_findings
-        )
-        
-        yield {
-            'is_task_complete': False,
-            'require_user_input': False,
-            'content': '🔎 Buscando información complementaria...',
+            'content': '📚 Analizando consulta y buscando en manuales de física...',
             'status': 'searching_documents'
         }
-        search_query = await self.generate_search_query(
-            classification, visual_findings, query
-        )
-        search_results = await self.search_multimodal(
-            query=search_query,
+        
+        clean_search_query = self._clean_search_query(query)
+        # Ejecutar búsqueda en Qdrant y clasificación en paralelo para eliminar latencia secuencial
+        search_task = asyncio.create_task(self.search_multimodal(
+            query=clean_search_query,
             image_embedding=image_embedding,
             top_k=5
-        )
+        ))
+        classify_task = asyncio.create_task(self.classify_query(
+            query, memory_context, visual_findings
+        ))
+        search_results, classification = await asyncio.gather(search_task, classify_task)
         
         document_context = "\n".join([
             f"--- Fragmento {i+1} ---\n{r['payload'].get('text', 'N/A')}"
