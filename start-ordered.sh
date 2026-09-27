@@ -26,6 +26,23 @@ trap cleanup SIGINT SIGTERM
 
 echo "🚀 Starting BeeAI Ecosystem in order..."
 
+# 0. Ensure Local Databases (Neo4j & Qdrant)
+if ! nc -z localhost 7687 2>/dev/null; then
+  echo "🧠 Starting local Neo4j container..."
+  docker start neo4j-local >/dev/null 2>&1 || true
+  wait_for_port 7687 "Neo4j Local (NAMS)"
+else
+  echo "✅ Neo4j Local (NAMS) is active on port 7687."
+fi
+
+if ! nc -z localhost 6333 2>/dev/null; then
+  echo "📦 Starting local Qdrant container..."
+  docker start qdrant-local-histo >/dev/null 2>&1 || true
+  wait_for_port 6333 "Qdrant Vector DB"
+else
+  echo "✅ Qdrant Local is active on port 6333."
+fi
+
 # 1. Start Priority Agent (Multimodal)
 echo "Step 1: Starting Priority Agent (10003)..."
 npm run dev:agent:multimodal &

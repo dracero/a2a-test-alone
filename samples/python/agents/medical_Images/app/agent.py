@@ -1411,11 +1411,19 @@ class SistemaRAGColPaliPuro:
                 )
                 if es_retryable and intento < intentos - 1:
                     is_503 = any(code in err_str.lower() for code in ["503", "unavailable", "high demand", "overloaded"])
+                    is_exhausted = any(k in err_str.lower() for k in ["quota", "resource_exhausted", "resourceexhausted", "credits are depleted", "429"])
                     target_model = "gemini-3.5-flash"
                     if is_503:
                         print(f"🔄 [503 High Demand] Reintentando LLM en modelo '{target_model}' con rotación...")
+                    
+                    old_key = getattr(self.llm, "google_api_key", None)
+                    if hasattr(old_key, "get_secret_value"):
+                        old_key = old_key.get_secret_value()
+                    elif old_key:
+                        old_key = str(old_key)
+
                     if old_key:
-                        google_key_rotator.report_failure(old_key)
+                        google_key_rotator.report_failure(old_key, is_exhausted=is_exhausted, is_overloaded=is_503)
 
                     self.llm = create_google_llm(
                         model=target_model,
@@ -1432,7 +1440,7 @@ class SistemaRAGColPaliPuro:
                     else:
                         wait_time = delay * (2 ** intento)
                         
-                    print(f"⚠️ [Gemini Server/Quota Error: {type(e).__name__}] Reintentando con modelo '{target_model}' en {wait_time:.2f}s... (Intento {intento+1}/{intentos})")
+                    print(f"⚠️ [Gemini Server/Quota Error: {type(e).__name__}] Reintentando con nueva key en {wait_time:.2f}s... (Intento {intento+1}/{intentos})")
                     await asyncio.sleep(wait_time)
                 else:
                     raise e

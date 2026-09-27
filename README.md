@@ -56,13 +56,13 @@ Este repositorio utiliza **Google Gemini 3.5 Flash (`gemini-3.5-flash`)** como m
 1. **Google Gemini API Key(s)** (Principal):
    - Obtén tu(s) clave(s) en [Google AI Studio](https://aistudio.google.com/).
    - Soporta una o múltiples claves (`GOOGLE_API_KEYS` separadas por coma). El sistema prioriza automáticamente la clave paga con un cooldown acelerado de 15 segundos y conmuta a las claves secundarias si se alcanzan límites de cuota (429/403).
-2. **Neo4j Aura Cloud DB** (Memoria NAMS):
-   - Base de datos gráfica en la nube gratuita o administrada en [neo4j.com/cloud/aura/](https://neo4j.com/cloud/aura/).
+2. **Neo4j DB (Memoria NAMS)**:
+   - En la nube vía [Neo4j Aura](https://neo4j.com/cloud/aura/) (`neo4j+s://...`) o local mediante Docker (`bolt://localhost:7687` con auto-inicio mediante contenedor `neo4j-local`).
 3. **Groq API Key** (Opcional):
    - Para extracción de preferencias y autoaprendizaje en segundo plano.
 4. **Python 3.12+** con el gestor de paquetes ultra-rápido `uv`.
 5. **Node.js 18+** y `npm` para el frontend Next.js.
-6. **Docker** (Opcional): Para levantar Qdrant localmente si no usas Qdrant Cloud.
+6. **Docker**: Para ejecutar bases de datos locales (`neo4j-local` en el puerto 7687 y `qdrant-local-histo` en el puerto 6333) gestionadas de forma automática por los scripts de inicio.
 
 ### Setup & Configuración
 
@@ -443,19 +443,46 @@ Cada intervención pedagógica, validación fáctica o mutación del grafo gener
 
 ---
 
-### 🛠️ Herramientas de Verificación y Scripts CLI de NAMS
+### 7. Rotación Automática y Resiliencia de Claves en NAMS (`AgentNAMSMemory`)
 
-El repositorio incluye un conjunto completo de scripts de prueba y mantenimiento para estas capacidades:
+Para evitar interrupciones en la extracción y persistencia de memoria cuando se agota la cuota gratuita de Gemini o se alcanzan límites de tasa por minuto (RPM/TPM):
+
+```mermaid
+flowchart TD
+    Op[Operación de Escritura NAMS] --> Exec[aexecute_with_nams_key_rotation]
+    Exec --> Call{Llamada a LiteLLM / Neo4j Memory}
+    Call -->|Éxito| Success[Persistencia en Grafo Neo4j]
+    Call -->|Error 429 / Cuota / 403 / 503| Rotate[Conmutar Clave en Rotador]
+    Rotate --> Cooldown[Clave en Cooldown 300s]
+    Rotate --> Sync[Sincronizar os.environ y litellm.api_key]
+    Sync --> Retry{¿Quedan claves disponibles en el pool?}
+    Retry -->|Sí| Call
+    Retry -->|Todas agotadas| Fallback[Modo Skip: extract_entities=False]
+    Fallback --> SaveMsg[Guardar Mensaje Sin Extracción en Neo4j]
+```
+
+* **Sincronización Atómica Multi-Librería**: El rotador actualiza de forma simultánea `os.environ["GEMINI_API_KEY"]`, `os.environ["GOOGLE_API_KEY"]` y la propiedad global `litellm.api_key`. De este modo, tanto el SDK de Google como LiteLLM (utilizado internamente por `neo4j-agent-memory`) emplean la clave sana activa en cada solicitud.
+* **Cobertura Total de Operaciones de Escritura**:
+  * `add_user_message`: Protegido con rotación durante la extracción de entidades de mensajes del usuario. Si todas las claves del pool fallan, conmuta a modo skip (`extraction_mode="skip"`) para garantizar que la conversación siempre quede registrada en la base de datos sin perder mensajes.
+  * `add_assistant_message`: Protegido con rotación durante el registro de respuestas del asistente y extracción de conceptos.
+  * `add_preference`: Persistencia de preferencias del estudiante con conmutación de claves ante 429.
+  * `add_canonical_concept`: Creación y deduplicación de entidades canónicas por el profesor con rotación.
+  * `register_confirmed_deficiency`: Vinculación estructural de falencias confirmadas y perfiles de estudiante.
+  * `learn_user_preferences`: Análisis pedagógico en segundo plano mediante `gemini-3.5-flash` con reintentos y rotación.
+  * `validate_against_kg`: Validación híbrida socrática contra el KG con sincronización previa de claves activas.
+
+---
+
+### 🛠️ Scripts CLI de Mantenimiento y Auditoría de NAMS
+
+El repositorio incluye un conjunto de scripts CLI para administración, mantenimiento y auditoría:
 
 | Script | Descripción | Comando de Ejecución |
 | :--- | :--- | :--- |
-| [test_dual_role_write.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/test_dual_role_write.py) | Valida que el modo Estudiante no pueda mutar el KG y que el modo Profesor sí tenga permisos. | `uv run python scripts/test_dual_role_write.py` |
-| [test_validate_against_kg.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/test_validate_against_kg.py) | Verifica la detección de afirmaciones correctas e incorrectas contra el KG canónico. | `uv run python scripts/test_validate_against_kg.py` |
-| [test_deficiency_consolidation.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/test_deficiency_consolidation.py) | Comprueba que se requieran $\ge 5$ errores con similitud $\ge 0.82$ para consolidar una falencia. | `uv run python scripts/test_deficiency_consolidation.py` |
-| [test_agent_nams_isolation.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/test_agent_nams_isolation.py) | Valida que las memorias de Física y Medicina operen completamente aisladas. | `uv run python scripts/test_agent_nams_isolation.py` |
-| [consolidate_student_deficiencies.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/consolidate_student_deficiencies.py) | Proceso batch para analizar y consolidar falencias acumuladas en todos los estudiantes. | `uv run python scripts/consolidate_student_deficiencies.py` |
-| [audit_reasoning_traces.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/audit_reasoning_traces.py) | Inspecciona las trazas de razonamiento y aristas `TOUCHED` en tiempo real desde la terminal. | `uv run python scripts/audit_reasoning_traces.py --limit 15` |
-| [tag_existing_neo4j_nodes.py](file:///run/media/dracero/DiscoMecanico/AIProjects/a2a-test-alone/scripts/tag_existing_neo4j_nodes.py) | Migra y etiqueta nodos conversacionales preexistentes en Neo4j por agente. | `uv run python scripts/tag_existing_neo4j_nodes.py` |
+| [consolidate_student_deficiencies.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/consolidate_student_deficiencies.py) | Proceso batch para analizar y consolidar falencias acumuladas en todos los estudiantes. | `uv run python scripts/consolidate_student_deficiencies.py` |
+| [audit_reasoning_traces.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/audit_reasoning_traces.py) | Inspecciona las trazas de razonamiento y aristas `TOUCHED` en tiempo real desde la terminal. | `uv run python scripts/audit_reasoning_traces.py --limit 15` |
+| [tag_existing_neo4j_nodes.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/tag_existing_neo4j_nodes.py) | Migra y etiqueta nodos conversacionales preexistentes en Neo4j por agente. | `uv run python scripts/tag_existing_neo4j_nodes.py` |
+| [migrate_aura_to_local.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/migrate_aura_to_local.py) | Migra nodos, relaciones e índices desde Neo4j Aura hacia la instancia local. | `uv run python scripts/migrate_aura_to_local.py` |
 
 ---
 
@@ -471,12 +498,32 @@ Paralelamente a las mejoras en memoria, se incorporaron actualizaciones clave pa
 * **Fallback Automático de Qdrant**: Si la URL remota o el contenedor configurado de Qdrant falla con errores de conexión (`ConnectError` o `ResponseHandlingException`), el cliente conmuta automáticamente a `http://localhost:6333` de forma transparente.
 * **Tolerancia a Fallos de LLM**: Reintento con backoff exponencial y rotación automática de claves ante errores `500`, `502`, `503`, `504`, `high demand`, `overloaded` o `RESOURCE_EXHAUSTED` de Gemini.
 
-### 2. Orquestación y Arranque Automatizado (`start_ordered.py`)
-* **Auto-Inicio de Qdrant**: Antes de inicializar los agentes prioritarios, el script de arranque verifica el puerto `6333` y ejecuta automáticamente `docker start qdrant-local-histo` si el servicio vectorial está inactivo.
-* **Soporte Local Sin API Key**: Tanto el Agente Multimodal como el Médico admiten conexiones locales a Qdrant sin requerir `QDRANT_KEY`.
+### 2. Orquestación y Arranque Automatizado (`start_ordered.py` y `start-ordered.sh`)
+* **Auto-Inicio de Neo4j NAMS Local**: Verifica el puerto `7687` y ejecuta automáticamente `docker start neo4j-local` si el contenedor local está inactivo, esperando hasta que el socket esté listo antes de continuar.
+* **Auto-Inicio de Base Vectorial Qdrant**: Verifica el puerto `6333` y ejecuta automáticamente `docker start qdrant-local-histo` si el servicio vectorial está detenido.
+* **Arranque Secuencial Determinista**:
+  1. *Fase 0*: Verificación y encendido de servicios locales Docker (Neo4j y Qdrant).
+  2. *Paso 1*: Agente Prioritario (Tutor de Física Multimodal en el puerto `10003`).
+  3. *Paso 2*: Agentes de Soporte (Generador de Imágenes en `10001` y Asistente Médico en `10002`).
+  4. *Paso 3*: Orquestador Backend BeeAI en el puerto `12000`.
+  5. *Paso 4*: Frontend Next.js en el puerto `3000`.
+* **Manejo Seguro de Señales y Puertos**: Implementa `cleanup()` con trampa para `SIGINT`/`SIGTERM`, cerrando limpiamente los árboles de subprocesos y liberando los puertos `10001`, `10002`, `10003`, `12000` y `3000` mediante `fuser` (Linux/macOS) o `taskkill` (Windows).
 
 ### 3. Rotador Dinámico de API Keys (`api_key_rotator.py`)
-* **Detección Ampliada de Excepciones**: El rotador intercepta automáticamente más de 12 clases de errores de proveedores de IA, incluyendo cuotas agotadas (`429`), claves revocadas o inválidas (`400`, `403`), límites de prepago y caídas transitorias de servidor (`500`, `503`, `deadline_exceeded`), cambiando instantáneamente a una clave sana de la lista para no interrumpir las sesiones de los usuarios.
+* **Estrategia Prioritaria (`PriorityPaidKeyStrategy`)**: Prioriza siempre la clave principal (paga) y solo conmuta a claves secundarias cuando la principal entra en cooldown de 15 segundos.
+* **Detección Exhaustiva de Fallos**: Intercepta automáticamente errores de cuota (`429`, `resource_exhausted`), claves inválidas o revocadas (`400`, `403`), límites de prepago y caídas transitorias de servidor (`500`, `502`, `503`, `504`, `overloaded`, `deadline_exceeded`).
+* **Ejecutor Asíncrono para NAMS (`aexecute_with_nams_key_rotation`)**: Función transversal que envuelve cualquier corrutina de Neo4j Agent Memory o LiteLLM, coordinando reintentos con backoff progresivo y rotación automática.
+* **Sincronización Bidireccional (`sync_env_key` y `rotate_and_sync_env_key`)**: Mantiene consistentes en tiempo real las variables de entorno del sistema operativo (`GEMINI_API_KEY`, `GOOGLE_API_KEY`) y la configuración global de LiteLLM (`litellm.api_key`).
+
+### 4. Migración de Base de Datos Neo4j Aura a Neo4j Local (`scripts/migrate_aura_to_local.py`)
+Para permitir el funcionamiento 100% offline y reducir la latencia de red, se incluye la herramienta [migrate_aura_to_local.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/migrate_aura_to_local.py):
+* Extrae todos los nodos, etiquetas, propiedades y relaciones desde la instancia remota en la nube de Neo4j Aura.
+* Recrea índices y restricciones (`constraints`) en el contenedor local `neo4j-local` (`bolt://localhost:7687`).
+* Inserta datos por lotes (batches) preservando los identificadores de entidad, trazas de razonamiento y aristas `TOUCHED`.
+
+### 5. Depuración y Arquitectura de Runtime Esencial
+* Se eliminaron los scripts de verificación de fases y clientes CLI temporales no requeridos en producción (`test_*.py`), conservando una base de código limpia y ligera.
+* Se preservaron los módulos arquitectónicamente críticos como [test_image.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/demo/ui/service/server/test_image.py), que proporciona componentes de imagen indispensables para la siembra de mensajes en el orquestador en memoria.
 
 ## 📊 Evaluación con LangSmith (Métricas de Generación y Recuperación)
 

@@ -28,7 +28,10 @@ def cleanup(sig=None, frame=None):
                 if sys.platform == 'win32':
                     subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
-                    os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+                    try:
+                        os.killpg(os.getpgid(p.pid), signal.SIGINT)
+                    except Exception:
+                        os.killpg(os.getpgid(p.pid), signal.SIGTERM)
             except Exception:
                 try:
                     p.kill()
@@ -74,7 +77,23 @@ def main():
     os.environ["NODE_OPTIONS"] = "--no-deprecation"
     print("🚀 Starting BeeAI Ecosystem in order...")
     
-    # 0. Ensure Qdrant Vector Database is available
+    # 0. Ensure Local Databases and LLM Services are available
+    # A. Neo4j NAMS Database (puerto 7687)
+    if not is_port_open(7687):
+        print("🧠 Verificando servicio Neo4j Local NAMS (puerto 7687)...")
+        try:
+            subprocess.run("docker start neo4j-local 2>/dev/null || true", shell=True)
+            for _ in range(8):
+                if is_port_open(7687):
+                    print("✅ Neo4j NAMS local iniciado y listo en puerto 7687")
+                    break
+                time.sleep(1)
+        except Exception:
+            pass
+    else:
+        print("✅ Neo4j NAMS local ya está activo en puerto 7687")
+
+    # B. Qdrant Vector Database (puerto 6333)
     if not is_port_open(6333):
         print("📦 Verificando servicio Qdrant (puerto 6333)...")
         try:
@@ -86,7 +105,8 @@ def main():
                 time.sleep(1)
         except Exception:
             pass
-
+    else:
+        print("✅ Qdrant local ya está activo en puerto 6333")
     # 1. Start Priority Agent (Multimodal)
     print("Step 1: Starting Priority Agent (10003)...")
     run_npm_cmd("npm run dev:agent:multimodal", {"LANGCHAIN_PROJECT": "a2a-multimodal-tutor"})

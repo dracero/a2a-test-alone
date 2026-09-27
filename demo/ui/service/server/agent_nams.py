@@ -14,9 +14,25 @@ from neo4j_agent_memory.schema import SchemaModel, load_schema_from_file, Entity
 from neo4j_agent_memory.llm.adapters.sentence_transformers import SentenceTransformersProvider
 
 try:
-    from .api_key_rotator import google_key_rotator, ainvoke_with_retry, create_google_llm, sync_env_key
+    from .api_key_rotator import (
+        google_key_rotator,
+        ainvoke_with_retry,
+        invoke_with_retry,
+        create_google_llm,
+        sync_env_key,
+        rotate_and_sync_env_key,
+        aexecute_with_nams_key_rotation,
+    )
 except ImportError:
-    from api_key_rotator import google_key_rotator, ainvoke_with_retry, create_google_llm, sync_env_key
+    from api_key_rotator import (
+        google_key_rotator,
+        ainvoke_with_retry,
+        invoke_with_retry,
+        create_google_llm,
+        sync_env_key,
+        rotate_and_sync_env_key,
+        aexecute_with_nams_key_rotation,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +215,7 @@ class AgentNAMSMemory:
         student_id: Optional[str] = None,
         mode: InteractionMode = InteractionMode.STUDENT,
     ):
-        """Guarda un mensaje del usuario en la sesión aislada del agente.
+        """Guarda un mensaje del usuario en la sesión aislada del agente con rotación de claves ante 429/cuota.
         
         En modo PROFESSOR, las entidades extraídas se etiquetan como fuente 'professor'.
         En modo STUDENT, solo se registra en Short-Term y sus afirmaciones nunca modifican el KG canónico.
@@ -208,45 +224,63 @@ class AgentNAMSMemory:
             return
         scoped_id = self.scope_session_id(session_id)
         user_id = self.student_identifier(student_id or session_id)
-        try:
-            sync_env_key()
+        source_val = "professor" if mode == InteractionMode.PROFESSOR else "student"
 
-            msg = await self.client.short_term.add_message(
+        async def _do_add_user(extract_entities: bool = True, extraction_mode: str = "auto"):
+            return await self.client.short_term.add_message(
                 session_id=scoped_id,
                 role="user",
                 content=content,
                 user_identifier=user_id,
+                extract_entities=extract_entities,
+                extraction_mode=extraction_mode,
                 metadata={
                     "agent_id": self.agent_id,
                     "agent_name": self.agent_name,
                     "mode": mode.value if hasattr(mode, "value") else str(mode),
                 },
             )
+
+        try:
+            msg = await aexecute_with_nams_key_rotation(
+                coro_factory=lambda: _do_add_user(extract_entities=True, extraction_mode="auto"),
+                fallback_coro_factory=lambda: _do_add_user(extract_entities=False, extraction_mode="skip"),
+                action_name=f"add_user_message ({self.agent_name})",
+            )
             # Etiquetar entidades extraídas con el agent_id y origen
-            source_val = "professor" if mode == InteractionMode.PROFESSOR else "student"
-            await self._tag_entities_for_message(str(msg.id), source=source_val)
+            if msg and hasattr(msg, "id"):
+                await self._tag_entities_for_message(str(msg.id), source=source_val)
             logger.info(f"💾 [{self.agent_name}] Guardado mensaje de usuario en sesión {scoped_id} (Modo: {source_val})")
         except Exception as e:
             logger.warning(f"⚠️ [{self.agent_name}] Error guardando mensaje de usuario: {e}")
 
     async def add_assistant_message(self, session_id: str, content: str, student_id: Optional[str] = None):
-        """Guarda la respuesta del asistente en la sesión aislada del agente."""
+        """Guarda la respuesta del asistente en la sesión aislada del agente con rotación de claves ante 429/cuota."""
         if not await self.ensure_connected():
             return
         scoped_id = self.scope_session_id(session_id)
         user_id = self.student_identifier(student_id or session_id)
-        try:
-            sync_env_key()
+        clean_content = content.split("__IMAGE_PARTS__:")[0].strip()
 
-            clean_content = content.split("__IMAGE_PARTS__:")[0].strip()
-            msg = await self.client.short_term.add_message(
+        async def _do_add_assistant(extract_entities: bool = True, extraction_mode: str = "auto"):
+            return await self.client.short_term.add_message(
                 session_id=scoped_id,
                 role="assistant",
                 content=clean_content,
                 user_identifier=user_id,
+                extract_entities=extract_entities,
+                extraction_mode=extraction_mode,
                 metadata={"agent_id": self.agent_id, "agent_name": self.agent_name},
             )
-            await self._tag_entities_for_message(str(msg.id), source="tutor")
+
+        try:
+            msg = await aexecute_with_nams_key_rotation(
+                coro_factory=lambda: _do_add_assistant(extract_entities=True, extraction_mode="auto"),
+                fallback_coro_factory=lambda: _do_add_assistant(extract_entities=False, extraction_mode="skip"),
+                action_name=f"add_assistant_message ({self.agent_name})",
+            )
+            if msg and hasattr(msg, "id"):
+                await self._tag_entities_for_message(str(msg.id), source="tutor")
             logger.info(f"💾 [{self.agent_name}] Guardada respuesta de asistente en sesión {scoped_id}")
         except Exception as e:
             logger.warning(f"⚠️ [{self.agent_name}] Error guardando respuesta de asistente: {e}")
@@ -394,15 +428,21 @@ class AgentNAMSMemory:
         return "\n\n".join(parts)
 
     async def add_preference(self, category: str, preference: str, student_id: str):
-        """Guarda una preferencia asociada al estudiante y a este agente."""
+        """Guarda una preferencia asociada al estudiante y a este agente con rotación de claves ante 429/cuota."""
         if not await self.ensure_connected():
             return
         user_id = self.student_identifier(student_id)
-        await self.client.long_term.add_preference(
-            category=category,
-            preference=preference,
-            user_identifier=user_id,
-        )
+        try:
+            await aexecute_with_nams_key_rotation(
+                coro_factory=lambda: self.client.long_term.add_preference(
+                    category=category,
+                    preference=preference,
+                    user_identifier=user_id,
+                ),
+                action_name=f"add_preference ({category})",
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ [{self.agent_name}] Error guardando preferencia '{category}': {e}")
 
     # -------------------------------------------------------------------------
     # FASE 2: Métodos de Doble Rol de Escritura (Profesor vs. Estudiante)
@@ -416,7 +456,7 @@ class AgentNAMSMemory:
         properties: Optional[dict[str, Any]] = None,
         mode: InteractionMode = InteractionMode.PROFESSOR,
     ) -> Optional[dict[str, Any]]:
-        """Crea o actualiza un concepto canónico en el Knowledge Graph.
+        """Crea o actualiza un concepto canónico en el Knowledge Graph con rotación de claves.
         
         REGLA DE ROL: Solo permitido en InteractionMode.PROFESSOR.
         En modo STUDENT, las afirmaciones del alumno nunca modifican el KG canónico.
@@ -436,13 +476,16 @@ class AgentNAMSMemory:
                 "confidence": 1.0,
                 **(properties or {}),
             }
-            entity, _ = await self.client.long_term.add_entity(
-                name=concept_name,
-                entity_type=entity_type,
-                description=description,
-                resolve=False,
-                deduplicate=True,
-                metadata=meta,
+            entity, _ = await aexecute_with_nams_key_rotation(
+                coro_factory=lambda: self.client.long_term.add_entity(
+                    name=concept_name,
+                    entity_type=entity_type,
+                    description=description,
+                    resolve=False,
+                    deduplicate=True,
+                    metadata=meta,
+                ),
+                action_name=f"add_canonical_concept ({concept_name})",
             )
 
             # Establecer propiedades de aislamiento y auditoría directamente en el nodo
@@ -621,21 +664,27 @@ class AgentNAMSMemory:
         try:
             user_id = self.student_identifier(student_id)
             pref_text = f"El alumno tiene una falencia confirmada en '{tema}': {correccion}"
-            await self.client.long_term.add_preference(
-                category="falencia",
-                preference=pref_text,
-                user_identifier=user_id,
+            await aexecute_with_nams_key_rotation(
+                coro_factory=lambda: self.client.long_term.add_preference(
+                    category="falencia",
+                    preference=pref_text,
+                    user_identifier=user_id,
+                ),
+                action_name=f"register_confirmed_deficiency preference ({tema})",
             )
 
             # 1. Perfil del estudiante (StudentProfile)
             student_node_name = f"Estudiante_{student_id}"
-            student_entity, _ = await self.client.long_term.add_entity(
-                name=student_node_name,
-                entity_type="StudentProfile",
-                description=f"Perfil del estudiante {student_id}",
-                resolve=False,
-                deduplicate=True,
-                metadata={"agent_id": self.agent_id, "student_id": student_id},
+            student_entity, _ = await aexecute_with_nams_key_rotation(
+                coro_factory=lambda: self.client.long_term.add_entity(
+                    name=student_node_name,
+                    entity_type="StudentProfile",
+                    description=f"Perfil del estudiante {student_id}",
+                    resolve=False,
+                    deduplicate=True,
+                    metadata={"agent_id": self.agent_id, "student_id": student_id},
+                ),
+                action_name=f"register_confirmed_deficiency student_profile ({student_id})",
             )
             tag_student = """
             MATCH (s:Entity {id: $entity_id})
@@ -1045,7 +1094,8 @@ class AgentNAMSMemory:
         eval_llm = llm
         if not eval_llm:
             try:
-                eval_llm = create_google_llm()
+                sync_env_key()
+                eval_llm = create_google_llm(model="gemini-3.5-flash")
             except Exception as e:
                 logger.debug(f"Could not create Google LLM: {e}")
 
@@ -1370,10 +1420,18 @@ Responde ÚNICAMENTE en JSON válido con este formato:
 
         return conclusions, deficiencies
 
-    async def learn_user_preferences(self, user_message: str, student_id: str, llm: Any):
-        """Extrae y persiste preferencias e insights en segundo plano usando Gemini 3.5 Flash."""
+    async def learn_user_preferences(self, user_message: str, student_id: str, llm: Any = None):
+        """Extrae y persiste preferencias e insights en segundo plano usando Gemini 3.5 Flash con rotación de claves."""
         if not await self.ensure_connected() or not user_message:
             return
+
+        eval_llm = llm
+        if not eval_llm:
+            try:
+                eval_llm = create_google_llm(model="gemini-3.5-flash")
+            except Exception as err:
+                logger.debug(f"Could not instantiate Gemini for learn_user_preferences: {err}")
+                return
 
         try:
             from langchain_core.messages import HumanMessage
@@ -1392,7 +1450,8 @@ Responde estrictamente en el formato:
 Preferencia: <frase corta o NONE>
 Insight: <frase corta o NONE>"""
 
-            response = await ainvoke_with_retry(llm, [HumanMessage(content=prompt)])
+            sync_env_key()
+            response = await ainvoke_with_retry(eval_llm, [HumanMessage(content=prompt)])
             result = response.content.strip()
 
             preferences = []
@@ -1408,21 +1467,20 @@ Insight: <frase corta o NONE>"""
                     if val and val.upper() != "NONE":
                         insights.append(val)
 
-            user_id = self.student_identifier(student_id)
             for pref in preferences:
-                await self.client.long_term.add_preference(
+                await self.add_preference(
                     category="user_preference",
                     preference=pref,
-                    user_identifier=user_id,
+                    student_id=student_id,
                 )
-                logger.info(f"💾 [{self.agent_name}] Preferencia guardada: {pref}")
+                logger.info(f"💾 [{self.agent_name}] Preferencia guardada con rotación: {pref}")
 
             for ins in insights:
-                await self.client.long_term.add_preference(
+                await self.add_preference(
                     category="insight",
                     preference=ins,
-                    user_identifier=user_id,
+                    student_id=student_id,
                 )
-                logger.info(f"💾 [{self.agent_name}] Insight guardado: {ins}")
+                logger.info(f"💾 [{self.agent_name}] Insight guardado con rotación: {ins}")
         except Exception as e:
             logger.warning(f"⚠️ [{self.agent_name}] Error en extractor de preferencias: {e}")

@@ -398,6 +398,13 @@ def invoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[GoogleApiKey
             is_different_key = bool(new_key and new_key != current_key)
             if new_key:
                 tried_keys.add(new_key)
+                os.environ["GEMINI_API_KEY"] = new_key
+                os.environ["GOOGLE_API_KEY"] = new_key
+                try:
+                    import litellm
+                    litellm.api_key = new_key
+                except Exception:
+                    pass
             llm = _rebuild_llm(llm, new_key, model_override="gemini-3.5-flash")
             current_key = new_key
 
@@ -442,6 +449,13 @@ async def ainvoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[Googl
             is_different_key = bool(new_key and new_key != current_key)
             if new_key:
                 tried_keys.add(new_key)
+                os.environ["GEMINI_API_KEY"] = new_key
+                os.environ["GOOGLE_API_KEY"] = new_key
+                try:
+                    import litellm
+                    litellm.api_key = new_key
+                except Exception:
+                    pass
             llm = _rebuild_llm(llm, new_key, model_override="gemini-3.5-flash")
             current_key = new_key
 
@@ -452,15 +466,16 @@ async def ainvoke_with_retry(llm: Any, messages: Any, *, rotator: Optional[Googl
     raise last_exc
 
 
-# ── Utilidades compartidas ─────────────────────────────────────────
+# ── Utilidades compartidas y rotación NAMS ──────────────────────────
 
 def sync_env_key(rotator: Optional[GoogleApiKeyRotator] = None) -> str:
-    """Obtiene la key activa del rotador y sincroniza os.environ para LiteLLM/SDKs externos.
+    """Obtiene la key activa del rotador y sincroniza os.environ y litellm para LiteLLM/SDKs externos.
 
     Centraliza el patrón repetido:
         active_key = google_key_rotator.get_key()
         os.environ["GEMINI_API_KEY"] = active_key
         os.environ["GOOGLE_API_KEY"] = active_key
+        litellm.api_key = active_key
 
     Returns:
         La key activa (puede ser string vacío si no hay keys).
@@ -471,7 +486,113 @@ def sync_env_key(rotator: Optional[GoogleApiKeyRotator] = None) -> str:
     if active_key:
         os.environ["GEMINI_API_KEY"] = active_key
         os.environ["GOOGLE_API_KEY"] = active_key
+        try:
+            import litellm
+            litellm.api_key = active_key
+        except Exception:
+            pass
     return active_key
+
+
+def rotate_and_sync_env_key(
+    failed_key: Optional[str] = None,
+    rotator: Optional[GoogleApiKeyRotator] = None,
+    is_exhausted: bool = True,
+    is_overloaded: bool = False,
+    exclude_keys: Optional[set[str]] = None,
+) -> str:
+    """Reporta falla de una clave (si se especifica), obtiene la siguiente y sincroniza os.environ y litellm.
+
+    Usado por la memoria NAMS y subsistemas que interactúan con LiteLLM / Neo4j Agent Memory.
+    """
+    if rotator is None:
+        rotator = google_key_rotator
+    if failed_key:
+        rotator.report_failure(failed_key, is_exhausted=is_exhausted, is_overloaded=is_overloaded)
+    new_key = rotator.get_key(exclude_keys=exclude_keys)
+    if new_key:
+        os.environ["GEMINI_API_KEY"] = new_key
+        os.environ["GOOGLE_API_KEY"] = new_key
+        try:
+            import litellm
+            litellm.api_key = new_key
+        except Exception:
+            pass
+    return new_key
+
+
+async def aexecute_with_nams_key_rotation(
+    coro_factory: Any,
+    rotator: Optional[GoogleApiKeyRotator] = None,
+    max_retries: int = 0,
+    fallback_coro_factory: Optional[Any] = None,
+    action_name: str = "operación NAMS",
+) -> Any:
+    """Ejecuta una operación asíncrona de NAMS (Neo4j Agent Memory / LiteLLM) rotando API keys automáticamente ante 429/403/quota.
+
+    Si una clave agota su cuota o es rechazada durante el registro en NAMS:
+    1. Reporta la clave fallida al rotador para enviarla a cooldown.
+    2. Obtiene la siguiente clave disponible y actualiza os.environ y litellm.api_key.
+    3. Reintenta la operación con la nueva clave.
+    4. Si se agotan todas las claves disponibles y existe un fallback_coro_factory, lo ejecuta
+       (ej: guardar mensaje en Neo4j omitiendo extracción de entidades para no perder la conversación).
+    """
+    import asyncio
+    if rotator is None:
+        rotator = google_key_rotator
+    if max_retries <= 0:
+        max_retries = max(rotator.total_keys, 1)
+
+    last_exc = None
+    current_key = sync_env_key(rotator)
+    tried_keys: set[str] = {current_key} if current_key else set()
+
+    for attempt in range(max_retries + 1):
+        try:
+            return await coro_factory()
+        except Exception as exc:
+            last_exc = exc
+            if not _is_quota_error(exc):
+                # Si no es error de cuota/rate-limit/auth, propagar directamente
+                raise
+
+            err_str = str(exc).lower()
+            is_overloaded = any(k in err_str for k in ["503", "unavailable", "high demand", "overloaded"])
+            is_exhausted = any(k in err_str for k in ["quota", "resource_exhausted", "resourceexhausted", "credits are depleted", "429"])
+            key_suffix = current_key[-4:] if current_key else "????"
+            logger.warning(
+                f"🔄 [NAMS Key Rotation {attempt+1}/{max_retries}] Error ({'503 High Demand' if is_overloaded else ('Cuota 429' if is_exhausted else 'API Error')}) "
+                f"en {action_name} con key ...{key_suffix}: {str(exc)[:160]}"
+            )
+
+            if attempt >= max_retries:
+                break
+
+            if current_key:
+                rotator.report_failure(current_key, is_exhausted=is_exhausted, is_overloaded=is_overloaded)
+
+            new_key = rotator.get_key(exclude_keys=tried_keys)
+            is_different = bool(new_key and new_key != current_key)
+            if new_key:
+                tried_keys.add(new_key)
+                os.environ["GEMINI_API_KEY"] = new_key
+                os.environ["GOOGLE_API_KEY"] = new_key
+                try:
+                    import litellm
+                    litellm.api_key = new_key
+                except Exception:
+                    pass
+            current_key = new_key
+
+            wait = 0.2 if is_different else min(1.5 * (1.5 ** attempt), 8.0)
+            logger.info(f"⏳ [NAMS Key Rotation] Conmutando a key ...{current_key[-4:] if current_key else '????'}. Esperando {wait:.1f}s...")
+            await asyncio.sleep(wait)
+
+    if fallback_coro_factory is not None:
+        logger.warning(f"⚠️ Todas las claves agotadas para {action_name}. Ejecutando fallback de degradación...")
+        return await fallback_coro_factory()
+
+    raise last_exc
 
 
 # ── Chain of Responsibility Pattern (GoF): Sanitización de Contexto ──
