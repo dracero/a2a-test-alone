@@ -47,22 +47,28 @@ Welcome to the A2A Samples repository! Here you will find code samples and demos
 
 This repository contains code samples and demos which use the [Agent2Agent (A2A) Protocol](https://goo.gle/a2a).
 
+> [!IMPORTANT]
+> **Orquestador Central del Sistema: JEV (TypeSafe AI - System One)**  
+> En esta plataforma, **el orquestador central es JEV (TypeSafe AI)**. JEV opera como el motor cognitivo de decisión de Tipo 1 (System One), responsable de la clasificación tipada de intenciones, el enrutamiento inteligente hacia los agentes especializados (`physics`, `medical`, `image` o respuesta directa) y el control de continuidad de sesiones conversacionales sin heurísticas frágiles.
+
 ## 🚀 Quick Start
 
-Este repositorio utiliza **Google Gemini 3.5 Flash (`gemini-3.5-flash`)** como motor cognitivo principal para el razonamiento de los agentes, extracción ontológica NAMS y revisión automatizada de código, respaldado por un **sistema inteligente de rotación y resiliencia de claves API**.
+Este repositorio utiliza **JEV (TypeSafe AI - System One)** como motor orquestador central y enrutador cognitivo de alta precisión, y **Google Gemini 3.5 Flash (`gemini-3.5-flash`)** como motor cognitivo principal para el razonamiento de los agentes, síntesis socrática, extracción ontológica NAMS y revisión automatizada de código, respaldado por un **sistema inteligente de rotación y resiliencia de claves API**.
 
 ### Prerequisites
 
-1. **Google Gemini API Key(s)** (Principal):
+1. **JEV (TypeSafe AI) API Key** (Orquestador System One):
+   - Clave para el SDK de TypeSafe (`JEV_API_KEY` o `TYPESAFE_API_KEY`) que alimenta las decisiones tipadas del orquestador, clasificación de agentes y evaluación rápida.
+2. **Google Gemini API Key(s)** (Cognición y Razonamiento):
    - Obtén tu(s) clave(s) en [Google AI Studio](https://aistudio.google.com/).
    - Soporta una o múltiples claves (`GOOGLE_API_KEYS` separadas por coma). El sistema prioriza automáticamente la clave paga con un cooldown acelerado de 15 segundos y conmuta a las claves secundarias si se alcanzan límites de cuota (429/403).
-2. **Neo4j DB (Memoria NAMS)**:
+3. **Neo4j DB (Memoria NAMS)**:
    - En la nube vía [Neo4j Aura](https://neo4j.com/cloud/aura/) (`neo4j+s://...`) o local mediante Docker (`bolt://localhost:7687` con auto-inicio mediante contenedor `neo4j-local`).
-3. **Groq API Key** (Opcional):
+4. **Groq API Key** (Opcional):
    - Para extracción de preferencias y autoaprendizaje en segundo plano.
-4. **Python 3.12+** con el gestor de paquetes ultra-rápido `uv`.
-5. **Node.js 18+** y `npm` para el frontend Next.js.
-6. **Docker**: Para ejecutar bases de datos locales (`neo4j-local` en el puerto 7687 y `qdrant-local-histo` en el puerto 6333) gestionadas de forma automática por los scripts de inicio.
+5. **Python 3.12+** con el gestor de paquetes ultra-rápido `uv`.
+6. **Node.js 18+** y `npm` para el frontend Next.js.
+7. **Docker**: Para ejecutar bases de datos locales (`neo4j-local` en el puerto 7687 y `qdrant-local-histo` en el puerto 6333) gestionadas de forma automática por los scripts de inicio.
 
 ### Setup & Configuración
 
@@ -78,6 +84,10 @@ Este repositorio utiliza **Google Gemini 3.5 Flash (`gemini-3.5-flash`)** como m
    ```
    Edita `.env` y configura tus credenciales:
    ```env
+   # Orquestador Central JEV (TypeSafe AI - System One)
+   JEV_API_KEY="apikey_tu_clave_jev..."
+   TYPESAFE_API_KEY="apikey_tu_clave_jev..."
+
    # Claves de Google Gemini (separadas por comas; la primera es la cuenta paga/prioritaria)
    GOOGLE_API_KEYS="AIzaSyTuClavePaga...,AIzaSyTuClaveGratis1...,AIzaSyTuClaveGratis2..."
    GOOGLE_API_KEY="AIzaSyTuClavePaga..."
@@ -96,7 +106,7 @@ Este repositorio utiliza **Google Gemini 3.5 Flash (`gemini-3.5-flash`)** como m
    ```bash
    npm run dev
    ```
-   *Nota: `npm run dev` ejecuta `start_ordered.py`, que levanta los agentes especializados (Física en 10003, Medicina en 10002, Imágenes en 10001), verifica la disponibilidad de sus puertos y luego inicia el backend orquestador BeeAI (12000) y el frontend Next.js (3000).*
+   *Nota: `npm run dev` ejecuta `start_ordered.py`, que levanta los agentes especializados (Física en 10003, Medicina en 10002, Imágenes en 10001), verifica la disponibilidad de sus puertos y luego inicia el backend orquestador JEV (12000) y el frontend Next.js (3000).*
 
 4. Abrir en el navegador: [http://localhost:3000](http://localhost:3000)
 
@@ -113,7 +123,7 @@ Este sistema se compone de los siguientes elementos organizados de forma concurr
 ```mermaid
 graph TD
     User([Cliente / Usuario]) <--> Frontend[Frontend Next.js: Puerto 3000]
-    Frontend <--> Orchestrator[Backend Orquestador: Puerto 12000]
+    Frontend <--> Orchestrator["🧠 Orquestador Central: JEV (TypeSafe AI System One)<br/>Puerto 12000"]
     
     subgraph Agents [Agentes Especializados A2A]
         AgentMed[Asistente Médico: Puerto 10002]
@@ -121,9 +131,9 @@ graph TD
         AgentPhys[Tutor Socrático de Física: Puerto 10003]
     end
     
-    Orchestrator <--> AgentMed
-    Orchestrator <--> AgentImg
-    Orchestrator <--> AgentPhys
+    Orchestrator <-->|A2A Protocol / Dispatch| AgentMed
+    Orchestrator <-->|A2A Protocol / Dispatch| AgentImg
+    Orchestrator <-->|A2A Protocol / Dispatch| AgentPhys
     
     subgraph MemorySystem [Memoria en Grafo Neo4j y Auto-Aprendizaje]
         Neo4jClient[MemoryClient]
@@ -141,21 +151,24 @@ graph TD
 
 ### Componentes Clave
 
-1. **3 Agentes Especializados**:
+1. **Orquestador Central: JEV (TypeSafe AI - System One)** (puerto 12000):
+   - **El Orquestador es JEV**: Toda la inteligencia de despacho, decisión estructural y gestión de diálogos está comandada centralmente por **JEV** (`typesafe-sdk`). A diferencia de los enrutadores tradicionales basados en expresiones regulares o prompts de texto no estructurados, JEV transforma el lenguaje natural y el estado de la aplicación en juicios probabilísticos tipados, deterministas y calibrados en milisegundos:
+     - **Enrutamiento Inteligente (`classify_agent_routing`)**: Utiliza la primitiva tipada `Choice` para determinar con precisión matemática y confianza cuantitativa cuál es el agente idóneo (Física, Medicina o Imágenes), o si la consulta debe resolverse de forma directa (`DIRECT`).
+     - **Control de Intención de Sesión (`decide_session_continuation`)**: Evalúa en tiempo real si el mensaje del alumno mantiene el hilo dialéctico con el agente actual o si solicita explícitamente cambiar de tópico/agente.
+     - **Evaluación Pedagógica System One (`evaluate_claim_hybrid_system_one`)**: Ejecuta en paralelo juicios de veracidad (`Noul`), tipo de error conceptual (`Choice`) y severidad (`Score`).
+   - **Ejecución y Flujo A2A (BeeAI Workflow / Mediator)**: Implementa el patrón Mediator coordinando de forma desacoplada las invocaciones hacia los agentes A2A y transmitiendo streams SSE al frontend.
+   - **Memoria NAMS Integrada (Neo4j Agent Memory)**:
+     - **Memoria a Corto Plazo**: Registra el historial de interacciones en el grafo con rotación de claves.
+     - **Memoria a Largo Plazo**: Recupera las preferencias del usuario y las inyecta en el orquestador.
+     - **Auto-Aprendizaje**: Analiza asíncronamente en segundo plano nombres, preferencias académicas o correcciones, guardándolas permanentemente en Neo4j con rotación automática de claves.
+     - **Embeddings Locales**: Genera vectores localmente usando `SentenceTransformers` (modelo `BAAI/bge-small-en-v1.5`), eliminando costes y dependencias de claves externas.
+
+2. **3 Agentes Especializados A2A**:
    - **Generador de Imágenes** (puerto 10001): Usa CrewAI + Stable Diffusion XL (vía Hugging Face Inference API) para generar y editar imágenes basándose en prompts de texto.
    - **Asistente Médico** (puerto 10002): Analiza imágenes médicas (radiografías, resonancias) y realiza búsquedas complementarias con Tavily.
    - **Tutor Socrático de Física** (puerto 10003): Utiliza procesamiento de PDFs (base vectorial Qdrant) y enseña a los estudiantes mediante el método socrático formulando preguntas guía en base a la bibliografía oficial de Física I.
 
-2. **Backend Orquestador** (puerto 12000):
-   - Construido con FastAPI y **BeeAI Workflow**.
-   - Analiza el contexto de la conversación y enruta dinámicamente las consultas del usuario al agente más calificado.
-   - Integrado con **Neo4j Agent Memory** y un bucle de **Auto-Aprendizaje (Self-Learning)**:
-     - **Memoria a Corto Plazo**: Registra el historial de interacciones en el grafo.
-     - **Memoria a Largo Plazo**: Recupera las preferencias del usuario y las inyecta en los prompts del orquestador.
-     - **Auto-Aprendizaje**: Analiza asíncronamente en segundo plano si el usuario expresó nombres, preferencias académicas o correcciones, guardándolas permanentemente en Neo4j Aura Cloud DB sin ralentizar las respuestas.
-     - **Embeddings Locales**: Genera vectores localmente usando `SentenceTransformers` (modelo `BAAI/bge-small-en-v1.5`), eliminando costes y dependencias de claves de OpenAI.
-
-3. **Frontend** (puerto 3000):
+3. **Frontend Next.js** (puerto 3000):
    - Aplicación Next.js React moderna y responsiva.
    - Dashboard de administración para monitorizar los agentes y el inspector del protocolo A2A.
    - Chat interactivo en tiempo real con soporte multimedia (texto, PDF e imágenes).
@@ -172,7 +185,7 @@ La arquitectura combina patrones **Creacionales**, **Estructurales** y de **Comp
 
 ```mermaid
 graph TD
-    User([Cliente / UI]) --> Orch[BeeAI Orchestrator Workflow<br/><b>Patrón: Mediator</b>]
+    User([Cliente / UI]) --> Orch[Orquestador JEV + BeeAI Workflow<br/><b>Patrón: Mediator</b>]
     
     subgraph "Ejecución de Agentes A2A (Template Method & Adapter)"
         BaseExec["BaseA2AAgentExecutor<br/><b>Patrón: Template Method</b>"]
@@ -222,7 +235,7 @@ graph TD
 | **[Proxy](https://refactoring.guru/design-patterns/proxy)** | Estructural | [api_key_rotator.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/api_key_rotator.py)<br/>`invoke_with_retry()` | **Control de acceso y resiliencia transparente**: Intercepta llamadas síncronas y asíncronas (`ainvoke_with_retry`) al LLM, aplicando reintentos exponenciales con jitter, detección automática de errores de cuota (403/429) y conmutación de llaves. |
 | **[Facade](https://refactoring.guru/design-patterns/facade)** | Estructural | [api_key_rotator.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/api_key_rotator.py)<br/>`sanitize_nams_context()`<br/>`sync_env_key()` | **Interfaz unificada simplificada**: Oculta la complejidad interna de la cadena de filtros o la sincronización de variables de entorno para bibliotecas externas (LiteLLM/SDKs). |
 | **[Adapter / Decorator](https://refactoring.guru/design-patterns/adapter)** | Estructural | [custom_request_handler.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/samples/python/agents/multimodal/app/custom_request_handler.py)<br/>`PhysicsAgentExecutorWrapper` | **Adaptación de interfaces dispares**: Adapta mensajes con cargas multimodales del formato del ADK (`inline_data`) al estándar A2A (`FilePart`), manteniendo intacto el executor interno. |
-| **[Mediator](https://refactoring.guru/design-patterns/mediator)** | Comportamiento | [beeai_orchestrator_workflow.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/demo/ui/service/server/beeai_orchestrator_workflow.py) | **Desacoplamiento entre agentes**: El orquestador BeeAI centraliza la comunicación y toma de decisiones entre los agentes de Física, Medicina e Imágenes sin que ninguno dependa directamente de los demás. |
+| **[Mediator](https://refactoring.guru/design-patterns/mediator)** | Comportamiento | [beeai_orchestrator_workflow.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/demo/ui/service/server/beeai_orchestrator_workflow.py)<br/>[jev_service.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/demo/ui/service/server/jev_service.py) | **Orquestación Centralizada con JEV (System One)**: El orquestador basado en JEV (TypeSafe AI) centraliza la toma de decisiones, clasificación de intenciones y enrutamiento inteligente entre los agentes de Física, Medicina e Imágenes sin que ninguno dependa directamente de los demás. |
 
 ---
 
@@ -505,7 +518,7 @@ Paralelamente a las mejoras en memoria, se incorporaron actualizaciones clave pa
   1. *Fase 0*: Verificación y encendido de servicios locales Docker (Neo4j y Qdrant).
   2. *Paso 1*: Agente Prioritario (Tutor de Física Multimodal en el puerto `10003`).
   3. *Paso 2*: Agentes de Soporte (Generador de Imágenes en `10001` y Asistente Médico en `10002`).
-  4. *Paso 3*: Orquestador Backend BeeAI en el puerto `12000`.
+  4. *Paso 3*: Orquestador Central JEV (TypeSafe AI) en el puerto `12000`.
   5. *Paso 4*: Frontend Next.js en el puerto `3000`.
 * **Manejo Seguro de Señales y Puertos**: Implementa `cleanup()` con trampa para `SIGINT`/`SIGTERM`, cerrando limpiamente los árboles de subprocesos y liberando los puertos `10001`, `10002`, `10003`, `12000` y `3000` mediante `fuser` (Linux/macOS) o `taskkill` (Windows).
 
