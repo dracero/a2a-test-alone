@@ -553,3 +553,308 @@ async def classify_medical_image_requirement(query: str, ontology_context: str =
     except Exception as e:
         logger.warning(f"⚠️ Error in JEV medical image requirement: {e}")
         return False, 0.0
+
+
+# =====================================================================
+# 6. Entity Extraction (JEV System One Replacing GliNER)
+# =====================================================================
+
+import json
+
+try:
+    from neo4j_agent_memory.extraction.base import (
+        ExtractedEntity,
+        ExtractionResult,
+        is_valid_entity_name,
+    )
+except ImportError:
+    from dataclasses import dataclass, field
+
+    def is_valid_entity_name(name: str) -> bool:
+        return bool(name and len(name.strip()) >= 2)
+
+    @dataclass
+    class ExtractedEntity:
+        name: str
+        type: str
+        confidence: float = 1.0
+        extractor: Optional[str] = None
+        context: Optional[str] = None
+        start_pos: Optional[int] = None
+        end_pos: Optional[int] = None
+
+    @dataclass
+    class ExtractionResult:
+        entities: list[Any] = field(default_factory=list)
+        relations: list[Any] = field(default_factory=list)
+        preferences: list[Any] = field(default_factory=list)
+        source_text: Optional[str] = None
+
+
+def load_harness_config(config_path: Optional[str] = None) -> dict[str, Any]:
+    """Dynamically loads NAMS Harness configuration from JSON file or environment variable."""
+    resolved_path = (
+        config_path
+        or os.getenv("NAMS_HARNESS_CONFIG_PATH")
+        or os.path.join(os.path.dirname(__file__), "../../../config/nams_harness_config.json")
+    )
+    if not os.path.exists(resolved_path):
+        root_cand = os.path.join(os.getcwd(), "config/nams_harness_config.json")
+        if os.path.exists(root_cand):
+            resolved_path = root_cand
+
+    if os.path.exists(resolved_path):
+        try:
+            with open(resolved_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to parse harness config at {resolved_path}: {e}")
+
+    return {
+        "version": "1.0.0",
+        "deficiency_similarity_threshold": 0.82,
+        "deficiency_count_threshold": 5,
+        "jev_entity_confidence_cutoff": 0.75,
+        "jev_misconception_probability_cutoff": 0.50,
+        "severity_threshold_for_immediate_candidate": 3.0,
+        "canonical_retrieval_k_hops": 1,
+        "max_candidate_spans_per_query": 8,
+        "default_entity_types": [
+            "CONCEPT",
+            "PRINCIPLE",
+            "PHYSICAL_QUANTITY",
+            "FORMULA",
+            "TISSUE",
+            "CELL",
+            "ORGAN",
+            "PERSON",
+        ],
+    }
+
+
+def extract_candidate_spans_dynamic(
+    text: str,
+    schema_entity_names: Optional[list[str]] = None,
+    max_candidates: int = 8,
+) -> list[str]:
+    """Dynamically extracts candidate entity spans without hardcoding.
+    Uses schema entity names if provided and linguistic token validity."""
+    candidates: list[str] = []
+    text_lower = text.lower()
+
+    # 1. Match known schema concepts dynamically
+    if schema_entity_names:
+        for entity_name in schema_entity_names:
+            if entity_name.lower() in text_lower and entity_name not in candidates:
+                candidates.append(entity_name)
+
+    # 2. Extract 2-gram and 3-gram noun phrases / token groups
+    tokens = [t.strip(".,;:!?\"'()[]{}«»") for t in text.split() if t.strip()]
+    tokens = [t for t in tokens if t]
+
+    for n in (3, 2):
+        for i in range(len(tokens) - n + 1):
+            chunk = tokens[i : i + n]
+            if is_valid_entity_name(chunk[0]) and is_valid_entity_name(chunk[-1]):
+                gram = " ".join(chunk)
+                if len(gram) >= 4 and gram not in candidates:
+                    candidates.append(gram)
+
+    # 3. Extract 1-gram valid content tokens
+    for t in tokens:
+        if is_valid_entity_name(t) and len(t) >= 3:
+            if not any(t.lower() in c.lower() for c in candidates):
+                candidates.append(t)
+
+    return candidates[:max_candidates]
+
+
+class JEVEntityExtractor:
+    """System One Entity Extractor using JEV (TypeSafe AI) to replace GliNER.
+    
+    Provides typed, calibrated entity extraction with zero GPU VRAM footprint.
+    Fully implements the neo4j_agent_memory EntityExtractor Protocol.
+    """
+
+    def __init__(
+        self,
+        domain_name: str = "General",
+        schema_config: Optional[Any] = None,
+        config_path: Optional[str] = None,
+        confidence_cutoff: Optional[float] = None,
+    ):
+        self.domain_name = domain_name
+        self.schema_config = schema_config
+        self.harness_config = load_harness_config(config_path)
+        self.confidence_cutoff = (
+            confidence_cutoff
+            if confidence_cutoff is not None
+            else self.harness_config.get("jev_entity_confidence_cutoff", 0.75)
+        )
+        self.max_candidates = self.harness_config.get("max_candidate_spans_per_query", 8)
+
+    def _resolve_entity_types_criteria(
+        self, requested_types: Optional[list[str]] = None
+    ) -> dict[str, str]:
+        """Dynamically build criteria dictionary from schema_config or harness config."""
+        criteria: dict[str, str] = {
+            "NONE": "The candidate span is not a valid domain concept, entity, or object."
+        }
+
+        types_list: list[str] = []
+        if requested_types:
+            types_list = requested_types
+        elif self.schema_config and hasattr(self.schema_config, "entity_types"):
+            types_list = [
+                et.name if hasattr(et, "name") else str(et)
+                for et in self.schema_config.entity_types
+            ]
+        elif "default_entity_types" in self.harness_config:
+            types_list = self.harness_config["default_entity_types"]
+
+        for t in types_list:
+            t_upper = t.upper().strip()
+            criteria[t_upper] = f"Candidate belongs to ontological class '{t_upper}' in domain '{self.domain_name}'."
+
+        return criteria
+
+    def _get_schema_concept_names(self) -> list[str]:
+        """Extract concept names from schema or ontology dynamically if available."""
+        names: list[str] = []
+        if self.schema_config and hasattr(self.schema_config, "entity_types"):
+            for et in self.schema_config.entity_types:
+                if hasattr(et, "subtypes") and et.subtypes:
+                    names.extend(et.subtypes)
+                if hasattr(et, "name") and et.name:
+                    names.append(et.name)
+        return names
+
+    async def extract(
+        self,
+        text: str,
+        *,
+        entity_types: Optional[list[str]] = None,
+        extract_relations: bool = True,
+        extract_preferences: bool = True,
+    ) -> Any:
+        """Extract entities using JEV System One model."""
+        if not text or not text.strip():
+            return ExtractionResult(source_text=text)
+
+        schema_concepts = self._get_schema_concept_names()
+        candidates = extract_candidate_spans_dynamic(
+            text, schema_entity_names=schema_concepts, max_candidates=self.max_candidates
+        )
+
+        if not candidates:
+            return ExtractionResult(source_text=text)
+
+        api_key = get_jev_api_key()
+        if not api_key:
+            logger.warning("⚠️ JEV_API_KEY not configured. Falling back to dynamic heuristic extractor.")
+            entities = [
+                ExtractedEntity(
+                    name=cand,
+                    type="CONCEPT",
+                    confidence=0.5,
+                    extractor="DynamicHeuristicFallback",
+                )
+                for cand in candidates
+                if is_valid_entity_name(cand)
+            ]
+            return ExtractionResult(entities=entities, source_text=text)
+
+        criteria_types = self._resolve_entity_types_criteria(entity_types)
+
+        state = {
+            "source_text": text,
+            "domain": self.domain_name,
+            "candidate_spans": candidates,
+        }
+
+        questions: dict[str, Any] = {}
+        for idx, cand in enumerate(candidates):
+            questions[f"is_valid_{idx}"] = Noul(
+                instructions=(
+                    f"Determine whether candidate '{cand}' represents an actual domain concept, physical quantity, "
+                    f"anatomical structure, or scientific entity in the source text."
+                ),
+                criteria={
+                    "true": "The candidate is a genuine domain concept or entity in this query context.",
+                    "false": "Colloquial phrase, common action, non-domain word, or irrelevant span.",
+                },
+            )
+            questions[f"type_{idx}"] = Choice(
+                instructions=f"Select the most appropriate entity category for candidate '{cand}'.",
+                criteria=criteria_types,
+            )
+
+        extracted_entities = []
+        try:
+            async with get_async_jev_client() as client:
+                resp = await client.system_one(state=state, questions=questions)
+                for idx, cand in enumerate(candidates):
+                    noul_ans = resp.nouls.get(f"is_valid_{idx}")
+                    choice_ans = resp.choices.get(f"type_{idx}")
+
+                    prob = float(noul_ans.noul) if noul_ans else 0.0
+                    chosen_type = str(choice_ans.choice) if choice_ans else "NONE"
+
+                    if prob >= self.confidence_cutoff and chosen_type != "NONE":
+                        start_idx = text.lower().find(cand.lower())
+                        end_idx = start_idx + len(cand) if start_idx != -1 else None
+
+                        extracted_entities.append(
+                            ExtractedEntity(
+                                name=cand,
+                                type=chosen_type,
+                                confidence=prob,
+                                extractor="JEV-SystemOne",
+                                start_pos=start_idx if start_idx != -1 else None,
+                                end_pos=end_idx,
+                            )
+                        )
+
+            logger.info(
+                f"🏷️ [JEV Entity Extractor ({self.domain_name})] Extracted {len(extracted_entities)} entities "
+                f"from '{text[:50]}...' with cutoff >= {self.confidence_cutoff}"
+            )
+            return ExtractionResult(entities=extracted_entities, source_text=text)
+        except Exception as e:
+            logger.warning(f"⚠️ Error in JEV entity extraction: {e}. Returning heuristic fallback.")
+            entities = [
+                ExtractedEntity(
+                    name=cand,
+                    type="CONCEPT",
+                    confidence=0.5,
+                    extractor="JEV-ErrorFallback",
+                )
+                for cand in candidates
+                if is_valid_entity_name(cand)
+            ]
+            return ExtractionResult(entities=entities, source_text=text)
+
+
+async def extract_entities_jev(
+    text: str,
+    domain_name: str = "General",
+    schema_config: Optional[Any] = None,
+    confidence_cutoff: Optional[float] = None,
+) -> list[dict[str, Any]]:
+    """Convenience functional wrapper returning dict representations of extracted entities."""
+    extractor = JEVEntityExtractor(
+        domain_name=domain_name,
+        schema_config=schema_config,
+        confidence_cutoff=confidence_cutoff,
+    )
+    res = await extractor.extract(text)
+    return [
+        {
+            "name": getattr(e, "name", ""),
+            "type": getattr(e, "type", ""),
+            "confidence": getattr(e, "confidence", 1.0),
+            "extractor": getattr(e, "extractor", "JEV-SystemOne"),
+        }
+        for e in getattr(res, "entities", [])
+    ]
+

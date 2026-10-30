@@ -34,6 +34,11 @@ except ImportError:
         aexecute_with_nams_key_rotation,
     )
 
+try:
+    from .jev_service import JEVEntityExtractor, load_harness_config
+except ImportError:
+    from jev_service import JEVEntityExtractor, load_harness_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,6 +90,20 @@ class AgentNAMSMemory:
         self.schema_config: Optional[EntitySchemaConfig] = None
         self._connected = False
         self.client: Optional[MemoryClient] = None
+        
+        # Cargar configuración calibrada del andamiaje (Harness² Google Research)
+        self.harness_config = load_harness_config()
+        self.similarity_threshold = float(self.harness_config.get(
+            "deficiency_similarity_threshold", self.DEFICIENCY_SIMILARITY_THRESHOLD
+        ))
+        self.count_threshold = int(self.harness_config.get(
+            "deficiency_count_threshold", self.DEFICIENCY_COUNT_THRESHOLD
+        ))
+        self.entity_confidence_cutoff = float(self.harness_config.get(
+            "jev_entity_confidence_cutoff", 0.75
+        ))
+        self.jev_extractor: Optional[JEVEntityExtractor] = None
+        
         self._init_client()
 
     def _init_client(self):
@@ -128,6 +147,13 @@ class AgentNAMSMemory:
             else:
                 schema_settings = SchemaConfig()
 
+            # Instanciar extractor JEV System One (TypeSafe AI) para reemplazar GliNER sin consumo de VRAM
+            self.jev_extractor = JEVEntityExtractor(
+                domain_name=self.agent_name,
+                schema_config=self.schema_config,
+                confidence_cutoff=self.entity_confidence_cutoff,
+            )
+
             settings = MemorySettings(
                 neo4j={
                     "uri": self.uri,
@@ -138,12 +164,15 @@ class AgentNAMSMemory:
                 embedding=embedder,
                 llm=os.getenv("NAMS_LLM_MODEL", "gemini/gemini-3.5-flash"),
                 extraction=ExtractionConfig(
-                    extractor_type=ExtractorType.LLM,
+                    extractor_type=ExtractorType.NONE,
                 ),
                 schema_config=schema_settings,
             )
-            self.client = MemoryClient(settings)
-            logger.info(f"✅ Memoria NAMS configurada para '{self.agent_name}' ({self.agent_id}) con {os.getenv('NAMS_LLM_MODEL', 'gemini/gemini-3.5-flash')}")
+            self.client = MemoryClient(settings, extractor=self.jev_extractor)
+            logger.info(
+                f"✅ Memoria NAMS configurada para '{self.agent_name}' ({self.agent_id}) "
+                f"con extractor JEV System One (reemplazo GliNER) y {os.getenv('NAMS_LLM_MODEL', 'gemini/gemini-3.5-flash')}"
+            )
         except Exception as e:
             logger.error(f"❌ Error al instanciar NAMS para '{self.agent_name}': {e}")
             self.client = None
@@ -878,19 +907,24 @@ class AgentNAMSMemory:
     async def consolidate_deficiencies(
         self,
         student_id: str,
-        similarity_threshold: float = DEFICIENCY_SIMILARITY_THRESHOLD,
-        count_threshold: int = DEFICIENCY_COUNT_THRESHOLD,
+        similarity_threshold: Optional[float] = None,
+        count_threshold: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         """Analiza misconceptions acumuladas usando SIMILARIDAD SEMÁNTICA (Embeddings)
-        y promueve a StudentDeficiency aquellas que superan ≥5 coincidencias (cosine >= 0.82).
+        y promueve a StudentDeficiency aquellas que superan el umbral calibrado (Harness²).
         
         Algoritmo:
         1. Consulta candidatos pendientes para el estudiante en Neo4j.
         2. Calcula embeddings usando el embedder SentenceTransformers BGE.
         3. Calcula la matriz de similitud de coseno.
-        4. Agrupa en clusters con similitud >= similarity_threshold (0.82).
-        5. Promueve a StudentDeficiency los clusters con tamaño >= count_threshold (5).
+        4. Agrupa en clusters con similitud >= similarity_threshold (calibrado offline por Harness²).
+        5. Promueve a StudentDeficiency los clusters con tamaño >= count_threshold.
         """
+        if similarity_threshold is None:
+            similarity_threshold = getattr(self, "similarity_threshold", self.DEFICIENCY_SIMILARITY_THRESHOLD)
+        if count_threshold is None:
+            count_threshold = getattr(self, "count_threshold", self.DEFICIENCY_COUNT_THRESHOLD)
+
         if not await self.ensure_connected():
             return []
 

@@ -55,9 +55,7 @@ async def get_active_students_with_pending_candidates(mem: AgentNAMSMemory) -> l
 
 async def main():
     print("=" * 70)
-    print("🧠 CONSOLIDACIÓN BATCH DE FALENCIAS POR SIMILARIDAD SEMÁNTICA")
-    print(f"   Umbral de coincidencia: {AgentNAMSMemory.DEFICIENCY_COUNT_THRESHOLD} o más")
-    print(f"   Similitud coseno mínima: {AgentNAMSMemory.DEFICIENCY_SIMILARITY_THRESHOLD}")
+    print("🧠 CONSOLIDACIÓN BATCH DE FALENCIAS POR SIMILARIDAD SEMÁNTICA (HARNESS²)")
     print("=" * 70)
 
     # Memorias de agentes
@@ -79,6 +77,11 @@ async def main():
         database=DATABASE,
     )
 
+    print(f"   Umbral de coincidencia calibrado: {physics_mem.count_threshold} o más")
+    print(f"   Similitud coseno mínima calibrada: {physics_mem.similarity_threshold}")
+    print(f"   Extracción de entidades: JEV System One (sin GliNER / 0 VRAM)")
+    print("=" * 70)
+
     agents = [physics_mem, medical_mem]
     total_consolidated = 0
 
@@ -94,8 +97,8 @@ async def main():
         for student_id in students:
             new_deficiencies = await mem.consolidate_deficiencies(
                 student_id=student_id,
-                similarity_threshold=AgentNAMSMemory.DEFICIENCY_SIMILARITY_THRESHOLD,
-                count_threshold=AgentNAMSMemory.DEFICIENCY_COUNT_THRESHOLD,
+                similarity_threshold=mem.similarity_threshold,
+                count_threshold=mem.count_threshold,
             )
             if new_deficiencies:
                 total_consolidated += len(new_deficiencies)

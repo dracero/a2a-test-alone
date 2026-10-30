@@ -1,0 +1,38 @@
+{
+  "version": "1.0.0",
+  "name": "nams_harness_config",
+  "description": "Configuración calibrada offline mediante Harness² (Google Research) para detección de falencias y extracción de entidades en NAMS",
+  "deficiency_similarity_threshold": 0.82,
+  "deficiency_count_threshold": 5,
+  "jev_entity_confidence_cutoff": 0.75,
+  "jev_misconception_probability_cutoff": 0.5,
+  "severity_threshold_for_immediate_candidate": 3.0,
+  "canonical_retrieval_k_hops": 1,
+  "max_candidate_spans_per_query": 8,
+  "default_entity_types": [
+    "CONCEPT",
+    "PRINCIPLE",
+    "PHYSICAL_QUANTITY",
+    "FORMULA",
+    "TISSUE",
+    "CELL",
+    "ORGAN",
+    "PERSON"
+  ],
+  "offline_harness_meta": {
+    "framework": "google-research/harness2",
+    "mode": "offline_probe_compose",
+    "last_calibrated_metrics": {
+      "total_cases": 8,
+      "tp": 4,
+      "fp": 1,
+      "tn": 3,
+      "fn": 0,
+      "precision": 0.8,
+      "recall": 1.0,
+      "f1_score": 0.8889,
+      "accuracy": 0.875
+    },
+    "best_f1": 0.8889
+  }
+}

@@ -1,0 +1,83 @@
+[
+  {
+    "id": "phys_01",
+    "domain": "Physics",
+    "query": "En el punto más alto del tiro vertical, la velocidad es cero y por lo tanto la aceleración también debe ser cero.",
+    "is_misconception": true,
+    "concept": "Aceleración de la gravedad",
+    "error_type": "CONFUSION_CONCEPTUAL_O_ESTRUCTURAL",
+    "severity": 4.0,
+    "expected_entities": ["tiro vertical", "velocidad", "aceleración"]
+  },
+  {
+    "id": "phys_02",
+    "domain": "Physics",
+    "query": "Un objeto más pesado siempre cae más rápido que uno liviano en el vacío porque tiene más masa.",
+    "is_misconception": true,
+    "concept": "Caída libre en el vacío",
+    "error_type": "CONTRADICCION_DE_PRINCIPIO_RECTOR",
+    "severity": 5.0,
+    "expected_entities": ["objeto", "vacío", "masa"]
+  },
+  {
+    "id": "phys_03",
+    "domain": "Physics",
+    "query": "La aceleración en un movimiento rectilíneo uniforme es cero porque la velocidad se mantiene constante.",
+    "is_misconception": false,
+    "concept": "Movimiento Rectilíneo Uniforme",
+    "error_type": "NINGUNO",
+    "severity": 1.0,
+    "expected_entities": ["aceleración", "movimiento rectilíneo uniforme", "velocidad"]
+  },
+  {
+    "id": "phys_04",
+    "domain": "Physics",
+    "query": "Tuve que hacer mucha fuerza para levantarme hoy porque dormí mal.",
+    "is_misconception": false,
+    "concept": "Coloquial",
+    "error_type": "NINGUNO",
+    "severity": 1.0,
+    "expected_entities": []
+  },
+  {
+    "id": "med_01",
+    "domain": "Medical",
+    "query": "Los capilares sanguíneos tienen una capa muscular gruesa para regular la presión arterial periférica.",
+    "is_misconception": true,
+    "concept": "Capilares sanguíneos",
+    "error_type": "ATRIBUCION_ERRONEA_DE_PROPIEDADES",
+    "severity": 4.0,
+    "expected_entities": ["capilares sanguíneos", "presión arterial"]
+  },
+  {
+    "id": "med_02",
+    "domain": "Medical",
+    "query": "El epitelio pseudoestratificado cilíndrico ciliado se encuentra típicamente en las vías respiratorias.",
+    "is_misconception": false,
+    "concept": "Epitelio respiratorio",
+    "error_type": "NINGUNO",
+    "severity": 1.0,
+    "expected_entities": ["epitelio pseudoestratificado", "vías respiratorias"]
+  },
+  {
+    "id": "med_03",
+    "domain": "Medical",
+    "query": "Las mitocondrias son las encargadas de la síntesis de ARN mensajero en el citoplasma.",
+    "is_misconception": true,
+    "concept": "Mitocondrias y transcripción",
+    "error_type": "CONFUSION_CONCEPTUAL_O_ESTRUCTURAL",
+    "severity": 4.5,
+    "expected_entities": ["mitocondrias", "ARN mensajero", "citoplasma"]
+  },
+  {
+    "id": "med_04",
+    "domain": "Medical",
+    "query": "Quiero ver una imagen histológica de hígado para comparar los sinusoides con la vena central.",
+    "is_misconception": false,
+    "concept": "Histología hepática",
+    "error_type": "NINGUNO",
+    "severity": 1.0,
+    "expected_entities": ["hígado", "sinusoides", "vena central"]
+  }
+]
+

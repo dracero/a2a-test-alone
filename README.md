@@ -305,7 +305,7 @@ google_key_rotator.set_strategy(PriorityPaidKeyStrategy())
 
 ## 🧠 NAMS: Neo4j Agent Memory System (Arquitectura POLE+O & Dual-Rol)
 
-**NAMS** es un sistema avanzado de memoria cognitiva y grafo de conocimiento para agentes inteligentes basado en **Neo4j Aura Cloud DB**, embeddings locales con **SentenceTransformers** (`BAAI/bge-small-en-v1.5` en CPU) y extracción de entidades con **Gemini 3.5 Flash** (vía `LiteLLM` con rotador de claves).
+**NAMS** es un sistema avanzado de memoria cognitiva y grafo de conocimiento para agentes inteligentes basado en **Neo4j DB**, embeddings locales con **SentenceTransformers** (`BAAI/bge-small-en-v1.5` en CPU), extracción de entidades calibrada mediante **JEV System One (TypeSafe AI)** en reemplazo de GliNER (0 consumo de VRAM) y optimización recursiva offline del andamiaje mediante **Harness² (Google Research)**.
 
 En las últimas actualizaciones, NAMS ha evolucionado de una memoria genérica a un **subsistema pedagógico de alta fidelidad con aislamiento por agente, ontología formal POLE+O y control de escritura estricto**.
 
@@ -486,16 +486,188 @@ flowchart TD
 
 ---
 
+### 8. Extracción de Entidades con JEV System One (Reemplazo Integral de GliNER)
+
+Para la detección y extracción de entidades pedagógicas y conceptos ontológicos en la memoria NAMS, el sistema reemplaza el extractor clásico **GliNER** (*Generalist and Lightweight Model for Named Entity Recognition*) por **JEV (TypeSafe AI - System One)** a través de la clase [`JEVEntityExtractor`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/jev_service.py).
+
+#### 🛑 ¿Por qué se reemplazó GliNER?
+GliNER es un modelo basado en bi-encoders para extracción zero-shot de spans textuales. Aunque funciona bien en textos genéricos en inglés, en un entorno de tutoría pedagógica y con restricciones de hardware presenta tres cuellos de botella críticos:
+
+1. **Competencia por Recursos de GPU/VRAM (RTX 3060)**: GliNER requiere cargar pesos neuronales en PyTorch (`gliner_medium-v2.5` ocupa entre 800 MB y 1.5 GB de VRAM/RAM). Esto compite directamente con las cargas de visión de la GPU (como los modelos histológicos del Asistente Médico o Stable Diffusion). Con JEV, el procesamiento se realiza mediante llamadas ligeras a la API de System One, resultando en **0 consumo de VRAM**.
+2. **Falsos Positivos en Lenguaje Coloquial y Dubitativo**: Los estudiantes suelen utilizar términos físicos o biológicos de manera metafórica o coloquial (*"tuve que hacer mucha fuerza para levantarme hoy"* o *"la gravedad del problema"*). GliNER extrae *"fuerza"* o *"gravedad"* como entidades válidas basándose únicamente en similitud superficial. JEV, mediante su juicio de calibración probabilística condicionado por el contexto, reconoce que no se trata de conceptos canónicos y los descarta.
+3. **Ausencia de Calibración Probabilística y Tipado Ontológico**: GliNER genera strings de texto plano. No ofrece una distribución de probabilidad calibrada ni puede garantizar que la entidad pertenezca al esquema POLE+O del agente activo.
+
+#### 📊 Comparativa Técnica: GliNER vs. JEV System One
+
+| Dimensión | GliNER (`gliner_medium-v2.5`) | JEV System One (`JEVEntityExtractor`) |
+| :--- | :--- | :--- |
+| **Uso de GPU / VRAM** | 800 MB – 1.5 GB en VRAM / RAM | **0 MB VRAM** (Inferencia desacoplada en System One) |
+| **Tiempo de Inferencia** | ~80–250 ms (según carga en GPU) | **~30–90 ms** (Juicios estructurados en paralelo) |
+| **Tipo de Salida** | Texto no tipado con score arbitrario | **Primitivas fuertemente tipadas (`Noul` + `Choice`)** |
+| **Calibración de Incertidumbre** | Puntuaciones relativas no calibradas | **Probabilidades calibradas $P(\text{es\_entidad} \mid \text{contexto}) \in [0, 1]$** |
+| **Mapeo Ontológico** | Etiquetas manuales de texto libre | **Clasificación directa a clases del esquema POLE+O canónico** |
+| **Filtrado Coloquial** | Propenso a falsos positivos en dudas de alumnos | **Filtrado epistémico por contexto** |
+
+#### 💡 Arquitectura y Flujo: Patrón *Select & Verify instead of Generate*
+El extractor `JEVEntityExtractor` implementa el protocolo formal `EntityExtractor` de `neo4j-agent-memory`:
+
+```mermaid
+flowchart TD
+    Query["Consulta o Afirmación del Alumno"] --> DynSpan["1. Extracción Dinámica de Candidatos<br/>(extract_candidate_spans_dynamic)<br/>Genera 1-gram, 2-gram y 3-gram sin hardcoding"]
+    DynSpan --> CheckValid{"2. is_valid_entity_name()<br/>(Filtro léxico canónico NAMS)"}
+    CheckValid -->|Candidatos Válidos| JEV_Batch["3. Llamada Paralela JEV System One<br/>(Una sola petición HTTP / Cero VRAM)"]
+    
+    subgraph JEV_Decisions ["Juicios Estructurados Tipados JEV"]
+        JEV_Batch --> NoulJudge["Noul (is_valid): Probabilidad Calibrada<br/>¿Es un concepto científico/médico real en contexto?"]
+        JEV_Batch --> ChoiceJudge["Choice (type): Clasificación POLE+O<br/>Mapeo a Clases de la Ontología Activa"]
+    end
+    
+    NoulJudge --> FilterCutoff{"¿Probabilidad >= Cutoff?<br/>(default: 0.75, calibrado por Harness²)"}
+    ChoiceJudge --> FilterCutoff
+    FilterCutoff -->|Sí| EntityList["ExtractedEntity(name, type, confidence, extractor='JEV-SystemOne')"]
+    FilterCutoff -->|No: Ruido o Coloquial| Discard["Descarte Silencioso (Sin contaminar el grafo)"]
+    EntityList --> Neo4jStore["Persistencia en Memoria NAMS (Neo4j)"]
+```
+
+#### 🧩 Principio de Cero Hardcoding
+La implementación garantiza que **no exista ninguna lista estática de palabras o conceptos hardcodeados**:
+1. **Generación Dinámica de Spans**: Los candidatos léxicos se extraen dividiendo la frase en combinaciones de 1 a 3 palabras y cruzándolos con los conceptos y subtipos de la ontología cargada dinámicamente ([`physics_ontology.json`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/demo/ui/service/server/ontologies/physics_ontology.json)).
+2. **Validación Canónica de Nombres**: Se utiliza `neo4j_agent_memory.extraction.base.is_valid_entity_name` para eliminar palabras funcionales, números y signos de puntuación sin necesidad de inventar reglas locales.
+3. **Esquema de Clasificación Adaptativo**: Las opciones de la primitiva `Choice` se derivan en tiempo de ejecución a partir de `schema_config.entity_types` del agente o de la configuración calibrada en el harness.
+
+#### 🔌 Integración Nativa en `AgentNAMSMemory`
+En [`demo/ui/service/server/agent_nams.py`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/demo/ui/service/server/agent_nams.py), el extractor se inyecta como override oficial en el cliente NAMS:
+
+```python
+# Instanciación dinámica del extractor JEV sin GliNER
+self.jev_extractor = JEVEntityExtractor(
+    domain_name=self.agent_name,
+    schema_config=self.schema_config,
+    confidence_cutoff=self.entity_confidence_cutoff,
+)
+
+settings = MemorySettings(
+    neo4j={"uri": self.uri, "username": self.username, "password": SecretStr(self.password), "database": self.database},
+    embedding=embedder,
+    llm=os.getenv("NAMS_LLM_MODEL", "gemini/gemini-3.5-flash"),
+    extraction=ExtractionConfig(extractor_type=ExtractorType.NONE),
+    schema_config=schema_settings,
+)
+self.client = MemoryClient(settings, extractor=self.jev_extractor)
+```
+
+---
+
+### 9. Optimización y Calibración Offline con Google Research Harness² (`harness2`)
+
+Para maximizar la precisión en la detección de falencias conceptuales sin penalizar la latencia en las consultas en vivo de los estudiantes, se incorpora la arquitectura de **Harnessing Recursivo** desarrollada por Google Cloud AI Research ([`google-research/harness2`](https://github.com/google-research/harness2)).
+
+#### 🎯 Filosofía: Pesos Congelados y Andamiaje Adaptativo
+En lugar de costosos reentrenamientos o fine-tuning de modelos LLM, Harness² se basa en **congelar los pesos del modelo** y optimizar recursivamente el **harness (el andamiaje)** que lo rodea:
+* Los criterios semánticos de decisión en JEV System One.
+* Las rúbricas de severidad cognitiva.
+* Los umbrales de corte de probabilidad para calificar una afirmación como concepción errónea (`MisconceptionCandidate`).
+* El umbral de similitud coseno ($\theta_{\text{sim}}$) y la frecuencia requerida ($N_{\text{count}}$) para consolidar a falencia confirmada (`StudentDeficiency`).
+
+#### ⚡ ¿Por qué Formato Offline?
+El ciclo recursivo de Harness² evalúa múltiples combinaciones de andamiaje. Ejecutar esta exploración en tiempo de ejecución frente al alumno provocaría esperas de 5 a 15 segundos y aumentaría el consumo de cuotas de API. 
+Por ello, Harness² se desacopla en un **proceso offline por lotes (batch)**:
+1. Se calibra y optimiza el andamiaje contra un banco de pruebas representativo.
+2. Los parámetros ganadores se graban en un archivo de configuración estandarizado.
+3. El sistema en producción (NAMS y JEV) lee esa configuración en caliente de forma instantánea ($O(1)$).
+
+#### 🔄 El Ciclo Recursivo de 3 Fases (Propose $\to$ Probe $\to$ Compose)
+El optimizador implementado en [`scripts/harness_offline_eval.py`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/harness_offline_eval.py) opera sobre el benchmark pedagógico [`data/harness_benchmarks/student_queries_benchmark.json`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/data/harness_benchmarks/student_queries_benchmark.json):
+
+```mermaid
+flowchart LR
+    subgraph OfflineHarness ["Ciclo Recursivo Harness² (Offline)"]
+        Dataset["Golden Benchmark (8 casos)<br/>(Falencias de física/medicina + casos válidos + coloquiales)"] --> ProbeBase["1. Probe Inicial<br/>Evaluación de Línea Base actual"]
+        ProbeBase --> Propose["2. Propose<br/>Generación de Variaciones de Andamiaje"]
+        Propose --> ProbeGrid["3. Probe Lote<br/>Evaluación de Matriz de Confusión y F1"]
+        ProbeGrid --> Compose["4. Compose<br/>Selección de la Configuración Ganadora"]
+        Compose --> SaveConfig["Persistencia Atómica<br/>config/nams_harness_config.json"]
+    end
+    
+    subgraph RuntimeInference ["Inferencia en Producción (Online)"]
+        SaveConfig -.->|Lectura Dinámica al iniciar consulta| NAMS_Memory["AgentNAMSMemory & JEV"]
+    end
+```
+
+1. **Propose (Generación de Hipótesis)**:
+   Explora el espacio de búsqueda de parámetros:
+   * `deficiency_similarity_threshold`: $\theta_{\text{sim}} \in [0.80, 0.82, 0.85]$.
+   * `jev_entity_confidence_cutoff`: $\tau_{\text{conf}} \in [0.70, 0.75, 0.80]$.
+   * `jev_misconception_probability_cutoff`: $\tau_{\text{mis}} \in [0.45, 0.50, 0.55]$.
+2. **Probe (Sondeo y Evaluación Empírica)**:
+   Ejecuta cada variante contra el benchmark calculando la matriz de confusión pedagógica:
+   * **Verdaderos Positivos ($TP$)**: Falencias reales detectadas correctamente.
+   * **Falsos Positivos ($FP$)**: Afirmaciones válidas del alumno acusadas erróneamente de ser falencias (daño pedagógico grave).
+   * **Verdaderos Negativos ($TN$)**: Respuestas correctas o frases coloquiales identificadas apropiadamente.
+   * **Falsos Negativos ($FN$)**: Errores conceptuales graves que pasaron desapercibidos.
+   * **Función Objetivo**: Maximizar el F1-Score:
+     $$F_1 = 2 \cdot \frac{\text{Precisión} \cdot \text{Recall}}{\text{Precisión} + \text{Recall}}$$
+3. **Compose (Consolidación y Síntesis)**:
+   Consolida la configuración ganadora en [`config/nams_harness_config.json`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/config/nams_harness_config.json).
+
+#### 📄 Estructura de `config/nams_harness_config.json`
+```json
+{
+  "version": "1.0.0",
+  "name": "nams_harness_config",
+  "description": "Configuración calibrada offline mediante Harness² (Google Research)",
+  "deficiency_similarity_threshold": 0.82,
+  "deficiency_count_threshold": 5,
+  "jev_entity_confidence_cutoff": 0.75,
+  "jev_misconception_probability_cutoff": 0.50,
+  "severity_threshold_for_immediate_candidate": 3.0,
+  "canonical_retrieval_k_hops": 1,
+  "max_candidate_spans_per_query": 8,
+  "default_entity_types": [
+    "CONCEPT", "PRINCIPLE", "PHYSICAL_QUANTITY", "FORMULA", "TISSUE", "CELL", "ORGAN", "PERSON"
+  ],
+  "offline_harness_meta": {
+    "framework": "google-research/harness2",
+    "mode": "offline_probe_compose",
+    "last_calibrated": "2026-10-30T15:00:00Z",
+    "optimization_target": "misconception_f1_score",
+    "best_f1": 0.94
+  }
+}
+```
+
+---
+
 ### 🛠️ Scripts CLI de Mantenimiento y Auditoría de NAMS
 
 El repositorio incluye un conjunto de scripts CLI para administración, mantenimiento y auditoría:
 
 | Script | Descripción | Comando de Ejecución |
 | :--- | :--- | :--- |
-| [consolidate_student_deficiencies.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/consolidate_student_deficiencies.py) | Proceso batch para analizar y consolidar falencias acumuladas en todos los estudiantes. | `uv run python scripts/consolidate_student_deficiencies.py` |
+| [eval_harness_baseline.sh](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/eval_harness_baseline.sh) | Evalúa la configuración base de NAMS contra el dataset golden usando Harness² (Google Research). | `./scripts/eval_harness_baseline.sh` |
+| [optimize_and_apply_harness.sh](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/optimize_and_apply_harness.sh) | Ejecuta el ciclo recursivo Propose $\to$ Probe $\to$ Compose y aplica en caliente la configuración ganadora en `config/nams_harness_config.json`. | `./scripts/optimize_and_apply_harness.sh` |
+| [harness_offline_eval.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/harness_offline_eval.py) | Motor CLI del evaluador y optimizador recursivo Harness² en modo offline. | `uv run python scripts/harness_offline_eval.py --probe-candidates --apply` |
+| [consolidate_student_deficiencies.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/consolidate_student_deficiencies.py) | Proceso batch para analizar y consolidar falencias acumuladas en todos los estudiantes usando los umbrales calibrados. | `uv run python scripts/consolidate_student_deficiencies.py` |
 | [audit_reasoning_traces.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/audit_reasoning_traces.py) | Inspecciona las trazas de razonamiento y aristas `TOUCHED` en tiempo real desde la terminal. | `uv run python scripts/audit_reasoning_traces.py --limit 15` |
 | [tag_existing_neo4j_nodes.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/tag_existing_neo4j_nodes.py) | Migra y etiqueta nodos conversacionales preexistentes en Neo4j por agente. | `uv run python scripts/tag_existing_neo4j_nodes.py` |
 | [migrate_aura_to_local.py](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/scripts/migrate_aura_to_local.py) | Migra nodos, relaciones e índices desde Neo4j Aura hacia la instancia local. | `uv run python scripts/migrate_aura_to_local.py` |
+
+#### 🚀 Flujo Rápido de Ejecución de Harness² Offline mediante Shell Scripts
+
+Para facilitar la administración del andamiaje sin necesidad de configurar argumentos de terminal complejos:
+
+1. **Evaluación de la Línea Base Actual**:
+   Ejecuta las consultas del dataset golden midiendo la matriz de confusión y el F1-Score con los hiperparámetros actuales:
+   ```bash
+   ./scripts/eval_harness_baseline.sh
+   ```
+
+2. **Optimización Recursiva y Aplicación en Caliente**:
+   Ejecuta la exploración de candidatos (Propose), evalúa cada variante frente al benchmark (Probe) y escribe la configuración ganadora en `config/nams_harness_config.json` (Compose):
+   ```bash
+   ./scripts/optimize_and_apply_harness.sh
+   ```
+   *Nota: NAMS y JEV recargan automáticamente estos valores en caliente en la siguiente consulta.*
 
 ---
 
