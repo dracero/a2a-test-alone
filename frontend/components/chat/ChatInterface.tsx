@@ -47,6 +47,7 @@ export function ChatInterface() {
   // Correction state variables
   const [isCorrectOpen, setIsCorrectOpen] = useState(false);
   const [selectedMessageToCorrect, setSelectedMessageToCorrect] = useState<Message | null>(null);
+  const [correctAgentName, setCorrectAgentName] = useState<string>('Tutor Socrático de Física Multimodal');
   const [correctTema, setCorrectTema] = useState('');
   const [correctExplanation, setCorrectExplanation] = useState('');
   const [isSubmittingCorrection, setIsSubmittingCorrection] = useState(false);
@@ -70,9 +71,20 @@ export function ChatInterface() {
     let activeAgentName = 'Tutor Socrático de Física Multimodal';
     if (messages && messages.length > 0) {
       for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === 'agent' && (messages[i] as any).recipient) {
-          activeAgentName = (messages[i] as any).recipient;
-          break;
+        const msg = messages[i];
+        if (msg.role === 'agent') {
+          if ((msg as any).recipient) {
+            activeAgentName = (msg as any).recipient;
+            break;
+          }
+          const text = msg.parts?.map(p => (p as any).text || '').join(' ').toLowerCase() || '';
+          if (text.includes('histopatologia_data') || text.includes('manual') || text.includes('micrografía') || text.includes('célula') || text.includes('celula') || text.includes('túbulo') || text.includes('médico')) {
+            activeAgentName = 'Asistente Médico';
+            break;
+          } else if (text.includes('generated_image') || text.includes('image/png')) {
+            activeAgentName = 'Image Generator Agent';
+            break;
+          }
         }
       }
     }
@@ -141,6 +153,20 @@ export function ChatInterface() {
     setSelectedMessageToCorrect(message);
     setCorrectTema('');
     setCorrectExplanation('');
+
+    // Detect agent of message
+    let targetAgent = (message as any)?.recipient;
+    if (!targetAgent) {
+      const text = message.parts?.map(p => (p as any).text || '').join(' ').toLowerCase() || '';
+      if (text.includes('histopatologia_data') || text.includes('manual') || text.includes('micrografía') || text.includes('célula') || text.includes('celula') || text.includes('túbulo') || text.includes('médico')) {
+        targetAgent = 'Asistente Médico';
+      } else if (text.includes('generated_image') || text.includes('image/png')) {
+        targetAgent = 'Image Generator Agent';
+      } else {
+        targetAgent = namsSelectedAgent || 'Tutor Socrático de Física Multimodal';
+      }
+    }
+    setCorrectAgentName(targetAgent);
     setIsCorrectOpen(true);
   };
 
@@ -149,18 +175,22 @@ export function ChatInterface() {
     const studentId = studentName || activeConv?.name || conversationId;
     if (!studentId || !correctTema.trim() || !correctExplanation.trim()) return;
     
-    const agentName = (selectedMessageToCorrect as any)?.recipient;
+    const agentName = correctAgentName || (selectedMessageToCorrect as any)?.recipient || namsSelectedAgent;
     setIsSubmittingCorrection(true);
     try {
       const response = await chatAPI.correctAgent(
         studentId,
         correctTema.trim(),
         correctExplanation.trim(),
-        agentName
+        agentName,
+        conversationId
       );
       if (response.status === 'success') {
         setIsCorrectOpen(false);
-        alert('Corrección guardada con éxito como falencia del sistema.');
+        alert(`Corrección guardada con éxito como falencia para '${agentName}'.`);
+        if (agentName === namsSelectedAgent) {
+          handleOpenNams();
+        }
       } else {
         alert('Error al guardar corrección.');
       }
@@ -732,27 +762,44 @@ export function ChatInterface() {
           </DialogHeader>
           <div className="mt-4 space-y-4">
             <p className="text-xs text-slate-500 leading-relaxed">
-              Registra una corrección física/conceptual sobre las respuestas del agente. Esta corrección quedará asociada como una falencia del sistema para el agente y guiará al tutor en futuras conversaciones globales.
+              Registra una corrección conceptual sobre las respuestas del agente. Esta corrección quedará asociada como una falencia en la memoria NAMS aislada del agente correspondiente.
             </p>
+
+            <div className="space-y-1.5">
+              <label htmlFor="correct-agent" className="text-xs font-bold text-slate-700">Agente Destino</label>
+              <Select
+                value={correctAgentName}
+                onValueChange={setCorrectAgentName}
+              >
+                <SelectTrigger id="correct-agent" className="h-9 text-xs font-semibold text-slate-700 border-slate-200">
+                  <SelectValue placeholder="Seleccionar Agente" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Tutor Socrático de Física Multimodal">Tutor Socrático de Física Multimodal</SelectItem>
+                  <SelectItem value="Asistente Médico">Asistente Médico</SelectItem>
+                  <SelectItem value="Image Generator Agent">Image Generator Agent</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             
             <div className="space-y-1.5">
-              <label htmlFor="tema" className="text-xs font-bold text-slate-700">Tema o Concepto Físico</label>
+              <label htmlFor="tema" className="text-xs font-bold text-slate-700">Tema o Concepto a Corregir</label>
               <Input
                 id="tema"
                 value={correctTema}
                 onChange={(e) => setCorrectTema(e.target.value)}
-                placeholder="Ej: Fuerza de rozamiento, Conservación de energía"
+                placeholder="Ej: Celula Miode, Segunda ley de Newton"
                 className="text-sm"
               />
             </div>
 
             <div className="space-y-1.5">
-              <label htmlFor="explicacion" className="text-xs font-bold text-slate-700">Corrección / Concepto a Corregir</label>
+              <label htmlFor="explicacion" className="text-xs font-bold text-slate-700">Corrección / Concepto Canónico</label>
               <Textarea
                 id="explicacion"
                 value={correctExplanation}
                 onChange={(e) => setCorrectExplanation(e.target.value)}
-                placeholder="Ej: En rodadura pura sin deslizar, el rozamiento no es μ*N. Se debe calcular a partir de las ecuaciones de Newton y la relación de aceleraciones."
+                placeholder="Ej: Una célula mioide es lo mismo que una célula peritubular. Son denominaciones equivalentes."
                 rows={4}
                 className="text-sm"
               />

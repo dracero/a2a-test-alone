@@ -123,7 +123,7 @@ export const chatAPI = {
     });
   },
 
-  correctAgent: async (studentId: string, tema: string, correccion: string, agentName?: string): Promise<{ status: string }> => {
+  correctAgent: async (studentId: string, tema: string, correccion: string, agentName?: string, conversationId?: string): Promise<{ status: string }> => {
     const response = await fetch('/correct', {
       method: 'POST',
       headers: {
@@ -135,6 +135,7 @@ export const chatAPI = {
         tema: tema,
         correccion: correccion,
         agent_name: agentName,
+        conversation_id: conversationId,
       }),
     });
 

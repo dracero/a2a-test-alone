@@ -55,6 +55,7 @@ class CorrectBody(BaseModel):
     tema: str
     correccion: str
     agent_name: str | None = None
+    conversation_id: str | None = None
 
 class NamsConclusionsBody(BaseModel):
     student_id: str | None = None
@@ -425,13 +426,17 @@ class ConversationServer:
         role = request.headers.get("X-Role", "alumno")
         if role != "profesor":
             return Response(status_code=403, content="Only professors can submit corrections.")
-            
+
+        agent_name = body.agent_name
+        if not agent_name and body.conversation_id and hasattr(self.manager, '_active_sessions'):
+            agent_name = self.manager._active_sessions.get(body.conversation_id)
+
         if hasattr(self.manager, 'add_deficiency'):
             success = await self.manager.add_deficiency(
                 student_id=body.student_id,
                 tema=body.tema,
                 correccion=body.correccion,
-                agent_name=body.agent_name
+                agent_name=agent_name
             )
             if success:
                 return {'status': 'success'}

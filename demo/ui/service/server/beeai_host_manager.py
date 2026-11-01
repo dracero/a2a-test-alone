@@ -602,7 +602,7 @@ class BeeAIHostManager(ApplicationManager):
         name_lower = str(agent_name_or_id).lower()
         if any(k in name_lower for k in ["física", "fisica", "physics", "multimodal", "tutor"]):
             return self.agent_memories.get("physics")
-        elif any(k in name_lower for k in ["médic", "medic", "histolog", "doctor"]):
+        elif any(k in name_lower for k in ["médic", "medic", "histolog", "doctor", "histopatol", "patolog", "célul", "celul", "biolog"]):
             return self.agent_memories.get("medical")
         elif any(k in name_lower for k in ["image", "imagen", "creador", "generator"]):
             return self.agent_memories.get("images")
@@ -1031,9 +1031,17 @@ class BeeAIHostManager(ApplicationManager):
 
     async def add_deficiency(self, student_id: str, tema: str, correccion: str, agent_name: str | None = None) -> bool:
         """Guarda una falencia confirmada del estudiante tanto semántica como estructuralmente en la memoria NAMS."""
-        mem = self.get_agent_memory(agent_name)
+        resolved_name = agent_name
+        if not resolved_name:
+            tema_lower = f"{tema} {correccion}".lower()
+            if any(k in tema_lower for k in ["celul", "célul", "tejido", "epitelio", "túbulo", "tubulo", "histolog", "médic", "medic", "esperma", "sertoli", "leydig", "patolog"]):
+                resolved_name = "medical"
+            elif any(k in tema_lower for k in ["newton", "fuerza", "rozamiento", "energía", "energia", "velocidad", "aceleración", "aceleracion", "presión", "presion", "choque"]):
+                resolved_name = "physics"
+
+        mem = self.get_agent_memory(resolved_name)
         if not mem:
-            print(f"⚠️ Memoria NAMS no disponible para '{agent_name}'. No se puede registrar la falencia.")
+            print(f"⚠️ Memoria NAMS no disponible para '{resolved_name}'. No se puede registrar la falencia.")
             return False
         return await mem.register_confirmed_deficiency(student_id=student_id, tema=tema, correccion=correccion)
 
