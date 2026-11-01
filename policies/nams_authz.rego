@@ -33,3 +33,4 @@ allow_misconception_candidate if {
     input.concept != ""
     input.severity >= 1.0
 }
+

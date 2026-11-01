@@ -27,3 +27,4 @@ promote_to_deficiency if {
     input.occurrences >= 3
     input.similarity >= 0.88
 }
+

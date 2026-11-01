@@ -163,3 +163,4 @@ def check_promote_to_deficiency(
         "harness_config": harness_config,
     }
     return bool(evaluate_opa_query("data.nams.pedagogy.promote_to_deficiency", input_data))
+
