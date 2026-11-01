@@ -42,6 +42,9 @@ import pickle
 import gc
 import gzip
 import warnings
+import math
+import unicodedata
+import difflib
 from io import BytesIO
 
 # Cargar variables de entorno
@@ -1338,6 +1341,157 @@ def rerank_imagenes_por_caption(
     return [cand for _, cand in scored]
 
 
+def normalizar_texto_dinamico(s: str) -> str:
+    """Normaliza texto eliminando acentos y signos de puntuación sin alterar vocabulario."""
+    s = s.lower()
+    s = "".join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+    s = re.sub(r'[^a-z0-9\s]', ' ', s)
+    return s
+
+
+def calcular_similitud_token_dinamico(qw: str, tw: str) -> float:
+    """Calcula similitud morfológica y difusa entre dos tokens sin listas estáticas ni stopwords."""
+    if qw == tw:
+        return 1.0
+    # Prefijo morfológico común (plural/singular/género: ej. mioide <-> mioides, espermatozoide <-> espermatozoides)
+    if len(qw) >= 4 and len(tw) >= 4:
+        if tw.startswith(qw[:-1]) or qw.startswith(tw[:-1]):
+            return 0.90
+    # Tolerancia difusa a errores ortográficos (ej. miode <-> mioide)
+    if abs(len(qw) - len(tw)) <= 2 and len(qw) >= 4:
+        ratio = difflib.SequenceMatcher(None, qw, tw).ratio()
+        if ratio >= 0.80:
+            return 0.85 * ratio
+    return 0.0
+
+
+def calcular_coincidencia_dinamica(query: str, texto: str) -> float:
+    """Coincidencia léxica dinámica y difusa 100% libre de listas o palabras hardcodeadas."""
+    q_norm = normalizar_texto_dinamico(query)
+    t_norm = normalizar_texto_dinamico(texto)
+
+    q_tokens = [w for w in q_norm.split() if len(w) >= 3]
+    t_tokens = [w for w in t_norm.split() if len(w) >= 3]
+
+    if not q_tokens or not t_tokens:
+        return 0.0
+
+    match_score = 0.0
+
+    # 1. Búsqueda de n-gramas completos (frase)
+    for n in (3, 2):
+        for i in range(len(q_tokens) - n + 1):
+            ngram = " ".join(q_tokens[i:i+n])
+            if ngram in t_norm:
+                match_score += 15.0 * n
+
+    # 2. Coincidencia token a token dinámica
+    t_set = set(t_tokens)
+    for qw in q_tokens:
+        if qw in t_set or qw in t_norm:
+            match_score += 5.0
+            continue
+
+        best_sim = 0.0
+        for tw in t_tokens:
+            s = calcular_similitud_token_dinamico(qw, tw)
+            if s > best_sim:
+                best_sim = s
+        if best_sim > 0.0:
+            match_score += 5.0 * best_sim
+
+    return match_score
+
+
+def rerank_resultados_dinamico(
+    resultados: List[Dict[str, Any]],
+    consulta_usuario: str,
+    consulta_resuelta: str = "",
+) -> List[Dict[str, Any]]:
+    """Rerank dinámico de resultados de texto basado en coincidencia morfológica y título.
+
+    Totalmente agnóstico y data-driven: no utiliza stopwords hardcodeadas ni diccionarios.
+    Aplica IDF dinámico sobre los chunks recuperados para atenuar términos comunes del corpus
+    y pondera con un factor determinante (5x) la coincidencia con el título/encabezado de la figura.
+    """
+    if not resultados:
+        return resultados
+
+    q_text = f"{consulta_usuario} {consulta_resuelta}".strip()
+    q_norm = normalizar_texto_dinamico(q_text)
+    q_tokens = [w for w in q_norm.split() if len(w) >= 3]
+    if not q_tokens:
+        return resultados
+
+    N = len(resultados)
+    doc_freq: Dict[str, int] = {}
+    for r in resultados:
+        payload = r.get("payload", {})
+        texto = normalizar_texto_dinamico(payload.get("texto", ""))
+        tokens_chunk = set(texto.split())
+        for qw in set(q_tokens):
+            if any(calcular_similitud_token_dinamico(qw, tw) > 0.0 for tw in tokens_chunk):
+                doc_freq[qw] = doc_freq.get(qw, 0) + 1
+
+    # Dynamic IDF: términos frecuentes en todos los chunks pesan menos; términos específicos pesan más
+    idf = {qw: math.log(1.0 + (N / max(1, doc_freq.get(qw, 1)))) for qw in q_tokens}
+
+    for r in resultados:
+        base_s = float(r.get("score", 0.0))
+        payload = r.get("payload", {})
+        texto_completo = payload.get("texto", "")
+
+        # Extraer primera línea o título (ej: 'Imagen 19: Espermatozoides')
+        lineas = [l.strip() for l in texto_completo.split("\n") if l.strip()]
+        titulo_chunk = lineas[0] if lineas else ""
+
+        tit_norm = normalizar_texto_dinamico(titulo_chunk)
+        body_norm = normalizar_texto_dinamico(texto_completo)
+
+        tit_tokens = [w for w in tit_norm.split() if len(w) >= 3]
+        body_tokens = [w for w in body_norm.split() if len(w) >= 3]
+
+        tit_score = 0.0
+        body_score = 0.0
+
+        for qw in q_tokens:
+            w_idf = idf.get(qw, 1.0)
+
+            # Match en título de figura / encabezado
+            best_tit = 0.0
+            for tw in tit_tokens:
+                s = calcular_similitud_token_dinamico(qw, tw)
+                if s > best_tit:
+                    best_tit = s
+            tit_score += best_tit * w_idf
+
+            # Match en cuerpo del texto
+            best_body = 0.0
+            for tw in body_tokens:
+                s = calcular_similitud_token_dinamico(qw, tw)
+                if s > best_body:
+                    best_body = s
+            body_score += best_body * w_idf
+
+        # Boost de frase completa (n-gramas de 2 o 3 palabras)
+        for n in (3, 2):
+            for i in range(len(q_tokens) - n + 1):
+                phrase = " ".join(q_tokens[i:i+n])
+                if phrase in tit_norm:
+                    tit_score += 4.0 * n
+                elif phrase in body_norm:
+                    body_score += 2.0 * n
+
+        # Coincidencia directa en título multiplica x5.0 (sujeto principal del corte/imagen)
+        boost = (tit_score * 5.0) + (body_score * 0.8)
+        r["score_vectorial"] = base_s
+        r["score"] = base_s + boost
+        r["rerank_boost"] = boost
+
+    resultados.sort(key=lambda x: x["score"], reverse=True)
+    return resultados
+
+
 # ============================================================================
 # ESTADO DEL GRAFO LANGGRAPH
 # ============================================================================
@@ -1877,6 +2031,13 @@ Ejemplo:
                 t2 = time.time()
                 print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
 
+                # Paso 1b: Rerank dinámico de texto (100% data-driven, sin stopwords hardcodeadas)
+                resultados_texto = rerank_resultados_dinamico(
+                    resultados_texto,
+                    state.get("consulta_usuario", ""),
+                    state.get("consulta_resuelta", "")
+                )
+
                 # Paso 2: Identificar el documento principal de los resultados (conservado para fallback)
                 doc_scores = {}
                 for r in resultados_texto:
@@ -1963,63 +2124,6 @@ Ejemplo:
                 else:
                     print(f"   🎯 Usando embedding de consulta resuelta para rerank de etiquetas")
 
-                def calcular_coincidencia_dinamica(query: str, texto: str) -> float:
-                    """Coincidencia léxica dinámica y difusa 100% libre de listas o palabras hardcodeadas."""
-                    import unicodedata
-                    import difflib
-                    
-                    def normalizar(s: str) -> str:
-                        s = s.lower()
-                        s = "".join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
-                        s = re.sub(r'[^a-z0-9\s]', ' ', s)
-                        return s
-                    
-                    q_norm = normalizar(query)
-                    t_norm = normalizar(texto)
-                    
-                    q_tokens = [w for w in q_norm.split() if len(w) >= 3]
-                    t_tokens = [w for w in t_norm.split() if len(w) >= 3]
-                    
-                    if not q_tokens or not t_tokens:
-                        return 0.0
-                    
-                    match_score = 0.0
-                    
-                    # 1. Búsqueda de n-gramas completos (frase)
-                    for n in (3, 2):
-                        for i in range(len(q_tokens) - n + 1):
-                            ngram = " ".join(q_tokens[i:i+n])
-                            if ngram in t_norm:
-                                match_score += 15.0 * n
-                    
-                    # 2. Coincidencia token a token dinámica (exacta, morfológica o difusa)
-                    t_set = set(t_tokens)
-                    for qw in q_tokens:
-                        if qw in t_set or qw in t_norm:
-                            match_score += 5.0
-                            continue
-                        
-                        # Match morfológico dinámico (plural/singular sin diccionario)
-                        prefix_match = any(
-                            (len(qw) >= 4 and len(tw) >= 4 and (tw.startswith(qw[:-1]) or qw.startswith(tw[:-1])))
-                            for tw in t_tokens
-                        )
-                        if prefix_match:
-                            match_score += 4.0
-                            continue
-                        
-                        # Match difuso dinámico (tolerancia a typos ortográficos como miode -> mioide)
-                        best_ratio = 0.0
-                        for tw in t_tokens:
-                            if abs(len(qw) - len(tw)) <= 2:
-                                r = difflib.SequenceMatcher(None, qw, tw).ratio()
-                                if r > best_ratio:
-                                    best_ratio = r
-                        if best_ratio >= 0.80:
-                            match_score += 4.0 * best_ratio
-                    
-                    return match_score
-
                 etiquetas_rankeadas = []
                 if paginas_con_etiqueta:
                     for (doc_name, pg), etiquetas in paginas_con_etiqueta.items():
@@ -2028,10 +2132,20 @@ Ejemplo:
                             texto_etiqueta = f"Imagen {et['numero']}: {et['descripcion']}"
                             emb = self.procesador.generar_embedding_texto(texto_etiqueta)
                             
-                            # Evaluar coincidencia dinámica tanto con consulta de usuario como con resuelta
-                            match_usuario = calcular_coincidencia_dinamica(state.get('consulta_usuario', ''), et['descripcion'])
-                            match_resuelta = calcular_coincidencia_dinamica(state.get('consulta_resuelta', ''), et['descripcion'])
-                            match_score = max(match_usuario, match_resuelta)
+                            # 1. Coincidencia con el TÍTULO de la figura (determina el sujeto principal de la imagen)
+                            titulo_et = et.get('titulo') or et['descripcion'].split('.')[0]
+                            match_tit_u = calcular_coincidencia_dinamica(state.get('consulta_usuario', ''), titulo_et)
+                            match_tit_r = calcular_coincidencia_dinamica(state.get('consulta_resuelta', ''), titulo_et)
+                            match_titulo = max(match_tit_u, match_tit_r)
+
+                            # 2. Coincidencia con la descripción/cuerpo del chunk
+                            match_cuerpo_u = calcular_coincidencia_dinamica(state.get('consulta_usuario', ''), et['descripcion'])
+                            match_cuerpo_r = calcular_coincidencia_dinamica(state.get('consulta_resuelta', ''), et['descripcion'])
+                            match_cuerpo = max(match_cuerpo_u, match_cuerpo_r)
+
+                            # Si el título de la figura coincide directamente con el concepto buscado,
+                            # tiene una prioridad determinante (x5) frente a menciones secundarias en el cuerpo de otras figuras.
+                            match_score = (match_titulo * 5.0) + match_cuerpo
                             
                             sim = 0.0
                             if emb is not None:
@@ -2050,7 +2164,7 @@ Ejemplo:
                                     c_mean = c_mean / c_norm if c_norm > 0 else c_mean
                                     sim = float(np.dot(q_mean, c_mean))
 
-                            # Score compuesto: Match dinámico + Boost de relevancia RAG de la página + Similitud ColPali
+                            # Score compuesto: Match dinámico (título + cuerpo) + Boost RAG de página + Similitud ColPali
                             total_score = (match_score * 3.0) + (rag_page_score * 0.5) + sim
 
                             etiquetas_rankeadas.append({
@@ -2064,9 +2178,9 @@ Ejemplo:
                                 'rag_score': rag_page_score,
                                 'total_score': total_score,
                             })
-                            print(f"      📊 [{doc_name}] Imagen {et['numero']}: {et.get('titulo', et['descripcion'][:40])} → total={total_score:.2f} | sim={sim:.4f} | keyword_match={match_score:.1f} | rag_pg={rag_page_score:.1f}")
+                            print(f"      📊 [{doc_name}] Imagen {et['numero']}: {et.get('titulo', et['descripcion'][:40])} → total={total_score:.2f} | tit_m={match_titulo:.1f} | cuerpo_m={match_cuerpo:.1f} | sim={sim:.4f} | rag_pg={rag_page_score:.1f}")
 
-                    # Ordenar por score compuesto multidimensional (coincidencia léxica + RAG + semántica ColPali)
+                    # Ordenar por score compuesto multidimensional (coincidencia de título y léxica + RAG + semántica ColPali)
                     etiquetas_rankeadas.sort(key=lambda x: (x['total_score'], x['match_score'], x['similitud']), reverse=True)
 
                 # Paso 5: Scroll de TODAS las imágenes y asociar con etiquetas
@@ -2180,15 +2294,22 @@ Ejemplo:
                 resultados, _ = filtrar_resultados_busqueda(
                     resultados, requiere_imagen=False, tiene_imagen_adjunta=False,
                 )
+                resultados = rerank_resultados_dinamico(
+                    resultados,
+                    state.get("consulta_usuario", ""),
+                    state.get("consulta_resuelta", "")
+                )
 
         # ── Logging de resultados ───────────────────────────────────────
         print(f"\n📄 Resultados recuperados ({len(resultados)}):")
         for i, res in enumerate(resultados):
             payload = res.get('payload', {})
             score = res.get('score', 0.0)
+            orig_s = res.get('score_vectorial')
+            orig_info = f" (vec: {orig_s:.4f})" if orig_s is not None else ""
             doc_name = payload.get('nombre_archivo', 'unknown')
             page_num = payload.get('numero_pagina', '?')
-            print(f"   [{i+1}] Score: {score:.4f} | Doc: {doc_name} (Pg {page_num})")
+            print(f"   [{i+1}] Score: {score:.4f}{orig_info} | Doc: {doc_name} (Pg {page_num})")
             if payload.get('tipo') == 'texto':
                 print(f"       Texto: {payload.get('texto', '')[:100]}...")
             elif payload.get('tipo') == 'imagen':
