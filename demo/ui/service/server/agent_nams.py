@@ -39,6 +39,27 @@ try:
 except ImportError:
     from jev_service import JEVEntityExtractor, load_harness_config
 
+try:
+    from .opa_service import (
+        check_kg_mutation_allowed,
+        check_misconception_candidate_allowed,
+        check_promote_to_deficiency,
+    )
+    from .nams_shacl_validator import (
+        ensure_shacl_configured_async,
+        validate_nams_graph_async,
+    )
+except ImportError:
+    from opa_service import (
+        check_kg_mutation_allowed,
+        check_misconception_candidate_allowed,
+        check_promote_to_deficiency,
+    )
+    from nams_shacl_validator import (
+        ensure_shacl_configured_async,
+        validate_nams_graph_async,
+    )
+
 logger = logging.getLogger(__name__)
 
 
@@ -191,6 +212,13 @@ class AgentNAMSMemory:
             await self.client.connect()
             self._connected = True
             logger.info(f"✅ Conectado a Neo4j NAMS ({self.agent_name})")
+
+            # Configurar e importar W3C SHACL shapes nativas en Neo4j (Opción A via n10s)
+            try:
+                await ensure_shacl_configured_async(self.client.long_term._client)
+            except Exception as shacl_err:
+                logger.debug(f"SHACL n10s setup notice: {shacl_err}")
+
             return True
         except Exception as e:
             logger.error(f"❌ Falló conexión NAMS ({self.agent_name}): {e}")
@@ -223,6 +251,16 @@ class AgentNAMSMemory:
         except Exception as e:
             logger.error(f"❌ Error registrando ontología para '{self.agent_name}': {e}")
             return False
+
+    async def validate_shacl(self) -> list[dict[str, Any]]:
+        """Valida el Grafo NAMS contra las Shapes SHACL POLE+O (Opción A nativa en Neo4j con n10s)."""
+        if not await self.ensure_connected():
+            return []
+        try:
+            return await validate_nams_graph_async(self.client.long_term._client)
+        except Exception as e:
+            logger.warning(f"⚠️ Error validando SHACL en Neo4j: {e}")
+            return []
 
     def scope_session_id(self, raw_session_id: str) -> str:
         """Prefija el session_id con el agent_id para aislar totalmente los historiales."""
@@ -490,8 +528,10 @@ class AgentNAMSMemory:
         REGLA DE ROL: Solo permitido en InteractionMode.PROFESSOR.
         En modo STUDENT, las afirmaciones del alumno nunca modifican el KG canónico.
         """
-        if mode != InteractionMode.PROFESSOR:
-            logger.warning(f"🚫 Intento de modificar KG canónico denegado en modo '{mode.value}' para '{self.agent_name}'")
+        # Gobernanza OPA determinista (Zero-Trust)
+        mode_val = mode.value if hasattr(mode, "value") else str(mode)
+        if not check_kg_mutation_allowed(mode=mode_val, user_id="professor", is_student_session=(mode_val == "student")):
+            logger.warning(f"🛡️ [OPA Authz Denied] Mutación de KG bloqueada por política Rego en modo '{mode_val}' para '{self.agent_name}'")
             return None
 
         if not await self.ensure_connected():
@@ -565,8 +605,10 @@ class AgentNAMSMemory:
         
         REGLA DE ROL: Solo permitido en InteractionMode.PROFESSOR.
         """
-        if mode != InteractionMode.PROFESSOR:
-            logger.warning(f"🚫 Intento de actualizar KG canónico denegado en modo '{mode.value}'")
+        # Gobernanza OPA determinista
+        mode_val = mode.value if hasattr(mode, "value") else str(mode)
+        if not check_kg_mutation_allowed(mode=mode_val, user_id="professor", is_student_session=(mode_val == "student")):
+            logger.warning(f"🛡️ [OPA Authz Denied] Actualización de KG bloqueada por política Rego en modo '{mode_val}'")
             return False
 
         if not await self.ensure_connected():
@@ -788,6 +830,17 @@ class AgentNAMSMemory:
                 mode=InteractionMode.STUDENT,
             )
 
+            # Validar integridad ontológica con SHACL nativo en Neo4j (Opción A via n10s)
+            try:
+                shacl_violations = await self.validate_shacl()
+                if shacl_violations:
+                    logger.warning(
+                        f"⚠️ [SHACL Option A] Se detectaron {len(shacl_violations)} violaciones ontológicas en el KG tras registrar deficiencia: "
+                        f"{shacl_violations}"
+                    )
+            except Exception as shacl_err:
+                logger.debug(f"SHACL post-deficiency validation notice: {shacl_err}")
+
             logger.info(f"✅ Falencia confirmada del estudiante {student_id} en '{tema}': {correccion}")
             return True
         except Exception as e:
@@ -824,6 +877,12 @@ class AgentNAMSMemory:
         Se acumula para detección por similaridad semántica (≥5 coincidencias).
         """
         if not await self.ensure_connected():
+            return {}
+
+        # Gobernanza OPA determinista (Zero-Trust)
+        sev_val = float(severity) if severity is not None else 1.0
+        if not check_misconception_candidate_allowed(mode="student", student_id=student_id, concept=concept, severity=sev_val):
+            logger.warning(f"🛡️ [OPA Authz Denied] Candidato a misconception rechazado por política Rego para '{student_id}' (Concepto: {concept})")
             return {}
 
         scoped_id = self.scope_session_id(session_id)
@@ -935,14 +994,14 @@ class AgentNAMSMemory:
             WHERE c.student_id = $student_id
               AND c.agent_id = $agent_id
               AND c.status = 'pending'
-            RETURN c.id AS id, c.concept AS concept, c.student_claim AS student_claim, c.canonical_value AS canonical_value
+            RETURN c.id AS id, c.concept AS concept, c.student_claim AS student_claim, c.canonical_value AS canonical_value, coalesce(c.severity, 3.0) AS severity
             ORDER BY c.detected_at ASC
             """
             candidates = await self.client.long_term._client.execute_read(
                 cypher,
                 {"student_id": student_id, "agent_id": self.agent_id}
             )
-            if not candidates or len(candidates) < count_threshold:
+            if not candidates or len(candidates) < min(count_threshold, 3):
                 logger.info(f"ℹ️ [{self.agent_name}] Candidatos pendientes para {student_id}: {len(candidates)} (Mínimo requerido: {count_threshold})")
                 return []
 
@@ -979,51 +1038,79 @@ class AgentNAMSMemory:
                         visited.add(j)
                 clusters.append(cluster)
 
-            # 4. Filtrar clusters que cumplen con el umbral count_threshold (≥ 5)
+            # 4. Gobernanza Pedagógica determinista evaluada por OPA (Rego + Harness² Calibrado)
             confirmed_deficiencies = []
+            h_cfg = getattr(self, "harness_config", {}) or {
+                "deficiency_count_threshold": count_threshold,
+                "deficiency_similarity_threshold": similarity_threshold,
+            }
+
             for cluster_indices in clusters:
-                if len(cluster_indices) >= count_threshold:
-                    cluster_candidates = [candidates[idx] for idx in cluster_indices]
-                    representative = cluster_candidates[0]
-                    rep_concept = representative["concept"]
-                    rep_canonical = representative["canonical_value"]
-                    candidate_ids = [c["id"] for c in cluster_candidates]
+                cluster_candidates = [candidates[idx] for idx in cluster_indices]
+                representative = cluster_candidates[0]
+                rep_concept = representative["concept"]
+                rep_canonical = representative["canonical_value"]
+                candidate_ids = [c["id"] for c in cluster_candidates]
 
-                    summary_description = (
-                        f"Detectadas {len(cluster_candidates)} discrepancias semánticamente equivalentes sobre '{rep_concept}'. "
-                        f"Corrección canónica: {rep_canonical}"
+                # Similitud intra-cluster
+                if len(cluster_indices) > 1:
+                    pair_sims = [sim_matrix[i, j] for i in cluster_indices for j in cluster_indices if i != j]
+                    cluster_sim = float(np.mean(pair_sims))
+                else:
+                    cluster_sim = 1.0
+
+                mean_sev = float(np.mean([float(c.get("severity") or 3.0) for c in cluster_candidates]))
+
+                # Decisión OPA: reemplaza heurísticas ad-hoc y prompts no deterministas
+                should_promote = check_promote_to_deficiency(
+                    occurrences=len(cluster_candidates),
+                    similarity=cluster_sim,
+                    severity=mean_sev,
+                    harness_config=h_cfg,
+                )
+
+                if not should_promote:
+                    logger.debug(
+                        f"🛡️ [OPA Pedagogy] Cluster '{rep_concept}' ({len(cluster_candidates)} items, sim={cluster_sim:.2f}, sev={mean_sev:.1f}) "
+                        "no califica para promoción a StudentDeficiency según política OPA."
+                    )
+                    continue
+
+                summary_description = (
+                    f"Detectadas {len(cluster_candidates)} discrepancias semánticamente equivalentes sobre '{rep_concept}'. "
+                    f"Corrección canónica: {rep_canonical}"
+                )
+
+                # Registrar la deficiencia confirmada en el KG
+                success = await self.register_confirmed_deficiency(
+                    student_id=student_id,
+                    tema=rep_concept,
+                    correccion=summary_description,
+                    occurrences=len(cluster_candidates),
+                    severity="alta" if mean_sev >= 3.5 or len(cluster_candidates) >= 7 else "media",
+                )
+
+                if success:
+                    # Marcar candidatos como consolidados
+                    update_cypher = """
+                    MATCH (c:MisconceptionCandidate)
+                    WHERE c.id IN $cand_ids
+                    SET c.status = 'consolidated',
+                        c.consolidated_at = datetime()
+                    """
+                    await self.client.long_term._client.execute_write(
+                        update_cypher,
+                        {"cand_ids": candidate_ids}
                     )
 
-                    # Registrar la deficiencia confirmada en el KG
-                    success = await self.register_confirmed_deficiency(
-                        student_id=student_id,
-                        tema=rep_concept,
-                        correccion=summary_description,
-                        occurrences=len(cluster_candidates),
-                        severity="alta" if len(cluster_candidates) >= 7 else "media",
-                    )
-
-                    if success:
-                        # Marcar candidatos como consolidados
-                        update_cypher = """
-                        MATCH (c:MisconceptionCandidate)
-                        WHERE c.id IN $cand_ids
-                        SET c.status = 'consolidated',
-                            c.consolidated_at = datetime()
-                        """
-                        await self.client.long_term._client.execute_write(
-                            update_cypher,
-                            {"cand_ids": candidate_ids}
-                        )
-
-                        confirmed_deficiencies.append({
-                            "concept": rep_concept,
-                            "occurrences": len(cluster_candidates),
-                            "canonical_value": rep_canonical,
-                            "candidate_ids": candidate_ids,
-                            "description": summary_description,
-                        })
-                        logger.info(f"🎯 ¡Falencia confirmada por consolidación semántica ({len(cluster_candidates)} coincidencias): {rep_concept}!")
+                    confirmed_deficiencies.append({
+                        "concept": rep_concept,
+                        "occurrences": len(cluster_candidates),
+                        "canonical_value": rep_canonical,
+                        "candidate_ids": candidate_ids,
+                        "description": summary_description,
+                    })
+                    logger.info(f"🎯 ¡Falencia confirmada por consolidación pedagógica OPA ({len(cluster_candidates)} coincidencias): {rep_concept}!")
 
             return confirmed_deficiencies
         except Exception as e:

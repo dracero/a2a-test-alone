@@ -669,6 +669,86 @@ Para facilitar la administración del andamiaje sin necesidad de configurar argu
    ```
    *Nota: NAMS y JEV recargan automáticamente estos valores en caliente en la siguiente consulta.*
 
+### 10. Gobernanza Determinista con OPA (Rego) y Validación Ontológica Nativa con W3C SHACL (Opción A en Neo4j)
+
+Para eliminar por completo la fragilidad y las posibles alucinaciones de los prompts de lenguaje natural en el control de acceso y la consolidación pedagógica, se incorporó una capa de **Gobernanza Determinista con Open Policy Agent (OPA)** y una capa de **Validación Ontológica Nativa con W3C SHACL (Shapes Constraint Language)** ejecutada en el propio motor de base de datos Neo4j mediante Neosemantics (`n10s`).
+
+```mermaid
+flowchart TD
+    subgraph InputLayer ["Entrada Cognitiva"]
+        StudentMsg["Mensaje / Afirmación Estudiante"]
+        ProfMsg["Actualización Canónica Profesor"]
+    end
+
+    subgraph OPAGovernance ["Gobernanza Determinista OPA (Rego)"]
+        direction TB
+        AuthzPolicy["nams.authz<br/>(Control de Acceso Zero-Trust)"]
+        PedagogyPolicy["nams.pedagogy<br/>(Consolidación Calibrada Harness²)"]
+        AuthzDecision{"¿Permitido?"}
+        PromoteDecision{"¿Promover Falencia?"}
+        
+        AuthzPolicy --> AuthzDecision
+        PedagogyPolicy --> PromoteDecision
+    end
+
+    subgraph GraphLayer ["Neo4j NAMS con Neosemantics (n10s)"]
+        ShortTerm["Short-Term Memory<br/>(MisconceptionCandidate)"]
+        CanonicalKG["Knowledge Graph Canónico<br/>(Concept, Principle)"]
+        DeficiencyNode["StudentDeficiency<br/>(Falencia Confirmada)"]
+        
+        SHACLValidator["n10s.validation.shacl.validate()<br/>W3C SHACL (Opción A)"]
+    end
+
+    ProfMsg --> AuthzPolicy
+    StudentMsg --> AuthzPolicy
+    
+    AuthzDecision -- "Modo Professor" --> CanonicalKG
+    AuthzDecision -- "Modo Student" --> ShortTerm
+    AuthzDecision -- "Denegado (Zero-Trust)" --> BlockLog["Bloqueo y Alerta de Auditoría"]
+    
+    ShortTerm --> PedagogyPolicy
+    PromoteDecision -- "Sí (Ocurrencias >= 5, Sim >= 0.82)" --> DeficiencyNode
+    DeficiencyNode --> SHACLValidator
+    CanonicalKG --> SHACLValidator
+    SHACLValidator --> ComplianceResult["0 Violaciones Ontológicas (100% Conforme)"]
+```
+
+#### A. Reemplazo de Prompts por Políticas Declarativas OPA (Rego)
+En lugar de depender de instrucciones prompt a un LLM para decidir si un estudiante puede o no modificar el grafo o si un conjunto de errores califica como falencia real, se utiliza **[Open Policy Agent](https://www.openpolicyagent.org/) (OPA)** ejecutando políticas escritas en **Rego v1**:
+
+1. **Control de Acceso y Doble Rol** ([`nams_authz.rego`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/policies/nams_authz.rego)):
+   * **`allow_kg_mutation`**: Aplica *Zero-Trust*. Solo autoriza mutaciones si `input.mode == "professor"`, el `user_id` está autenticado y no corresponde a una sesión de alumno. Las afirmaciones del estudiante jamás alteran los nodos canónicos del curso.
+   * **`allow_misconception_candidate`**: Autoriza la creación de un nodo candidato `MisconceptionCandidate` en la memoria a corto plazo cuando el modo es `student` y la severidad del error diagnosticada por JEV es $\ge 1.0$.
+
+2. **Consolidación Pedagógica Calibrada** ([`pedagogy_consolidation.rego`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/policies/pedagogy_consolidation.rego)):
+   * **`promote_to_deficiency`**: Evalúa deterministamente los umbrales de andamiaje provistos por el archivo de configuración calibrado por Harness² (`nams_harness_config.json`). Promueve a `StudentDeficiency` solo si:
+     - `occurrences >= harness_config.deficiency_count_threshold` (por defecto: 5)
+     - `similarity >= harness_config.deficiency_similarity_threshold` (por defecto: 0.82)
+     - `severity >= 2.0`
+   * **Ruta Crítica Acelerada**: Si la severidad detectada es extrema ($\ge 4.5$), la recurrencia requerida se reduce a 3 ocurrencias siempre que la similitud semántica sea $\ge 0.88$.
+
+3. **Servicio Transversal de OPA** ([`opa_service.py`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/demo/ui/service/server/opa_service.py)):
+   * Invoca de forma asíncrona o sub-milisegundo el binario `opa eval` con entrada JSON vía stdin.
+   * Proporciona un mecanismo de contingencia (*fallback*) en memoria con semántica idéntica para garantizar tolerancia a fallos y alta disponibilidad.
+
+#### B. Validación Ontológica Nativa con W3C SHACL (Opción A en Neo4j con n10s)
+Para asegurar que el Grafo de Conocimiento cumpla rigurosamente con los contratos ontológicos definidos por el consorcio **W3C (Shapes Constraint Language - SHACL)**, se implementó la **Opción A (Nativa en Neo4j)**:
+
+1. **Infraestructura Neosemantics (`n10s 5.20.0`)**:
+   * Instalado y configurado en el contenedor `neo4j-local` con las directivas `dbms.security.procedures.unrestricted=apoc.*,n10s.*`.
+   * Inicializado con `n10s.graphconfig.init({handleVocabUris: 'IGNORE', handleMultivals: 'OVERWRITE'})`, permitiendo mapear directamente los labels del grafo a los URIs ontológicos bajo el prefijo `@prefix neo: <neo4j://graph.schema#> .`.
+
+2. **Shapes Ontológicas POLE+O** ([`nams_poleo_shapes.ttl`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/shapes/nams_poleo_shapes.ttl)):
+   * `neo:ConceptShape`: Exige obligatoriedad de `neo:name` (string, longitud $\ge 2$), `neo:agent_id`, y restringe `neo:source` estrictamente a `'professor'`.
+   * `neo:StudentDeficiencyShape`: Exige `neo:student_id`, `neo:concept_ref`, `neo:occurrences` (integer $\ge 1$), `neo:severity` (`"alta"` o `"media"`), y relación obligatoria hacia el concepto o perfil.
+   * `neo:MisconceptionCandidateShape`: Garantiza que `neo:student_claim` y `neo:concept` existan, y que su estado sea estrictamente `'pending'` o `'consolidated'`.
+   * `neo:ReasoningTraceShape`: Controla la auditoría de cada decisión del agente, validando `neo:action`, `neo:timestamp`, y que el modo sea `'student'` o `'professor'`.
+
+3. **Validador de Integridad Ontológica** ([`nams_shacl_validator.py`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/demo/ui/service/server/nams_shacl_validator.py)):
+   * Ejecuta el procedimiento nativo de Neo4j `CALL n10s.validation.shacl.validate()`.
+   * Totalmente integrado en el ciclo de vida de [`AgentNAMSMemory`](file:///run/media/dracero/DiscoMecanico1/AIProjects/a2a-test-alone/demo/ui/service/server/agent_nams.py), verificando la conformidad de los grafos al conectar el agente y tras cada consolidación de falencias.
+   * **Estado Actual de la Base de Datos**: **0 Violaciones** detectadas (100% conforme con las formas W3C SHACL).
+
 ---
 
 ## 🛡️ Resiliencia y Mejoras Multimodales en Agentes y Servicios

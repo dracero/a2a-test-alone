@@ -1,0 +1,119 @@
+# ==============================================================================
+# Shapes Constraint Language (SHACL - W3C Recommendation)
+# Ontología Formal POLE+O para NAMS en Neo4j (Neosemantics n10s - Opción A)
+# Namespace: <neo4j://graph.schema#>
+# ==============================================================================
+
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix neo: <neo4j://graph.schema#> .
+
+# ------------------------------------------------------------------------------
+# 1. Forma de Concepto Canónico (Concept)
+# ------------------------------------------------------------------------------
+neo:ConceptShape a sh:NodeShape ;
+    sh:targetClass neo:Concept ;
+    sh:property [
+        sh:path neo:name ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:message "Todo Concepto canónico debe tener un nombre (string) único." ;
+    ] ;
+    sh:property [
+        sh:path neo:agent_id ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:message "Todo Concepto debe estar delimitado por su agent_id (aislamiento multi-agente)." ;
+    ] .
+
+# ------------------------------------------------------------------------------
+# 2. Forma de Falencia Confirmada (StudentDeficiency)
+# ------------------------------------------------------------------------------
+neo:StudentDeficiencyShape a sh:NodeShape ;
+    sh:targetClass neo:StudentDeficiency ;
+    sh:property [
+        sh:path neo:name ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:message "La deficiencia estudiantil debe poseer un nombre descriptivo." ;
+    ] ;
+    sh:property [
+        sh:path neo:student_id ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:message "La deficiencia debe estar explícitamente asociada a un student_id." ;
+    ] ;
+    sh:property [
+        sh:path neo:severity ;
+        sh:minInclusive 1.0 ;
+        sh:maxInclusive 5.0 ;
+        sh:minCount 1 ;
+        sh:message "La severidad pedagógica debe ser un valor continuo entre 1.0 y 5.0." ;
+    ] ;
+    sh:property [
+        sh:path neo:occurrences ;
+        sh:minInclusive 1 ;
+        sh:minCount 1 ;
+        sh:message "La cantidad de ocurrencias acumuladas debe ser un entero mayor o igual a 1." ;
+    ] .
+
+# ------------------------------------------------------------------------------
+# 3. Forma de Candidato a Concepción Errónea (MisconceptionCandidate)
+# ------------------------------------------------------------------------------
+neo:MisconceptionCandidateShape a sh:NodeShape ;
+    sh:targetClass neo:MisconceptionCandidate ;
+    sh:property [
+        sh:path neo:id ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:message "El candidato debe tener un identificador único (cand_id)." ;
+    ] ;
+    sh:property [
+        sh:path neo:student_id ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:message "El candidato debe identificar al estudiante evaluado." ;
+    ] ;
+    sh:property [
+        sh:path neo:concept ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:message "El candidato debe especificar el concepto central sobre el cual versa el error." ;
+    ] ;
+    sh:property [
+        sh:path neo:student_claim ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:message "Debe conservarse la afirmación textual original del estudiante." ;
+    ] ;
+    sh:property [
+        sh:path neo:status ;
+        sh:datatype xsd:string ;
+        sh:in ( "pending" "consolidated" "dismissed" ) ;
+        sh:minCount 1 ;
+        sh:message "El estado del candidato debe ser pending, consolidated o dismissed." ;
+    ] .
+
+# ------------------------------------------------------------------------------
+# 4. Forma de Traza de Razonamiento y Auditoría (ReasoningTrace)
+# ------------------------------------------------------------------------------
+neo:ReasoningTraceShape a sh:NodeShape ;
+    sh:targetClass neo:ReasoningTrace ;
+    sh:property [
+        sh:path neo:id ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:message "La traza de razonamiento debe tener un identificador único." ;
+    ] ;
+    sh:property [
+        sh:path neo:action ;
+        sh:datatype xsd:string ;
+        sh:minCount 1 ;
+        sh:message "La traza debe documentar la acción ejecutada." ;
+    ] ;
+    sh:property [
+        sh:path neo:mode ;
+        sh:in ( "student" "professor" ) ;
+        sh:minCount 1 ;
+        sh:message "El modo de ejecución debe ser student o professor." ;
+    ] .
