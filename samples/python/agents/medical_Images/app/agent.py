@@ -1888,17 +1888,24 @@ Ejemplo:
                 doc_principal = max(doc_scores, key=doc_scores.get) if doc_scores else ''
                 print(f"   📖 Documento principal: {doc_principal} (score acumulado: {doc_scores.get(doc_principal, 0):.2f})")
 
-                # Paso 2b: Identificar todos los documentos de interés de las respuestas de texto
+                # Paso 2b: Identificar todos los documentos de interés y construir mapa de relevancia de páginas
                 docs_interes = set()
+                scores_paginas_texto = {}
                 for r in resultados_texto:
                     payload = r.get('payload', {})
                     doc = payload.get('nombre_archivo', '')
+                    pg_num = payload.get('numero_pagina')
+                    score = r.get('score', 0.0)
                     if doc:
                         docs_interes.add(doc)
+                        if pg_num is not None:
+                            key = (doc, pg_num)
+                            if score > scores_paginas_texto.get(key, 0.0):
+                                scores_paginas_texto[key] = score
                 print(f"   📂 Documentos de interés detectados: {list(docs_interes)}")
 
-                # Paso 3: Scroll de TODOS los chunks de texto de los documentos de interés
-                # para buscar etiquetas "Imagen N: descripción"
+                # Paso 3: Scroll de chunks de texto de los documentos de interés
+                # Capturando la etiqueta y el contexto explicativo completo del chunk
                 paginas_con_etiqueta = {}  # (doc, página) -> lista de descripciones de etiqueta
                 imagenes_encontradas = []
                 try:
@@ -1920,86 +1927,115 @@ Ejemplo:
                         chunks_doc = scroll_texto[0] if scroll_texto else []
                         print(f"   📄 {len(chunks_doc)} chunks de texto en {doc}")
 
-                        # Buscar etiquetas "Imagen N: descripción" en cada chunk
+                        # Buscar etiquetas "Imagen N: descripción" en cada chunk sin truncar el contexto explicativo
                         for chunk in chunks_doc:
                             cp = chunk.payload or {}
                             texto_chunk = cp.get('texto', '')
                             pg_chunk = cp.get('numero_pagina')
-                            # Capturar "Imagen 19: Espermatozoides", "Imagen 6: Corte transversal", etc.
-                            matches = re.findall(r'[Ii]magen\s+(\d+(?:[\.\-·]\d+)?)\s*:\s*([^\n]{1,100})', texto_chunk)
-                            for num, desc in matches:
+                            matches = list(re.finditer(r'[Ii]magen\s+(\d+(?:[\.\-·]\d+)?)\s*:\s*([^\n]{1,120})', texto_chunk))
+                            for m in matches:
+                                num = m.group(1)
+                                titulo_linea = m.group(2).strip()
+                                # Conservar el texto explicativo completo del chunk para no perder sinónimos ni terminología (ej: "o mioides")
+                                resto_chunk = texto_chunk[m.end():].strip()
+                                resto_limpio = re.sub(r'\s+', ' ', resto_chunk)
+                                desc_completa = f"{titulo_linea}. {resto_limpio}".strip() if resto_limpio else titulo_linea
                                 if pg_chunk is not None:
                                     paginas_con_etiqueta.setdefault((doc, pg_chunk), []).append({
                                         'numero': num,
-                                        'descripcion': desc.strip(),
+                                        'titulo': titulo_linea,
+                                        'descripcion': desc_completa,
+                                        'texto_chunk': texto_chunk,
                                     })
                         
                     if paginas_con_etiqueta:
                         print(f"   🏷️ Etiquetas encontradas:")
                         for (doc, pg), etiquetas in sorted(paginas_con_etiqueta.items()):
                             for et in etiquetas:
-                                print(f"      [{doc}] Pg {pg}: Imagen {et['numero']}: {et['descripcion']}")
+                                print(f"      [{doc}] Pg {pg}: Imagen {et['numero']}: {et.get('titulo', et['descripcion'][:50])}")
                 except Exception as e:
                     print(f"   ⚠️ Error buscando etiquetas de texto: {e}")
 
-                # Paso 4: Rerank las etiquetas por similitud semántica con la consulta
-                # Esto determina CUÁLES imágenes son relevantes para la consulta
-                # IMPORTANTE: Usar embedding de la consulta ORIGINAL del usuario para el rerank,
-                # no la consulta optimizada, para evitar contaminación del optimizador LLM.
+                # Paso 4: Rerank de etiquetas por similitud semántica y coincidencia léxica dinámica
                 query_mv_para_rerank = self.procesador.generar_embedding_texto(state['consulta_resuelta'])
                 if query_mv_para_rerank is None:
                     query_mv_para_rerank = query_mv  # Fallback a la optimizada
                 else:
                     print(f"   🎯 Usando embedding de consulta resuelta para rerank de etiquetas")
 
-                def calcular_coincidencia_palabras(query: str, desc: str) -> float:
-                    import re
+                def calcular_coincidencia_dinamica(query: str, texto: str) -> float:
+                    """Coincidencia léxica dinámica y difusa 100% libre de listas o palabras hardcodeadas."""
                     import unicodedata
-                    def normalizar(t: str) -> str:
-                        t = t.lower()
-                        t = "".join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
-                        t = re.sub(r'[^a-z0-9\s]', ' ', t)
-                        return t
+                    import difflib
+                    
+                    def normalizar(s: str) -> str:
+                        s = s.lower()
+                        s = "".join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+                        s = re.sub(r'[^a-z0-9\s]', ' ', s)
+                        return s
                     
                     q_norm = normalizar(query)
-                    d_norm = normalizar(desc)
+                    t_norm = normalizar(texto)
                     
-                    q_words = set(w for w in q_norm.split() if len(w) > 3)
-                    d_words = set(w for w in d_norm.split() if len(w) > 3)
+                    q_tokens = [w for w in q_norm.split() if len(w) >= 3]
+                    t_tokens = [w for w in t_norm.split() if len(w) >= 3]
                     
-                    if not q_words or not d_words:
+                    if not q_tokens or not t_tokens:
                         return 0.0
-                        
-                    d_clean_words = d_norm.split()
-                    phrases = []
-                    for i in range(len(d_clean_words) - 1):
-                        phrases.append(f"{d_clean_words[i]} {d_clean_words[i+1]}")
-                    for i in range(len(d_clean_words) - 2):
-                        phrases.append(f"{d_clean_words[i]} {d_clean_words[i+1]} {d_clean_words[i+2]}")
-                        
-                    phrase_match_score = 0.0
-                    for phrase in phrases:
-                        if phrase in q_norm:
-                            phrase_match_score += 10.0
-                            
-                    overlap = q_words.intersection(d_words)
-                    word_match_score = len(overlap) * 2.0
                     
-                    return phrase_match_score + word_match_score
+                    match_score = 0.0
+                    
+                    # 1. Búsqueda de n-gramas completos (frase)
+                    for n in (3, 2):
+                        for i in range(len(q_tokens) - n + 1):
+                            ngram = " ".join(q_tokens[i:i+n])
+                            if ngram in t_norm:
+                                match_score += 15.0 * n
+                    
+                    # 2. Coincidencia token a token dinámica (exacta, morfológica o difusa)
+                    t_set = set(t_tokens)
+                    for qw in q_tokens:
+                        if qw in t_set or qw in t_norm:
+                            match_score += 5.0
+                            continue
+                        
+                        # Match morfológico dinámico (plural/singular sin diccionario)
+                        prefix_match = any(
+                            (len(qw) >= 4 and len(tw) >= 4 and (tw.startswith(qw[:-1]) or qw.startswith(tw[:-1])))
+                            for tw in t_tokens
+                        )
+                        if prefix_match:
+                            match_score += 4.0
+                            continue
+                        
+                        # Match difuso dinámico (tolerancia a typos ortográficos como miode -> mioide)
+                        best_ratio = 0.0
+                        for tw in t_tokens:
+                            if abs(len(qw) - len(tw)) <= 2:
+                                r = difflib.SequenceMatcher(None, qw, tw).ratio()
+                                if r > best_ratio:
+                                    best_ratio = r
+                        if best_ratio >= 0.80:
+                            match_score += 4.0 * best_ratio
+                    
+                    return match_score
 
                 etiquetas_rankeadas = []
                 if paginas_con_etiqueta:
                     for (doc_name, pg), etiquetas in paginas_con_etiqueta.items():
+                        rag_page_score = scores_paginas_texto.get((doc_name, pg), 0.0)
                         for et in etiquetas:
                             texto_etiqueta = f"Imagen {et['numero']}: {et['descripcion']}"
                             emb = self.procesador.generar_embedding_texto(texto_etiqueta)
                             
-                            # Calcular coincidencia exacta de palabras con la consulta original del usuario
-                            match_score = calcular_coincidencia_palabras(state['consulta_usuario'], et['descripcion'])
+                            # Evaluar coincidencia dinámica tanto con consulta de usuario como con resuelta
+                            match_usuario = calcular_coincidencia_dinamica(state.get('consulta_usuario', ''), et['descripcion'])
+                            match_resuelta = calcular_coincidencia_dinamica(state.get('consulta_resuelta', ''), et['descripcion'])
+                            match_score = max(match_usuario, match_resuelta)
                             
                             sim = 0.0
                             if emb is not None:
-                                # Calcular similitud usando MaxSim (Late Interaction) de ColPali
+                                # Similitud MaxSim (Late Interaction) de ColPali
                                 q = np.asarray(query_mv_para_rerank, dtype=np.float64)
                                 c = np.asarray(emb, dtype=np.float64)
                                 if q.ndim == 2 and c.ndim == 2:
@@ -2014,18 +2050,24 @@ Ejemplo:
                                     c_mean = c_mean / c_norm if c_norm > 0 else c_mean
                                     sim = float(np.dot(q_mean, c_mean))
 
-                                etiquetas_rankeadas.append({
-                                    'documento': doc_name,
-                                    'pagina': pg,
-                                    'numero': et['numero'],
-                                    'descripcion': et['descripcion'],
-                                    'similitud': sim,
-                                    'match_score': match_score,
-                                })
-                                print(f"      📊 [{doc_name}] Imagen {et['numero']}: {et['descripcion'][:50]} → sim={sim:.4f} | keyword_match={match_score:.1f}")
+                            # Score compuesto: Match dinámico + Boost de relevancia RAG de la página + Similitud ColPali
+                            total_score = (match_score * 3.0) + (rag_page_score * 0.5) + sim
 
-                    # Ordenar por coincidencia de palabras exacta (primero) y luego por similitud semántica
-                    etiquetas_rankeadas.sort(key=lambda x: (x['match_score'], x['similitud']), reverse=True)
+                            etiquetas_rankeadas.append({
+                                'documento': doc_name,
+                                'pagina': pg,
+                                'numero': et['numero'],
+                                'titulo': et.get('titulo', et['descripcion'][:50]),
+                                'descripcion': et['descripcion'],
+                                'similitud': sim,
+                                'match_score': match_score,
+                                'rag_score': rag_page_score,
+                                'total_score': total_score,
+                            })
+                            print(f"      📊 [{doc_name}] Imagen {et['numero']}: {et.get('titulo', et['descripcion'][:40])} → total={total_score:.2f} | sim={sim:.4f} | keyword_match={match_score:.1f} | rag_pg={rag_page_score:.1f}")
+
+                    # Ordenar por score compuesto multidimensional (coincidencia léxica + RAG + semántica ColPali)
+                    etiquetas_rankeadas.sort(key=lambda x: (x['total_score'], x['match_score'], x['similitud']), reverse=True)
 
                 # Paso 5: Scroll de TODAS las imágenes y asociar con etiquetas
                 all_image_points = []
@@ -2046,10 +2088,10 @@ Ejemplo:
                 except Exception as e:
                     print(f"   ⚠️ Error obteniendo imágenes de Qdrant: {e}")
 
-                # Paso 6: Para las top 3 etiquetas, buscar la imagen en la misma página
+                # Paso 6: Para las top etiquetas, buscar la imagen en la misma página
                 paginas_usadas = set()
                 if etiquetas_rankeadas:
-                    for et in etiquetas_rankeadas[:3]:
+                    for et in etiquetas_rankeadas[:5]:
                         doc_target = et['documento']
                         pg_target = et['pagina']
                         target_key = (doc_target, pg_target)
@@ -2062,13 +2104,14 @@ Ejemplo:
                                     and payload.get('numero_pagina') == pg_target):
                                 img_path = payload.get('imagen_path', '')
                                 if img_path and os.path.exists(img_path):
-                                    desc = f"Imagen {et['numero']}: {et['descripcion']}"
+                                    titulo_fmt = et.get('titulo') or et['descripcion'][:60]
+                                    desc = f"Imagen {et['numero']}: {titulo_fmt}"
                                     imagenes_encontradas.append({
                                         "path": img_path,
                                         "descripcion": desc[:300]
                                     })
                                     paginas_usadas.add(target_key)
-                                    print(f"      ✅ Imagen seleccionada: {os.path.basename(img_path)} (Imagen {et['numero']}: {et['descripcion'][:50]})")
+                                    print(f"      ✅ Imagen seleccionada: {os.path.basename(img_path)} ({desc})")
                                     break
 
                 # Paso 7: Fallback — si no se encontraron imágenes por etiqueta,
