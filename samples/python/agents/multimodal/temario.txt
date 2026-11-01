@@ -1,4 +1,4 @@
-A continuación presento el **temario completo** estructurado del curso de Física I, elaborado a partir de los documentos provistos y organizado según el orden lógico de la materia:
+Estimados alumnos, a continuación les presento el **temario completo y estructurado** de la asignatura **Física I**, extraído directamente de la bibliografía oficial del curso.
 
 ---
 
@@ -9,33 +9,26 @@ A continuación presento el **temario completo** estructurado del curso de Físi
 - **Subtema 1.4:** Posición de una partícula "P" respecto del observador "O"
 - **Subtema 1.5:** Sistema de referencia y encuadre empírico del movimiento
 - **Subtema 1.6:** Sistemas de coordenadas: cartesianas, polares e intrínsecas
-- **Subtema 1.7:** Cambio de posición de un punto respecto de un observador fijo
+- **Subtema 1.7:** Cambio de posición de un punto respecto a un observador fijo
 - **Subtema 1.8:** Velocidad instantánea respecto de un observador fijo
-- **Subtema 1.9:** Vector velocidad en coordenadas polares y transformación a coordenadas cartesianas en 2D
+- **Subtema 1.9:** Vector velocidad en coordenadas polares y transformación a cartesianas en 2D
 - **Subtema 1.10:** Variación del vector velocidad
 - **Subtema 1.11:** Aceleración instantánea respecto de un observador fijo
-- **Subtema 1.12:** Circunferencia osculatriz o círculo osculador: centro y radio de curvatura local de una trayectoria
-
----
+- **Subtema 1.12:** Círculo osculador, centro de curvatura y radio de curvatura local
 
 ### TEMA 2: Dinámica de la Partícula
-- **Subtema 2.1:** Introducción a la dinámica newtoniana
-- **Subtema 2.2:** Primera ley: el Principio de Inercia
-- **Subtema 2.3:** Segunda ley: el Principio de Masa
-- **Subtema 2.4:** Tercera ley: el Principio de Interacción
+- **Subtema 2.1:** Introducción a las leyes fundamentales del movimiento
+- **Subtema 2.2:** Primera ley de Newton: Principio de Inercia
+- **Subtema 2.3:** Segunda ley de Newton: Principio de Masa
+- **Subtema 2.4:** Tercera ley de Newton: Principio de Interacción
 - **Subtema 2.5:** La interacción gravitatoria
-- **Subtema 2.6:** Fuerzas derivadas de interacciones eléctricas: la fuerza elástica
-- **Subtema 2.7:** Fuerzas derivadas de interacciones eléctricas: la fuerza de rozamiento
-- **Subtema 2.8:** Fuerzas derivadas de interacciones eléctricas: la tensión
-
----
+- **Subtema 2.6:** Fuerzas de origen eléctrico: Fuerza elástica
+- **Subtema 2.7:** Fuerzas de origen eléctrico: Fuerza de rozamiento
+- **Subtema 2.8:** Fuerzas de origen eléctrico: Tensión
 
 ### TEMA 3: Sistemas de Referencia No Inerciales
-- **Subtema 3.1:** Descripción del movimiento desde sistemas de referencia acelerados
-- **Subtema 3.2:** Validez y adaptación de las Leyes de Newton en sistemas no inerciales
-- **Subtema 3.3:** Análisis comparativo de fuerzas e interacciones entre sistemas fijos (inerciales) y sistemas móviles acelerados
-
----
+- **Subtema 3.1:** Descripción del movimiento desde sistemas inerciales vs. acelerados
+- **Subtema 3.2:** Aplicación de las leyes de Newton y fuerzas ficticias/inerciales en sistemas acelerados
 
 ### TEMA 4: Sistema de Partículas
 - **Subtema 4.1:** Modelo de sistema de partículas
@@ -51,105 +44,81 @@ A continuación presento el **temario completo** estructurado del curso de Físi
 - **Subtema 4.11:** Trabajo y energía en un sistema de partículas
 - **Subtema 4.12:** Energía potencial gravitatoria de un sistema de partículas
 - **Subtema 4.13:** Energía cinética de un sistema de partículas
-- **Subtema 4.14:** Ecuaciones universales de la dinámica de un sistema de partículas
+- **Subtema 4.14:** Ecuaciones universales de la dinámica de un SP
 - **Subtema 4.15:** Dinámica impulsiva del sistema de partículas
-- **Subtema 4.16:** Ecuaciones universales de la dinámica impulsiva de un sistema de partículas
+- **Subtema 4.16:** Ecuaciones universales de la dinámica impulsiva de un SP
 - **Subtema 4.17:** Colisiones o choques mecánicos
 - **Subtema 4.18:** Análisis energético en una colisión
 - **Subtema 4.19:** Coeficiente de restitución
 
----
-
-### TEMA 5: Cinemática del Cuerpo Rígido (CR)
+### TEMA 5: Cinemática del Cuerpo Rígido
 - **Subtema 5.1:** Introducción al modelo de cuerpo rígido
 - **Subtema 5.2:** Determinación del Centro de Masa (CM) del cuerpo rígido
-- **Subtema 5.3:** Estudio de los posibles movimientos de un CR en un plano perpendicular a su eje de simetría
+- **Subtema 5.3:** Estudio de movimientos en un plano perpendicular al eje de simetría
 - **Subtema 5.4:** Condición de rigidez
-- **Subtema 5.5:** Casos particulares de movimientos del CR
+- **Subtema 5.5:** Casos particulares de movimientos del cuerpo rígido
 - **Subtema 5.6:** Diagramas vectoriales
 - **Subtema 5.7:** Centro Instantáneo de Rotación (CIR)
 
----
-
-### TEMA 6: Dinámica del Cuerpo Rígido (CR)
-- **Subtema 6.1:** Efecto de la aplicación de sistemas de fuerzas no concurrentes en un CR
-- **Subtema 6.2:** Resultado de trasladar una fuerza al CM
-- **Subtema 6.3:** Cupla o par de fuerzas
-- **Subtema 6.4:** Resultante de un sistema de fuerzas y torques aplicados a un CR
-- **Subtema 6.5:** Momento cinético de un CR en rotación
-- **Subtema 6.6:** Cálculo del momento de inercia baricéntrico de un cilindro respecto a un eje perpendicular a su eje de simetría
-- **Subtema 6.7:** Teorema de Steiner o de los ejes paralelos
-- **Subtema 6.8:** Cálculo del momento cinético respecto a un eje cualquiera y expresión del torque respecto al CM
-- **Subtema 6.9:** Momento cinético relativo al CIR y expresión del torque respecto al CIR
-- **Subtema 6.10:** Aditividad y sustracción de momentos de inercia
-- **Subtema 6.11:** Momentos de inercia baricéntricos de cuerpos no homogéneos y/o no simétricos
-- **Subtema 6.12:** Péndulo físico
-- **Subtema 6.13:** Energía en el CR
-- **Subtema 6.14:** Trabajo y energía para el CR
-- **Subtema 6.15:** Ecuaciones fundamentales de la dinámica del CR
-- **Subtema 6.16:** La fuerza de rozamiento en el cuerpo rígido
-
----
+### TEMA 6: Dinámica del Cuerpo Rígido
+- **Subtema 6.1:** Traslación de fuerzas al Centro de Masa
+- **Subtema 6.2:** Cupla o par de fuerzas
+- **Subtema 6.3:** Resultante de un sistema de fuerzas y torques aplicados a un CR
+- **Subtema 6.4:** Momento cinético de un CR en rotación
+- **Subtema 6.5:** Cálculo del momento de inercia baricéntrico de un cilindro respecto de un eje perpendicular a su eje de simetría
+- **Subtema 6.6:** Teorema de Steiner o de los ejes paralelos
+- **Subtema 6.7:** Momento cinético respecto a un eje cualquiera y expresión del torque respecto al CM
+- **Subtema 6.8:** Momento cinético relativo al CIR y expresión del torque respecto al CIR
+- **Subtema 6.9:** Aditividad y sustractividad de los momentos de inercia
+- **Subtema 6.10:** Momentos de inercia baricéntricos de cuerpos no homogéneos y/o no simétricos
+- **Subtema 6.11:** Péndulo físico
+- **Subtema 6.12:** Energía en el cuerpo rígido
+- **Subtema 6.13:** Trabajo y energía para el CR
+- **Subtema 6.14:** Ecuaciones fundamentales de la dinámica del CR
+- **Subtema 6.15:** Análisis de la fuerza de rozamiento en la dinámica del CR
 
 ### TEMA 7: Dinámica Impulsiva del Cuerpo Rígido
-- **Subtema 7.1:** Introducción a los impulsos instantáneos en el CR
+- **Subtema 7.1:** Introducción a impulsos sobre el cuerpo rígido
 - **Subtema 7.2:** Centro de percusión
 - **Subtema 7.3:** Centro de percusión de cuerpos suspendidos
 - **Subtema 7.4:** Radio de giro baricéntrico
 - **Subtema 7.5:** Aplicaciones del centro de percusión
 
----
-
-### TEMA 8: Hidrodinámica (Fluidos Ideales Incompresibles)
-- **Subtema 8.1:** Conceptos previos: modelo de fluido ideal e incompresible, densidad y presión
+### TEMA 8: Hidrodinámica
+- **Subtema 8.1:** Conceptos previos: fluidos ideales e incompresibles, densidad y presión
 - **Subtema 8.2:** Flujo del fluido ideal
 - **Subtema 8.3:** Caudal y caudal másico
 - **Subtema 8.4:** Teorema de continuidad
 - **Subtema 8.5:** Integración de la ecuación de Euler
 - **Subtema 8.6:** Tubo de Pitot
 
----
-
 ### TEMA 9: Ondas Mecánicas
-- **Subtema 9.1:** Introducción al movimiento ondulatorio en medios continuos
-- **Subtema 9.2:** Características del movimiento ondulatorio
-- **Subtema 9.3:** Clasificación de las ondas
-- **Subtema 9.4:** La ecuación general del movimiento ondulatorio
-- **Subtema 9.5:** Soluciones de la ecuación de onda
-- **Subtema 9.6:** Ondas transversales en una cuerda
-- **Subtema 9.7:** Ondas longitudinales en una varilla
-- **Subtema 9.8:** Energía de las ondas: energía cinética y energía elástica
-- **Subtema 9.9:** Superposición de ondas
-- **Subtema 9.10:** Casos elementales de superposición con interpretación física
-- **Subtema 9.11:** Energía de las ondas estacionarias
-- **Subtema 9.12:** Resonancia
-- **Subtema 9.13:** Efecto Doppler
-
----
+- **Subtema 9.1:** Características del movimiento ondulatorio
+- **Subtema 9.2:** Clasificación de las ondas
+- **Subtema 9.3:** Ecuación general del movimiento ondulatorio y sus soluciones
+- **Subtema 9.4:** Ondas transversales en una cuerda
+- **Subtema 9.5:** Ondas longitudinales en una varilla
+- **Subtema 9.6:** Energía de las ondas: cinética y elástica
+- **Subtema 9.7:** Superposición de ondas
+- **Subtema 9.8:** Energía de las ondas estacionarias
+- **Subtema 9.9:** Resonancia
+- **Subtema 9.10:** Efecto Doppler
 
 ### TEMA 10: Óptica Geométrica
-- **Subtema 10.1:** Introducción a la óptica geométrica y concepto de rayo
-- **Subtema 10.2:** Leyes fundamentales: propagación rectilínea, reflexión y refracción
-- **Subtema 10.3:** Fenómeno de reflexión y espejos
-- **Subtema 10.4:** Espejos planos y formación de imágenes
-- **Subtema 10.5:** Campo del espejo
-- **Subtema 10.6:** Reflexión en espejos esféricos, fórmulas, focos y agrandamiento lateral
-- **Subtema 10.7:** Formación de imágenes en espejos esféricos
-- **Subtema 10.8:** Reflexión total y ángulo límite
-- **Subtema 10.9:** Fenómeno de refracción: dioptras esféricas y Fórmula de Descartes
-- **Subtema 10.10:** Lentes gruesas y lentes delgadas
-- **Subtema 10.11:** Ecuación del constructor de lentes
-- **Subtema 10.12:** Aumento lateral, formación de imágenes y potencia en lentes delgadas
-
----
+- **Subtema 10.1:** Principios y leyes fundamentales de la óptica geométrica (concepto de rayo)
+- **Subtema 10.2:** Fenómeno de reflexión y espejos planos (formación de imágenes y campo del espejo)
+- **Subtema 10.3:** Reflexión en espejos esféricos, fórmula de espejos, focos y agrandamiento lateral
+- **Subtema 10.4:** Reflexión total y ángulo límite
+- **Subtema 10.5:** Refracción y dioptras esféricas (Fórmula de Descartes y aumento lateral)
+- **Subtema 10.6:** Lentes gruesas y lentes delgadas
+- **Subtema 10.7:** Ecuación del constructor de lentes
+- **Subtema 10.8:** Aumento lateral, formación de imágenes y potencia de las lentes delgadas
 
 ### TEMA 11: Óptica Física
-- **Subtema 11.1:** Principio de Huygens y frentes de onda
-- **Subtema 11.2:** Concepto de coherencia
-- **Subtema 11.3:** Interferencia de ondas
-- **Subtema 11.4:** Experiencia de Young
-- **Subtema 11.5:** Interferencia para 3 y $n$ fuentes
-- **Subtema 11.6:** Intensidad debida a la interferencia de ondas por fuentes sincrónicas
-- **Subtema 11.7:** Difracción y difracción por una ranura
-- **Subtema 11.8:** Expresión de la intensidad para la difracción
-- **Subtema 11.9:** Redes de difracción
+- **Subtema 11.1:** Principio de Huygens
+- **Subtema 11.2:** El concepto de coherencia
+- **Subtema 11.3:** Interferencia y experiencia de Young
+- **Subtema 11.4:** Interferencia para 3 y n fuentes sincrónicas
+- **Subtema 11.5:** Intensidad debida a la interferencia de ondas
+- **Subtema 11.6:** Difracción por una ranura e intensidad de difracción
+- **Subtema 11.7:** Redes de difracción
